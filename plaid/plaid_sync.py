@@ -229,7 +229,10 @@ def sync_holdings(cfg: dict, item: dict, db: sqlite3.Connection) -> int:
                      str(h["quantity"]), str(h.get("institution_price")), str(h.get("institution_value")),
                      None if h.get("cost_basis") is None else str(h["cost_basis"]),
                      h.get("iso_currency_code") or "USD"))
-    db.executemany(ctdb.UPSERT_HOLDING, rows)
+    hold_sql = ctdb.UPSERT_HOLDING
+    if item.get("mode") == "compare":  # another feed owns these positions; keep Plaid's copy out of the views
+        hold_sql = hold_sql.replace("INTO holdings ", "INTO holdings_compare ")
+    db.executemany(hold_sql, rows)
     if item.get("mode", "primary") == "primary":  # Plaid owns this institution: keep its balances too
         db.executemany(ctdb.UPSERT_BALANCE, [
             (today, "plaid", a["account_id"], names[a["account_id"]], item.get("institution") or "",

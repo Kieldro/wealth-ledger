@@ -2,7 +2,8 @@
 
 txns          the real ledger: one row per transaction, `source` says which feed owns it.
               Each account is fed by exactly one source, so nothing is double-counted.
-txns_compare  Plaid copies of accounts SimpleFIN already owns (comparison / backfill only).
+txns_compare  Plaid copies of accounts SimpleFIN already owns (comparison / backfill only);
+              holdings_compare is the same for positions. Neither feeds any view.
 holdings      daily position snapshots per source (Plaid has cost basis; SimpleFIN reports 0).
 balances      daily balance snapshots per account (credit cards/loans are negative = owed).
 account_kind  hand-maintained account type (credit/checking/savings/investment/retirement/hsa/loan/crypto);
@@ -35,6 +36,12 @@ CREATE TABLE IF NOT EXISTS txns ({TXN_COLS});
 CREATE INDEX IF NOT EXISTS idx_txns_posted ON txns(posted);
 CREATE TABLE IF NOT EXISTS txns_compare ({TXN_COLS});
 CREATE TABLE IF NOT EXISTS holdings (
+  snapshot_date TEXT NOT NULL, source TEXT NOT NULL, account_id TEXT NOT NULL, account_name TEXT,
+  institution TEXT, holding_key TEXT NOT NULL, symbol TEXT, description TEXT,
+  shares TEXT, price TEXT, market_value TEXT, cost_basis TEXT, currency TEXT,
+  PRIMARY KEY (snapshot_date, source, account_id, holding_key)
+);
+CREATE TABLE IF NOT EXISTS holdings_compare (
   snapshot_date TEXT NOT NULL, source TEXT NOT NULL, account_id TEXT NOT NULL, account_name TEXT,
   institution TEXT, holding_key TEXT NOT NULL, symbol TEXT, description TEXT,
   shares TEXT, price TEXT, market_value TEXT, cost_basis TEXT, currency TEXT,
