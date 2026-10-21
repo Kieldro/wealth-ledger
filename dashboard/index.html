@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Finance Dashboard</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%232a78d6'/%3E%3Cpath d='M3 11l3-3 2 2 5-5' stroke='white' stroke-width='1.8' fill='none'/%3E%3C/svg%3E">
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f4f4f2; --surface: #fcfcfb; --surface-2: #f0efec; --border: #e3e2de;
+  --text: #0b0b0b; --text-2: #52514e; --muted: #7a7974;
+  --accent: #2a78d6; --pos: #0f7a3d; --neg: #c0362c; --warn-bg: #fff4d6; --warn: #8a5a00;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
+  --liab: #8a8984; --grid: #e7e6e2;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #111110; --surface: #1a1a19; --surface-2: #232321; --border: #2e2e2c;
+    --text: #f0efec; --text-2: #c3c2b7; --muted: #8f8e88;
+    --accent: #3987e5; --pos: #4cc77f; --neg: #f07068; --warn-bg: #3a2e10; --warn: #f2c35b;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+    --liab: #77766f; --grid: #2a2a28;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #111110; --surface: #1a1a19; --surface-2: #232321; --border: #2e2e2c;
+  --text: #f0efec; --text-2: #c3c2b7; --muted: #8f8e88;
+  --accent: #3987e5; --pos: #4cc77f; --neg: #f07068; --warn-bg: #3a2e10; --warn: #f2c35b;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+  --liab: #77766f; --grid: #2a2a28;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--text);
+  font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+.num, td.r, .big { font-variant-numeric: tabular-nums; }
+.wrap { max-width: 1320px; margin: 0 auto; padding: 16px; }
+header.top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+header.top h1 { font-size: 15px; font-weight: 600; margin: 0; color: var(--text-2); letter-spacing: .02em; }
+.status { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--text-2); }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); white-space: nowrap; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--pos); flex: none; }
+.dot.bad { background: var(--neg); }
+button { font: inherit; font-size: 12px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 4px 11px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button:disabled { opacity: .6; cursor: progress; }
+.hdr-r { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.logout { margin: 0; }
+.problems { background: var(--warn-bg); color: var(--warn); border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
+.problems:empty { display: none; }
+
+.grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 12px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px; min-width: 0; }
+.span-12 { grid-column: span 12; } .span-7 { grid-column: span 7; } .span-5 { grid-column: span 5; }
+.span-6 { grid-column: span 6; } .span-4 { grid-column: span 4; } .span-8 { grid-column: span 8; }
+.card h2 { font-size: 13px; font-weight: 600; margin: 0 0 2px; letter-spacing: .01em; }
+.card .sub { font-size: 12px; color: var(--muted); margin: 0 0 10px; }
+.hd { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+
+/* hero */
+.hero { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 12px; }
+.hero .card { padding: 14px 16px; }
+.label { font-size: 12px; color: var(--text-2); }
+.big { font-size: 34px; font-weight: 650; letter-spacing: -.02em; line-height: 1.15; margin: 2px 0 6px; }
+.mid { font-size: 22px; font-weight: 600; letter-spacing: -.01em; margin: 2px 0 4px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { font-size: 12px; padding: 2px 8px; border-radius: 6px; background: var(--surface-2); color: var(--text-2); white-space: nowrap; }
+.chip b { font-weight: 600; }
+.up { color: var(--pos); } .down { color: var(--neg); }
+.note { font-size: 12px; color: var(--muted); }
+
+/* tables */
+.tw { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; font-weight: 500; color: var(--muted); font-size: 11.5px; padding: 5px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+td { padding: 6px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+td.r, th.r { text-align: right; white-space: nowrap; }
+td.name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+tr.group td { background: var(--surface-2); font-weight: 600; font-size: 12px; color: var(--text-2); text-transform: capitalize; }
+tr.dim td { color: var(--muted); }
+tr.total td { font-weight: 650; border-top: 1px solid var(--text-2); }
+tr.cat { cursor: pointer; }
+tr.cat:hover td { background: var(--surface-2); }
+tr.sub td { font-size: 12px; color: var(--text-2); padding-top: 3px; padding-bottom: 3px; }
+tr.sub td:first-child { padding-left: 26px; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 8px; vertical-align: -1px; }
+.badge { display: inline-block; font-size: 10.5px; font-weight: 600; padding: 1px 6px; border-radius: 5px; letter-spacing: .02em; text-transform: uppercase; white-space: nowrap; }
+.b-live { background: color-mix(in srgb, var(--pos) 16%, transparent); color: var(--pos); }
+.b-sheet { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+.b-mixed { background: var(--surface-2); color: var(--text-2); }
+.b-muted { background: var(--surface-2); color: var(--muted); }
+.cls { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 5px; background: var(--surface-2); color: var(--text-2); white-space: nowrap; }
+.cls.spend { color: var(--neg); } .cls.income, .cls.refund { color: var(--pos); }
+.amt-pos { color: var(--pos); }
+.bar { height: 6px; border-radius: 3px; background: var(--s1); min-width: 2px; }
+.bart { width: 90px; }
+.desc { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+
+/* charts */
+.alloc { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 16px; align-items: start; }
+.donut { position: relative; width: 200px; height: 200px; }
+.donut .c { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; }
+.donut .c b { font-size: 18px; font-variant-numeric: tabular-nums; }
+.chartbox { position: relative; height: 240px; }
+.chartbox.sm { height: 180px; }
+.legend { display: flex; gap: 14px; font-size: 12px; color: var(--text-2); margin-top: 6px; flex-wrap: wrap; }
+.legend i { display: inline-block; width: 14px; height: 2px; vertical-align: middle; margin-right: 6px; background: var(--s1); }
+.cols2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.toggle { font-size: 12px; color: var(--text-2); display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+footer { margin: 18px 0 8px; font-size: 12px; color: var(--muted); line-height: 1.6; }
+footer code { font-size: 11.5px; }
+.err { color: var(--neg); font-size: 13px; }
+
+@media (max-width: 1000px) {
+  .span-7, .span-5, .span-6, .span-4, .span-8 { grid-column: span 12; }
+}
+@media (max-width: 640px) {
+  .wrap { padding: 12px 12px 16px; }
+  .hero { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .hero .card:first-child { grid-column: span 2; }
+  .big { font-size: 30px; }
+  .mid { font-size: 18px; }
+  .alloc { grid-template-columns: 1fr; }
+  .donut { margin: 0 auto; }
+  .cols2 { grid-template-columns: 1fr; }
+  .grid { gap: 10px; }
+  .card { padding: 12px; border-radius: 12px; }
+  .hide-sm { display: none; }
+  td.name { max-width: 130px; }
+  .desc { max-width: 120px; }
+  td { padding: 6px 4px; } th { padding: 5px 4px; }
+  .bart { width: 50px; }
+  table { font-size: 12.5px; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>Finances</h1>
+    <div class="hdr-r">
+      <div class="status" id="status"><span class="pill">Loading…</span></div>
+      <form method="post" action="/logout" class="logout"><button type="submit" title="Sign out of this device">Log out</button></form>
+    </div>
+  </header>
+  <div class="problems" id="problems"></div>
+
+  <section class="hero" id="hero">
+    <div class="card"><div class="label">Net worth</div><div class="big" id="nw">—</div><div class="chips" id="chg"></div><div class="note" id="nwnote" style="margin-top:6px"></div></div>
+    <div class="card"><div class="label">Assets</div><div class="mid num" id="assets">—</div><div class="note" id="assetsnote"></div></div>
+    <div class="card"><div class="label">Liabilities</div><div class="mid num" id="liabs">—</div><div class="note" id="liabsnote"></div></div>
+  </section>
+
+  <div class="grid" style="margin-top:12px">
+    <section class="card span-7">
+      <div class="hd"><h2>Allocation</h2><span class="note">tap a row for its line items</span></div>
+      <p class="sub">Every balance-sheet line, grouped. <span class="badge b-live">live</span> = synced today; <span class="badge b-sheet">sheet</span> = as of the last manual update.</p>
+      <div class="alloc">
+        <div class="donut"><canvas id="donut" aria-label="Asset allocation donut" role="img"></canvas><div class="c"><span class="note">assets</span><b id="donutc">—</b></div></div>
+        <div class="tw"><table id="cats"></table></div>
+      </div>
+    </section>
+
+    <section class="card span-5">
+      <h2>Net worth trend</h2>
+      <p class="sub" id="trendsub">Daily snapshots</p>
+      <div class="chartbox"><canvas id="trend" aria-label="Net worth trend" role="img"></canvas></div>
+      <div class="legend"><span><i></i>Net worth (synced accounts daily + sheet-only items held constant)</span></div>
+      <p class="note" id="trendnote"></p>
+    </section>
+
+    <section class="card span-6">
+      <div class="hd"><h2>Accounts</h2><label class="toggle"><input type="checkbox" id="showzero"> show zero balances</label></div>
+      <p class="sub">Synced accounts only (latest snapshot). Custodial accounts and crypto exchange wallets are shown but not counted in net worth.</p>
+      <div class="tw"><table id="accts"></table></div>
+    </section>
+
+    <section class="card span-6">
+      <h2>Top holdings</h2>
+      <p class="sub" id="holdsub">Same symbol combined across accounts.</p>
+      <div class="tw"><table id="holds"></table></div>
+      <p class="note" style="margin-top:8px"><button id="moreholds">Show all</button></p>
+    </section>
+
+    <section class="card span-4">
+      <h2>Credit cards</h2>
+      <p class="sub">Balance owed per card.</p>
+      <div class="tw"><table id="cards"></table></div>
+    </section>
+
+    <section class="card span-8">
+      <h2>Spending</h2>
+      <p class="sub" id="spendsub"></p>
+      <div class="chartbox sm"><canvas id="spend" aria-label="Monthly spending" role="img"></canvas></div>
+      <div class="cols2" style="margin-top:12px">
+        <div><h2 id="tm-h">This month</h2><div class="tw"><table id="tm"></table></div></div>
+        <div><h2 id="lm-h">Last month</h2><div class="tw"><table id="lm"></table></div></div>
+      </div>
+    </section>
+
+    <section class="card span-12">
+      <h2>Recent transactions</h2>
+      <p class="sub">Latest 30 across all accounts. Pending rows are dimmed.</p>
+      <div class="tw"><table id="recent"></table></div>
+    </section>
+  </div>
+
+  <footer id="footer">
+    <b>Sources:</b> synced balances, holdings and transactions from <code>~/.local/share/card-tracker/txns.db</code> (read-only;
+    SimpleFIN and Plaid), refreshed by the daily sync.
+    Sheet-only items (home, self-custody crypto, metals, vehicles, cash…) come from the balance sheet via
+    <code>networth.py</code>, cached for 10 minutes (<span id="fetched">—</span>). Nothing on this page leaves this machine.
+  </footer>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" integrity="sha512-CQBWl4fJHWbryGE+Pc7UAxWMUMNMWzWxF4SQo9CgkJIN1kx6djDQZjh3Y8SZ1d+6I+1zze6Z7kHXO7q3UyZAWw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const usd0 = new Intl.NumberFormat("en-US", {style: "currency", currency: "USD", maximumFractionDigits: 0});
+const usd2 = new Intl.NumberFormat("en-US", {style: "currency", currency: "USD"});
+const f0 = v => v == null ? "—" : usd0.format(v);
+const f2 = v => v == null ? "—" : usd2.format(v);
+const compact = v => {
+  const a = Math.abs(v);
+  if (a >= 1e6) return (v < 0 ? "-" : "") + "$" + (a / 1e6).toFixed(2) + "M";
+  if (a >= 1e3) return (v < 0 ? "-" : "") + "$" + (a / 1e3).toFixed(a >= 1e5 ? 0 : 1) + "k";
+  return usd0.format(v);
+};
+const signed = v => (v > 0 ? "+" : v < 0 ? "−" : "") + usd0.format(Math.abs(v));
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const monthName = m => new Date(m + "-15").toLocaleString("en-US", {month: "short", year: "numeric"});
+const fmtTime = iso => { if (!iso) return "—"; const d = new Date(iso); return isNaN(d) ? iso : d.toLocaleString("en-US", {month: "short", day: "numeric", hour: "numeric", minute: "2-digit"}); };
+const stripNum = s => String(s || "").replace(/\s*\([0-9a-f-]+\)$/, "");
+async function get(path, opts = {}) {
+  const r = await fetch(path, {cache: "no-store", credentials: "same-origin", ...opts});
+  if (r.status === 401) { location.href = "/login"; throw new Error("signed out"); }
+  if (!r.ok) throw new Error(path + " → HTTP " + r.status);
+  return r.json();
+}
+const CAT_COLOR = {cash: "--s1", retirement: "--s2", taxable: "--s3", crypto: "--s4", metals: "--s5", realestate: "--s6", vehicles: "--s7", other: "--s8"};
+const charts = {};
+const KIND_LABEL = {hsa: "HSA", loan: "Loans", credit: "Credit cards", checking: "Checking", savings: "Savings", investment: "Taxable investment",
+  retirement: "Retirement", crypto: "Crypto exchange", custodial: "Custodial", unclassified: "Unclassified"};
+let data = {};
+
+function srcBadge(c) {
+  if (c.sheet && c.live) return `<span class="badge b-mixed" title="${esc(f0(c.live))} live, ${esc(f0(c.sheet))} sheet">mixed</span>`;
+  return c.sheet ? '<span class="badge b-sheet">sheet</span>' : '<span class="badge b-live">live</span>';
+}
+
+function renderSummary(s) {
+  const st = s.status || {};
+  const bad = (st.rc && st.rc !== 0) || (st.problems || []).length;
+  $("status").innerHTML =
+    `<span class="pill"><span class="dot ${bad ? "bad" : ""}"></span>Synced ${esc(fmtTime(st.last_run))}${st.rc ? " (rc=" + st.rc + ")" : ""}</span>` +
+    `<button id="refresh" title="Re-read the balance sheet (networth.py); does not call the banks">Refresh</button>`;
+  $("refresh").onclick = () => load(true);
+  const probs = [...(st.problems || [])];
+  if (s.networth_error) probs.push(s.networth_error);
+  $("problems").innerHTML = probs.length ? "<b>Sync problems:</b> " + probs.map(esc).join("<br>") : "";
+  $("fetched").textContent = s.networth_fetched ? "sheet read " + fmtTime(s.networth_fetched) : "sheet not read yet";
+  if (s.net_worth == null) { $("nw").textContent = "unavailable"; return; }
+
+  $("nw").textContent = f0(s.net_worth);
+  $("assets").textContent = f0(s.assets);
+  $("liabs").textContent = f0(s.liabilities);
+  const cats = s.categories;
+  const live = cats.filter(c => c.type === "asset").reduce((a, c) => a + c.live, 0);
+  $("assetsnote").textContent = `${compact(live)} live · ${compact(s.assets - live)} sheet`;
+  const mort = cats.find(c => c.key === "mortgage"), cardsC = cats.find(c => c.key === "cards");
+  $("liabsnote").textContent = `Mortgage ${compact(-mort.value)} · cards ${compact(-cardsC.value)}`;
+  $("chg").innerHTML = ["1", "7", "30"].map(n => {
+    const c = s.changes[n];
+    if (!c || c.delta == null) return `<span class="chip" title="${esc(c ? c.note : "")}">${n}d <b>n/a</b></span>`;
+    const cls = c.delta > 0 ? "up" : c.delta < 0 ? "down" : "";
+    return `<span class="chip" title="vs ${esc(c.vs)}">${n}d <b class="${cls}">${signed(c.delta)}</b></span>`;
+  }).join("");
+  const missing = ["7", "30"].filter(n => s.changes[n] && s.changes[n].delta == null);
+  $("nwnote").textContent = (missing.length ? (s.changes[missing[0]].note || "") + ", so " + missing.join("/") + "-day change is n/a. " : "") +
+    (s.sheet_net_worth ? `Sheet's own total: ${f0(s.sheet_net_worth)}.` : "");
+
+  // allocation table
+  const assetTotal = s.assets;
+  let rows = `<thead><tr><th>Category</th><th class="r">Value</th><th class="r hide-sm">% assets</th><th class="r">Source</th></tr></thead><tbody>`;
+  for (const c of cats) {
+    if (!c.value && !c.lines.length) continue;
+    const color = c.type === "asset" ? `var(${CAT_COLOR[c.key]})` : "var(--liab)";
+    rows += `<tr class="cat" data-k="${c.key}"><td><span class="sw" style="background:${color}"></span>${esc(c.label)}</td>
+      <td class="r ${c.value < 0 ? "down" : ""}">${f0(c.value)}</td>
+      <td class="r hide-sm">${c.type === "asset" ? (100 * c.value / assetTotal).toFixed(1) + "%" : ""}</td><td class="r">${srcBadge(c)}</td></tr>`;
+    for (const l of c.lines) rows += `<tr class="sub" data-p="${c.key}" hidden><td class="name" title="${esc(l.line)}">${esc(l.line)}</td><td class="r">${f0(l.value)}</td><td class="hide-sm"></td><td class="r"><span class="badge b-${l.source}">${l.source}</span></td></tr>`;
+  }
+  const sum = cats.reduce((a, c) => a + c.value, 0);
+  rows += `<tr class="total"><td>Net worth</td><td class="r">${f0(sum)}</td><td class="hide-sm"></td><td></td></tr></tbody>`;
+  $("cats").innerHTML = rows;
+  $("cats").querySelectorAll("tr.cat").forEach(tr => tr.onclick = () =>
+    $("cats").querySelectorAll(`tr[data-p="${tr.dataset.k}"]`).forEach(x => x.hidden = !x.hidden));
+  $("donutc").textContent = compact(assetTotal);
+  drawDonut(cats.filter(c => c.type === "asset" && c.value > 0), assetTotal);
+}
+
+function drawDonut(cats, total) {
+  if (!window.Chart) return;
+  charts.donut?.destroy();
+  charts.donut = new Chart($("donut"), {
+    type: "doughnut",
+    data: {labels: cats.map(c => c.label), datasets: [{data: cats.map(c => c.value), backgroundColor: cats.map(c => css(CAT_COLOR[c.key])),
+      borderColor: css("--surface"), borderWidth: 2, hoverOffset: 4}]},
+    options: {cutout: "68%", responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: {legend: {display: false}, tooltip: {callbacks: {label: ctx => ` ${f0(ctx.raw)} · ${(100 * ctx.raw / total).toFixed(1)}%`}}}}
+  });
+}
+
+function axisOpts() {
+  return {grid: {color: css("--grid")}, border: {display: false}, ticks: {color: css("--muted"), font: {size: 11}}};
+}
+
+function renderTrend(t) {
+  const s = t.series || [];
+  $("trendsub").textContent = s.length ? `${s.length} daily snapshot${s.length > 1 ? "s" : ""} since ${s[0].date}` : "No snapshots yet";
+  $("trendnote").textContent = t.sheet_only_total != null
+    ? `Sheet-only items (${f0(t.sheet_only_total)}: home, self-custody crypto, metals, vehicles, cash…) are added as a constant at today's sheet values, so moves here are synced accounts only.` +
+      (s.length < 14 ? " History is short; it grows by one point per daily sync." : "")
+    : "Sheet total unavailable; showing synced accounts only.";
+  if (!window.Chart) { $("trend").parentElement.innerHTML = '<p class="note">Chart library failed to load (offline?).</p>'; return; }
+  const ys = s.map(p => p.total ?? p.synced);
+  charts.trend?.destroy();
+  const ax = axisOpts();
+  charts.trend = new Chart($("trend"), {
+    type: "line",
+    data: {labels: s.map(p => p.date), datasets: [{label: "Net worth", data: ys, borderColor: css("--s1"), borderWidth: 2,
+      backgroundColor: "transparent", pointRadius: s.length <= 31 ? 3.5 : 0, pointHoverRadius: 5, pointBackgroundColor: css("--s1"),
+      pointBorderColor: css("--surface"), pointBorderWidth: 2, tension: 0}]},
+    options: {responsive: true, maintainAspectRatio: false, animation: false, interaction: {mode: "index", intersect: false},
+      scales: {x: {...ax, grid: {display: false}, ticks: {...ax.ticks, maxRotation: 0, autoSkip: true, maxTicksLimit: 6,
+                    callback(v) { const d = this.getLabelForValue(v); return new Date(d + "T12:00").toLocaleDateString("en-US", {month: "short", day: "numeric"}); }}},
+               y: {...ax, grace: "5%", ticks: {...ax.ticks, maxTicksLimit: 5, callback(v, i, t) { const step = t.length > 1 ? Math.abs(t[1].value - t[0].value) : 1e3;
+                 return step >= 1000 ? "$" + Math.round(v / 1e3).toLocaleString("en-US") + "k"
+                      : step >= 100 ? "$" + (v / 1e3).toLocaleString("en-US", {minimumFractionDigits: 1, maximumFractionDigits: 1}) + "k" : f0(v); }}}},
+      plugins: {legend: {display: false}, tooltip: {callbacks: {
+        label: ctx => ` ${f0(ctx.raw)}`,
+        afterLabel: ctx => { const p = s[ctx.dataIndex]; return p.total != null ? `  synced ${f0(p.synced)} + sheet ${f0(t.sheet_only_total)}` : ""; }}}}}
+  });
+}
+
+function renderAccounts(a) {
+  const showZero = $("showzero").checked;
+  const groups = {};
+  for (const r of a.accounts) (groups[r.kind] ||= []).push(r);
+  const order = ["checking", "savings", "credit", "loan", "investment", "retirement", "hsa", "crypto", "custodial", "unclassified"];
+  const kinds = Object.keys(groups).sort((x, y) => (order.indexOf(x) + 99) % 99 - (order.indexOf(y) + 99) % 99);
+  let h = `<thead><tr><th>Account</th><th class="hide-sm">Institution</th><th class="r">Balance</th><th class="r">As of</th><th class="r hide-sm">Source</th></tr></thead><tbody>`;
+  let hidden = 0;
+  for (const k of kinds) {
+    const rs = groups[k].filter(r => showZero || Math.abs(r.balance) >= 0.01);
+    hidden += groups[k].length - rs.length;
+    if (!rs.length) continue;
+    const tot = rs.reduce((x, r) => x + r.balance, 0);
+    const tag = k === "custodial" ? ' <span class="badge b-muted">not counted</span>' : (!rs[0].counted ? ' <span class="badge b-muted">not counted</span>' : "");
+    h += `<tr class="group"><td colspan="2">${esc(KIND_LABEL[k] || k)}${tag}</td><td class="r">${f0(tot)}</td><td colspan="2" class="hide-sm"></td></tr>`;
+    for (const r of rs) h += `<tr class="${r.counted ? "" : "dim"}"><td class="name" title="${esc(r.account_name)}">${esc(stripNum(r.account_name))} <span class="note">${esc((r.account_name.match(/\((\d{4})\)$/) || [, ""])[1])}</span></td>
+      <td class="hide-sm name">${esc(r.institution)}</td><td class="r ${r.balance < 0 ? "down" : ""}">${f2(r.balance)}</td>
+      <td class="r note">${esc(r.as_of.slice(5))}</td><td class="r hide-sm note">${esc(r.source)}</td></tr>`;
+  }
+  if (hidden) h += `<tr><td colspan="5" class="note">${hidden} zero-balance account${hidden > 1 ? "s" : ""} hidden</td></tr>`;
+  $("accts").innerHTML = h + "</tbody>";
+}
+
+let holdLimit = 15;
+function renderHoldings(hd) {
+  $("holdsub").textContent = `${hd.count} positions, ${f0(hd.total)} total. ${hd.note}`;
+  const max = hd.holdings[0]?.value || 1;
+  let h = `<thead><tr><th>Symbol</th><th class="r">Value</th><th class="r">%</th><th class="bart hide-sm"></th><th>Accounts</th></tr></thead><tbody>`;
+  for (const r of hd.holdings.slice(0, holdLimit)) h += `<tr><td title="${esc(r.description)}"><b>${esc(r.symbol)}</b>${r.sources.includes("manual") ? ' <span class="badge b-sheet" title="manual entry, as of ' + esc(r.as_of) + '">manual</span>' : ""}<div class="note desc">${esc(r.description)}</div></td>
+    <td class="r">${f0(r.value)}</td><td class="r">${r.pct.toFixed(1)}%</td>
+    <td class="bart hide-sm"><div class="bar" style="width:${(100 * r.value / max).toFixed(1)}%"></div></td>
+    <td class="note">${esc(r.accounts.join(", "))}</td></tr>`;
+  $("holds").innerHTML = h + "</tbody>";
+  $("moreholds").textContent = holdLimit < hd.holdings.length ? `Show all ${hd.holdings.length}` : "Show top 15";
+  $("moreholds").onclick = () => { holdLimit = holdLimit < hd.holdings.length ? 999 : 15; renderHoldings(hd); };
+}
+
+function renderCards(c) {
+  let h = `<thead><tr><th>Card</th><th class="r">Owed</th><th class="r">As of</th></tr></thead><tbody>`;
+  for (const r of c.cards) h += `<tr><td class="name" title="${esc(r.account_name)}">${esc(stripNum(r.account_name).replace(/ Card \d{4}$/, ""))}<div class="note">${esc(r.institution)} · ${esc((r.account_name.match(/\((\d{4})\)$/) || [, ""])[1])}</div></td>
+    <td class="r">${f2(r.owed)}</td><td class="r note">${esc(r.as_of.slice(5))}</td></tr>`;
+  h += `<tr class="total"><td>Total</td><td class="r">${f2(c.total)}</td><td></td></tr>`;
+  $("cards").innerHTML = h + "</tbody>";
+}
+
+function merchTable(id, rows) {
+  if (!rows || !rows.length) { $(id).innerHTML = '<tr><td class="note">No posted spending yet.</td></tr>'; return; }
+  const max = rows[0].spent;
+  $(id).innerHTML = rows.map(r => `<tr><td class="name" title="${esc(r.merchant)}">${esc(r.merchant)}${r.n > 1 ? ` <span class="note">×${r.n}</span>` : ""}</td>
+    <td class="bart"><div class="bar" style="width:${(100 * r.spent / max).toFixed(1)}%;background:var(--s2)"></div></td><td class="r">${f0(r.spent)}</td></tr>`).join("");
+}
+
+function renderSpending(sp) {
+  const cur = sp.monthly.find(m => m.month === sp.this_month);
+  $("spendsub").textContent = `Monthly class='spend', posted only, since ${sp.since} (complete data starts then, so the first month is partial; this month is to date). ` +
+    (cur ? `This month so far: ${f0(cur.spent)} over ${cur.n} transactions.` : "");
+  $("tm-h").textContent = "Top merchants · " + monthName(sp.this_month) + " (to date)";
+  $("lm-h").textContent = "Top merchants · " + monthName(sp.last_month);
+  merchTable("tm", sp.top[sp.this_month]); merchTable("lm", sp.top[sp.last_month]);
+  if (window.Chart) {
+    const labels = sp.monthly.map(m => {
+      const n = new Date(m.month + "-15").toLocaleString("en-US", {month: "short"});
+      return m.month === sp.since.slice(0, 7) ? n + " (from " + Number(sp.since.slice(8)) + "th)" : m.month === sp.this_month ? n + " (MTD)" : n;
+    });
+    charts.spend?.destroy();
+    const ax = axisOpts();
+    charts.spend = new Chart($("spend"), {
+      type: "bar",
+      data: {labels, datasets: [{data: sp.monthly.map(m => m.spent), backgroundColor: sp.monthly.map(m => m.month === sp.this_month ? css("--s1") + "99" : css("--s1")),
+        borderRadius: {topLeft: 4, topRight: 4}, borderSkipped: "bottom", maxBarThickness: 44}]},
+      options: {responsive: true, maintainAspectRatio: false, animation: false,
+        scales: {x: {...ax, grid: {display: false}}, y: {...ax, beginAtZero: true, ticks: {...ax.ticks, maxTicksLimit: 5, callback: v => compact(v)}}},
+        plugins: {legend: {display: false}, tooltip: {callbacks: {label: ctx => ` ${f0(ctx.raw)} · ${sp.monthly[ctx.dataIndex].n} txns`}}}}
+    });
+  }
+  let h = `<thead><tr><th>Date</th><th>Merchant</th><th class="hide-sm">Account</th><th>Class</th><th class="r">Amount</th></tr></thead><tbody>`;
+  for (const r of sp.recent) h += `<tr class="${r.pending ? "dim" : ""}"><td class="note" style="white-space:nowrap">${esc(r.date.slice(5))}</td>
+    <td class="name" title="${esc(r.description)}">${esc(r.merchant)}${r.pending ? ' <span class="note">pending</span>' : ""}</td>
+    <td class="hide-sm name note">${esc(r.account_name)}</td><td><span class="cls ${esc(r.class)}">${esc(r.class.replace("_", " "))}</span></td>
+    <td class="r ${r.amt > 0 ? "amt-pos" : ""}">${f2(r.amt)}</td></tr>`;
+  $("recent").innerHTML = h + "</tbody>";
+}
+
+async function load(refresh = false) {
+  const btn = $("refresh"); if (btn) { btn.disabled = true; btn.textContent = "Refreshing…"; }
+  const parts = {
+    summary: ["/api/summary", renderSummary],
+    trend: ["/api/trend", renderTrend], accounts: ["/api/accounts", renderAccounts],
+    holdings: ["/api/holdings", renderHoldings], cards: ["/api/cards", renderCards], spending: ["/api/spending", renderSpending],
+  };
+  // summary first when refreshing, so the trend uses the new sheet total
+  if (refresh) await get("/api/refresh", {method: "POST"}).then(d => { data.summary = d; renderSummary(d); }).catch(e => $("problems").textContent = e.message);
+  await Promise.all(Object.entries(parts).filter(([k]) => !(refresh && k === "summary")).map(([k, [url, fn]]) =>
+    get(url).then(d => { data[k] = d; fn(d); }).catch(e => { console.error(e); $("problems").insertAdjacentHTML("beforeend", `<div class="err">${esc(k)}: ${esc(e.message)}</div>`); })));
+  document.body.dataset.ready = "1";
+}
+$("showzero").onchange = () => data.accounts && renderAccounts(data.accounts);
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+  if (data.summary?.categories) drawDonut(data.summary.categories.filter(c => c.type === "asset" && c.value > 0), data.summary.assets);
+  if (data.trend) renderTrend(data.trend); if (data.spending) renderSpending(data.spending);
+});
+load();
+</script>
+</body>
+</html>

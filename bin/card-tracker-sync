@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Daily SimpleFIN + Plaid -> SQLite sync for card-tracker, then the valuation providers.
+# Plaid covers accounts SimpleFIN can't reach; its keys + items are in ~/.config/card-tracker/plaid.json.
+#   card-tracker-sync                 daily sync (cron). Never sends notifications: problems go to the log
+#                                     and to the status file ($CARD_TRACKER_STATUS, default ~/.cache/card-tracker-status).
+#   card-tracker-sync claim <token>   one-time: exchange SimpleFIN setup token, then 90-day backfill
+# Works when symlinked (e.g. ~/.local/bin/card-tracker-sync -> <repo>/bin/card-tracker-sync).
+set -uo pipefail
+
+ROOT=${CARD_TRACKER_ROOT:-$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)}
+CONF=${CARD_TRACKER_CONFIG_DIR:-$HOME/.config/card-tracker}
+PY=${CARD_TRACKER_PYTHON:-$ROOT/.venv/bin/python}
+SCRIPT=$ROOT/simplefin/simplefin_sync.py
+ACCESS=${CARD_TRACKER_ACCESS:-$CONF/simplefin_access_url}
+DB=${CARD_TRACKER_DB:-$HOME/.local/share/card-tracker/txns.db}
+PLAID=$ROOT/plaid/plaid_sync.py
+PLAID_CFG=${PLAID_CONFIG:-$CONF/plaid.json}
+LOCK=${CARD_TRACKER_LOCK:-$HOME/.cache/card-tracker-sync.lock}
+DAYS=${CARD_TRACKER_DAYS:-14}   # re-pull 2 weeks so pending -> posted updates land; 1 API request
+
+STATUS=${CARD_TRACKER_STATUS:-$HOME/.cache/card-tracker-status}
+problems=()
+problem() { problems+=("$1"); echo "PROBLEM: $1"; }
+
+if [[ ${1:-} == claim ]]; then
+  [[ -n ${2:-} ]] || { echo "usage: card-tracker-sync claim <setup-token>" >&2; exit 2; }
+  "$PY" "$SCRIPT" --access-file "$ACCESS" claim "$2" && exec "$0" --days 90
+  exit 1
+fi
+[[ ${1:-} == --days ]] && DAYS=$2
+
+exec 9>"$LOCK"
+flock -n 9 || { echo "$(date -Is) another sync is running"; exit 0; }
+
+echo "=== $(date -Is)"
+if [[ ! -f $ACCESS ]]; then
+  echo "not claimed yet; run: card-tracker-sync claim <setup-token>"
+  exit 0
+fi
+
+out=$("$PY" "$SCRIPT" --access-file "$ACCESS" sync --db "$DB" --days "$DAYS" 2>&1); rc=$?
+echo "$out"
+if (( rc != 0 )); then
+  problem "SimpleFIN sync failed: $(grep -m1 '^error' <<<"$out" || tail -1 <<<"$out")"
+elif grep -q '^WARNING' <<<"$out"; then
+  while IFS= read -r w; do problem "SimpleFIN ${w:0:200}"; done < <(grep '^WARNING' <<<"$out")
+fi
+
+if [[ -f $PLAID_CFG ]]; then
+  pout=$("$PY" "$PLAID" sync --db "$DB" 2>&1); prc=$?
+  echo "$pout"
+  (( prc != 0 )) && problem "Plaid sync failed: $(grep -m1 "^error" <<<"$pout" || tail -1 <<<"$pout"). If ITEM_LOGIN_REQUIRED: plaid_sync.py relink"
+  (( rc == 0 )) && rc=$prc
+fi
+# estimates for things no bank feed covers (metals/crypto daily, home/cars monthly); free sources only
+vout=$(cd "$ROOT" && "$PY" -m valuations.run 2>&1); vrc=$?
+echo "$vout"
+(( vrc != 0 )) && problem "Valuations: $(grep -m1 '^error' <<<"$vout" || tail -1 <<<"$vout")"
+
+{ echo "last run $(date -Is) rc=$rc"; printf '%s\n' "${problems[@]}"; } > "$STATUS"
+exit $rc

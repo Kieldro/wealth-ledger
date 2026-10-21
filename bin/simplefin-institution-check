@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Monthly: has an institution you are waiting for become linkable in SimpleFIN (MX) yet? Logs a FOUND line
+# (no notifications). What to search for comes from personal.json "simplefin_watch":
+#   {"label": "...", "queries": ["...", ...], "ignore": {"<query>": "<exact result already known>"}}
+# ($CARD_TRACKER_PERSONAL overrides the path, as in personal.py.)
+set -uo pipefail
+CFG=${CARD_TRACKER_PERSONAL:-$HOME/.config/card-tracker/personal.json}
+[[ -f $CFG ]] || { echo "$(date -Is) error: $CFG not found (see personal.example.json)" >&2; exit 1; }
+watch() { python3 -c 'import json,sys; w=json.load(open(sys.argv[1])).get("simplefin_watch") or {}
+k=sys.argv[2]
+if k=="label": print(w.get("label") or "the watched institution")
+elif k=="queries": print("\n".join(w.get("queries") or []))
+else: print((w.get("ignore") or {}).get(sys.argv[3], ""))' "$CFG" "$@"; }
+LABEL=$(watch label)
+mapfile -t QUERIES < <(watch queries)
+(( ${#QUERIES[@]} )) || { echo "$(date -Is) error: no simplefin_watch.queries in $CFG" >&2; exit 1; }
+
+JAR=$(mktemp); trap 'rm -f "$JAR"' EXIT
+BASE=https://beta-bridge.simplefin.org/search-institutions
+found=()
+for q in "${QUERIES[@]}"; do
+  csrf=$(curl -s -m 20 -c "$JAR" -b "$JAR" "$BASE" | grep -o 'name="csrf" value="[^"]*"' | cut -d'"' -f4)
+  html=$(curl -s -m 20 -c "$JAR" -b "$JAR" -X POST "$BASE" --data-urlencode "query=$q" --data-urlencode "csrf=$csrf")
+  [[ $html == *"found:"* ]] || { echo "$(date -Is) $q: none"; continue; }
+  names=$(python3 -c '
+import sys,re,html
+t=sys.stdin.read(); t=t[t.find("found:"):t.find("<footer")]
+print("; ".join(n.strip() for n in html.unescape(re.sub(r"<[^>]+>","\n",t)).splitlines()[1:] if n.strip()))' <<<"$html")
+  echo "$(date -Is) $q: $names"
+  # a query whose result is exactly the already-known one ("ignore") is not news; anything else is
+  known=$(watch ignore "$q")
+  [[ -n $known && $names == "$known" ]] || found+=("$q → $names")
+done
+if (( ${#found[@]} )); then
+  echo "$(date -Is) FOUND: $LABEL may now be in SimpleFIN: ${found[*]}. Add it at beta-bridge.simplefin.org."
+fi
