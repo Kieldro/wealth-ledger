@@ -157,7 +157,11 @@ def connect(path) -> sqlite3.Connection:
     if cols and "source" not in cols:
         db.execute("ALTER TABLE txns ADD COLUMN source TEXT NOT NULL DEFAULT 'simplefin'")
     db.executescript(SCHEMA)
-    db.executemany("INSERT OR IGNORE INTO txn_rules (priority,pattern,kind,direction,class,note) VALUES (?,?,?,?,?,?)",
-                   BASE_RULES + personal_rules())
+    # UNIQUE treats NULLs as distinct, so match with IS to avoid re-adding rules that have no kind/direction
+    db.execute("DELETE FROM txn_rules WHERE rowid NOT IN "
+               "(SELECT MIN(rowid) FROM txn_rules GROUP BY pattern, kind, direction)")
+    db.executemany("INSERT INTO txn_rules (priority,pattern,kind,direction,class,note) SELECT ?,?,?,?,?,? "
+                   "WHERE NOT EXISTS (SELECT 1 FROM txn_rules WHERE pattern = ? AND kind IS ? AND direction IS ?)",
+                   [(*r, r[1], r[2], r[3]) for r in BASE_RULES + personal_rules()])
     db.commit()
     return db
