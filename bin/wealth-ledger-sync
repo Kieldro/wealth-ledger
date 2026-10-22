@@ -6,6 +6,9 @@
 #   wealth-ledger-sync claim <token>   one-time: exchange SimpleFIN setup token, then 90-day backfill
 # Works when symlinked (e.g. ~/.local/bin/wealth-ledger-sync -> <repo>/bin/wealth-ledger-sync).
 set -uo pipefail
+# cron's PATH is bare; the valuations read the sheet with gws, which nvm installs under ~/.nvm
+for d in "$HOME"/.nvm/versions/node/*/bin "$HOME/.local/bin"; do [[ -d $d ]] && PATH="$d:$PATH"; done
+export PATH
 
 ROOT=${WEALTH_LEDGER_ROOT:-$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)}
 CONF=${WEALTH_LEDGER_CONFIG_DIR:-$HOME/.config/wealth-ledger}
