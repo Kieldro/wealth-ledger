@@ -1,5 +1,5 @@
 {
- "_help": "Copy to ~/.config/card-tracker/personal.json (chmod 600) and replace every value with your own. Keys starting with _ are comments.",
+ "_help": "Copy to ~/.config/wealth-ledger/personal.json (chmod 600) and replace every value with your own. Keys starting with _ are comments.",
  "sheet_id": "YOUR-GOOGLE-SHEET-ID",
  "networth": {
   "_help": "Balance-sheet tab labels (column A, exact). synced: label -> account_name LIKE patterns (as shown in v_accounts) whose live balance replaces the sheet value.",
@@ -86,7 +86,7 @@
    ["brokerage|individual|taxable", "taxable"]
   ]
  },
- "plaid": {"client_user_id": "card-tracker-user"},
+ "plaid": {"client_user_id": "wealth-ledger-user"},
  "simplefin_watch": {
   "_help": "bin/simplefin-institution-check: search SimpleFIN's institution list for these queries; ignore maps a query to the exact result that is already known.",
   "label": "the account you are waiting for",

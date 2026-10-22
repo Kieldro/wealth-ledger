@@ -1,29 +1,29 @@
 #!/usr/bin/env bash
-# Daily SimpleFIN + Plaid -> SQLite sync for card-tracker, then the valuation providers.
-# Plaid covers accounts SimpleFIN can't reach; its keys + items are in ~/.config/card-tracker/plaid.json.
-#   card-tracker-sync                 daily sync (cron). Never sends notifications: problems go to the log
-#                                     and to the status file ($CARD_TRACKER_STATUS, default ~/.cache/card-tracker-status).
-#   card-tracker-sync claim <token>   one-time: exchange SimpleFIN setup token, then 90-day backfill
-# Works when symlinked (e.g. ~/.local/bin/card-tracker-sync -> <repo>/bin/card-tracker-sync).
+# Daily SimpleFIN + Plaid -> SQLite sync for wealth-ledger, then the valuation providers.
+# Plaid covers accounts SimpleFIN can't reach; its keys + items are in ~/.config/wealth-ledger/plaid.json.
+#   wealth-ledger-sync                 daily sync (cron). Never sends notifications: problems go to the log
+#                                     and to the status file ($WEALTH_LEDGER_STATUS, default ~/.cache/wealth-ledger-status).
+#   wealth-ledger-sync claim <token>   one-time: exchange SimpleFIN setup token, then 90-day backfill
+# Works when symlinked (e.g. ~/.local/bin/wealth-ledger-sync -> <repo>/bin/wealth-ledger-sync).
 set -uo pipefail
 
-ROOT=${CARD_TRACKER_ROOT:-$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)}
-CONF=${CARD_TRACKER_CONFIG_DIR:-$HOME/.config/card-tracker}
-PY=${CARD_TRACKER_PYTHON:-$ROOT/.venv/bin/python}
+ROOT=${WEALTH_LEDGER_ROOT:-$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)}
+CONF=${WEALTH_LEDGER_CONFIG_DIR:-$HOME/.config/wealth-ledger}
+PY=${WEALTH_LEDGER_PYTHON:-$ROOT/.venv/bin/python}
 SCRIPT=$ROOT/simplefin/simplefin_sync.py
-ACCESS=${CARD_TRACKER_ACCESS:-$CONF/simplefin_access_url}
-DB=${CARD_TRACKER_DB:-$HOME/.local/share/card-tracker/txns.db}
+ACCESS=${WEALTH_LEDGER_ACCESS:-$CONF/simplefin_access_url}
+DB=${WEALTH_LEDGER_DB:-$HOME/.local/share/wealth-ledger/txns.db}
 PLAID=$ROOT/plaid/plaid_sync.py
 PLAID_CFG=${PLAID_CONFIG:-$CONF/plaid.json}
-LOCK=${CARD_TRACKER_LOCK:-$HOME/.cache/card-tracker-sync.lock}
-DAYS=${CARD_TRACKER_DAYS:-14}   # re-pull 2 weeks so pending -> posted updates land; 1 API request
+LOCK=${WEALTH_LEDGER_LOCK:-$HOME/.cache/wealth-ledger-sync.lock}
+DAYS=${WEALTH_LEDGER_DAYS:-14}   # re-pull 2 weeks so pending -> posted updates land; 1 API request
 
-STATUS=${CARD_TRACKER_STATUS:-$HOME/.cache/card-tracker-status}
+STATUS=${WEALTH_LEDGER_STATUS:-$HOME/.cache/wealth-ledger-status}
 problems=()
 problem() { problems+=("$1"); echo "PROBLEM: $1"; }
 
 if [[ ${1:-} == claim ]]; then
-  [[ -n ${2:-} ]] || { echo "usage: card-tracker-sync claim <setup-token>" >&2; exit 2; }
+  [[ -n ${2:-} ]] || { echo "usage: wealth-ledger-sync claim <setup-token>" >&2; exit 2; }
   "$PY" "$SCRIPT" --access-file "$ACCESS" claim "$2" && exec "$0" --days 90
   exit 1
 fi
@@ -34,7 +34,7 @@ flock -n 9 || { echo "$(date -Is) another sync is running"; exit 0; }
 
 echo "=== $(date -Is)"
 if [[ ! -f $ACCESS ]]; then
-  echo "not claimed yet; run: card-tracker-sync claim <setup-token>"
+  echo "not claimed yet; run: wealth-ledger-sync claim <setup-token>"
   exit 0
 fi
 

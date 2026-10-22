@@ -27,8 +27,8 @@ import requests
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import ctdb  # noqa: E402  shared schema
 
-DEFAULT_ACCESS_FILE = Path("~/.config/card-tracker/simplefin_access_url").expanduser()
-DEFAULT_DB = Path("~/.local/share/card-tracker/txns.db").expanduser()
+DEFAULT_ACCESS_FILE = Path("~/.config/wealth-ledger/simplefin_access_url").expanduser()
+DEFAULT_DB = Path("~/.local/share/wealth-ledger/txns.db").expanduser()
 MAX_WINDOW_DAYS = 45  # hard limit 90d; server warns (gen.api) above 45d and may cap later
 TIMEOUT = (10, 60)
 RETRIES = 4

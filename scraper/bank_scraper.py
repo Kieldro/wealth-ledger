@@ -37,8 +37,8 @@ from typing import Callable, Iterable, Optional
 
 from playwright.sync_api import BrowserContext, Page, sync_playwright
 
-APP = "card-tracker"
-DATA_HOME = Path(os.environ.get("CARD_TRACKER_HOME", Path.home() / ".local/share" / APP))
+APP = "wealth-ledger"
+DATA_HOME = Path(os.environ.get("WEALTH_LEDGER_HOME", Path.home() / ".local/share" / APP))
 DEFAULT_DB = DATA_HOME / "txns.db"
 DEFAULT_PROFILES = DATA_HOME / "profiles"
 
@@ -71,10 +71,10 @@ class Credentials:
 
 
 def load_credentials(bank: str) -> Credentials:
-    """Keyring first (service 'card-tracker', keys '<bank>:username' / '<bank>:password'),
-    then env CARD_TRACKER_<BANK>_USER / _PASS.
+    """Keyring first (service 'wealth-ledger', keys '<bank>:username' / '<bank>:password'),
+    then env WEALTH_LEDGER_<BANK>_USER / _PASS.
 
-    Store with:  python -m keyring set card-tracker chase:password
+    Store with:  python -m keyring set wealth-ledger chase:password
     """
     user = pw = None
     try:
@@ -84,7 +84,7 @@ def load_credentials(bank: str) -> Credentials:
         pw = keyring.get_password(APP, f"{bank}:password")
     except Exception:  # no keyring backend (headless server) -> env fallback
         pass
-    env = f"CARD_TRACKER_{bank.upper()}"
+    env = f"WEALTH_LEDGER_{bank.upper()}"
     user = user or os.environ.get(f"{env}_USER")
     pw = pw or os.environ.get(f"{env}_PASS")
     if not user or not pw:

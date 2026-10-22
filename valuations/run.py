@@ -25,7 +25,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import ctdb  # noqa: E402
 
-DB = Path.home() / ".local/share/card-tracker/txns.db"
+DB = Path.home() / ".local/share/wealth-ledger/txns.db"
 
 
 def providers():

@@ -9,7 +9,7 @@ __pycache__/
 .env
 .env.*
 
-# personal data and secrets: these live in ~/.config/card-tracker and ~/.local/share/card-tracker, never here
+# personal data and secrets: these live in ~/.config/wealth-ledger and ~/.local/share/wealth-ledger, never here
 personal.json
 !personal.example.json
 *_auth.json

@@ -1,4 +1,4 @@
-"""Shared SQLite schema for card-tracker (SimpleFIN + Plaid write the same DB).
+"""Shared SQLite schema for wealth-ledger (SimpleFIN + Plaid write the same DB).
 
 txns          the real ledger: one row per transaction, `source` says which feed owns it.
               Each account is fed by exactly one source, so nothing is double-counted.

@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import personal
 
-DB = os.path.expanduser("~/.local/share/card-tracker/txns.db")
+DB = os.path.expanduser("~/.local/share/wealth-ledger/txns.db")
 
 _NW = personal.section("networth")
 SHEET = personal.sheet_id()

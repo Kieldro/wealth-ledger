@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plaid (Trial plan) -> the card-tracker SQLite DB, for accounts SimpleFIN can't reach.
+"""Plaid (Trial plan) -> the wealth-ledger SQLite DB, for accounts SimpleFIN can't reach.
 
   plaid_sync.py setup <client_id> <secret> [--env production|sandbox]   save keys (0600)
   plaid_sync.py link [--products investments] [--compare]
@@ -32,8 +32,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import ctdb  # noqa: E402  shared schema
 import personal  # noqa: E402
 
-CONFIG = Path(os.environ.get("PLAID_CONFIG", "~/.config/card-tracker/plaid.json")).expanduser()
-DEFAULT_DB = Path("~/.local/share/card-tracker/txns.db").expanduser()
+CONFIG = Path(os.environ.get("PLAID_CONFIG", "~/.config/wealth-ledger/plaid.json")).expanduser()
+DEFAULT_DB = Path("~/.local/share/wealth-ledger/txns.db").expanduser()
 HOSTS = {"production": "https://production.plaid.com", "sandbox": "https://sandbox.plaid.com"}
 LINK_PORT = 8899
 TIMEOUT = (10, 60)
@@ -44,7 +44,7 @@ class PlaidError(RuntimeError):
 
 def client_user_id() -> str:
     """Stable per-user id Plaid Link wants (personal.json plaid.client_user_id)."""
-    return personal.section("plaid").get("client_user_id") or "card-tracker-user"
+    return personal.section("plaid").get("client_user_id") or "wealth-ledger-user"
 
 
 # ---------- config ----------
@@ -98,7 +98,7 @@ def store_item(cfg: dict, public_token: str, institution: str,
 
 LINK_HTML = """<!doctype html><html><head><meta charset="utf-8"><title>Link a card</title>
 <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script></head>
-<body style="font:16px system-ui;margin:3em"><h2>card-tracker: link an account</h2><p id="s">Opening Plaid…</p>
+<body style="font:16px system-ui;margin:3em"><h2>wealth-ledger: link an account</h2><p id="s">Opening Plaid…</p>
 <script>
 const s = document.getElementById('s');
 const h = Plaid.create({token: "%s",
@@ -111,7 +111,7 @@ h.open();
 
 
 def link(cfg: dict, update_item: dict | None = None, products=("transactions",), mode="primary") -> None:
-    body = {"user": {"client_user_id": client_user_id()}, "client_name": "card-tracker",
+    body = {"user": {"client_user_id": client_user_id()}, "client_name": "wealth-ledger",
             "country_codes": ["US"], "language": "en"}
     if update_item:  # update mode: same item and transaction ids, nothing to exchange afterwards
         body["access_token"] = update_item["access_token"]

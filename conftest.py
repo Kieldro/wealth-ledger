@@ -2,4 +2,4 @@
 import os
 from pathlib import Path
 
-os.environ["CARD_TRACKER_PERSONAL"] = str(Path(__file__).resolve().parent / "personal.example.json")
+os.environ["WEALTH_LEDGER_PERSONAL"] = str(Path(__file__).resolve().parent / "personal.example.json")

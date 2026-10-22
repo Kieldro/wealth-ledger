@@ -1,6 +1,6 @@
 """Offline tests for valuations/crypto.py: BTC derivation vectors, signing vectors, sheet parse, source precedence.
 
-  cd ~/card-tracker && .venv/bin/python -m pytest valuations/test_crypto.py -q
+  cd ~/wealth-ledger && .venv/bin/python -m pytest valuations/test_crypto.py -q
 """
 import hashlib
 import hmac

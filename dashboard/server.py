@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Private finance dashboard for card-tracker. Read-only; serves on 127.0.0.1 + the Tailscale IP only.
+"""Private finance dashboard for wealth-ledger. Read-only; serves on 127.0.0.1 + the Tailscale IP only.
 
   server.py [--port 8766]
   server.py set-password [--generate]     # set/rotate the login password (signs out all sessions)
@@ -38,8 +38,8 @@ sys.path.insert(0, ROOT)
 import personal  # noqa: E402
 
 _DASH = personal.section("dashboard")
-DB = os.path.expanduser("~/.local/share/card-tracker/txns.db")
-STATUS = os.path.expanduser("~/.cache/card-tracker-status")
+DB = os.path.expanduser("~/.local/share/wealth-ledger/txns.db")
+STATUS = os.path.expanduser("~/.cache/wealth-ledger-status")
 NETWORTH = [os.path.join(ROOT, ".venv", "bin", "python"), os.path.join(ROOT, "networth.py"), "--json"]
 CACHE_TTL = 600
 LEDGER_START = _DASH.get("ledger_start") or "1970-01-01"  # first day of complete transaction data
@@ -298,7 +298,7 @@ ROUTES = {"/api/summary": api_summary, "/api/trend": api_trend, "/api/accounts":
 # ---------- auth ----------
 # Every path except /login, /logout and /robots.txt needs a valid session, including loopback requests
 # (cloudflared connects from 127.0.0.1). Credentials: AUTH_FILE (0600, scrypt hash + session-signing secret).
-CONF_DIR = os.path.expanduser("~/.config/card-tracker")
+CONF_DIR = os.path.expanduser("~/.config/wealth-ledger")
 AUTH_FILE = os.path.join(CONF_DIR, "dashboard_auth.json")
 SESSIONS_FILE = os.path.join(CONF_DIR, "dashboard_sessions.json")
 COOKIE = "ctd_session"
@@ -625,7 +625,7 @@ def index_csp(page: bytes) -> str:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "card-tracker-dashboard"
+    server_version = "wealth-ledger-dashboard"
     sys_version = ""
 
     def version_string(self):

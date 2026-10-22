@@ -10,8 +10,8 @@ Env:
   GOOGLE_APPLICATION_CREDENTIALS  path to service-account JSON key
   TILLER_SPREADSHEET_ID           spreadsheet ID (from the sheet URL)
   TILLER_TAB                      optional tab name (default "Transactions")
-  CARD_TRACKER_DB                 optional DB path
-                                  (default ~/.local/share/card-tracker/txns.db)
+  WEALTH_LEDGER_DB                 optional DB path
+                                  (default ~/.local/share/wealth-ledger/txns.db)
 
 Usage:
   tiller_sheets_sync.py            # full sync (idempotent)
@@ -32,7 +32,7 @@ from typing import Any, Iterable, Optional
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 DEFAULT_TAB = "Transactions"
-DEFAULT_DB = Path("~/.local/share/card-tracker/txns.db").expanduser()
+DEFAULT_DB = Path("~/.local/share/wealth-ledger/txns.db").expanduser()
 SHEETS_EPOCH = date(1899, 12, 30)  # Sheets/Excel serial-date day 0
 
 log = logging.getLogger("tiller_sync")
@@ -274,7 +274,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--incremental", action="store_true",
                     help="only process rows with Date Added >= newest stored")
-    ap.add_argument("--db", default=os.environ.get("CARD_TRACKER_DB", str(DEFAULT_DB)))
+    ap.add_argument("--db", default=os.environ.get("WEALTH_LEDGER_DB", str(DEFAULT_DB)))
     ap.add_argument("--tab", default=os.environ.get("TILLER_TAB", DEFAULT_TAB))
     ap.add_argument("--spreadsheet-id", default=os.environ.get("TILLER_SPREADSHEET_ID"))
     args = ap.parse_args(argv)

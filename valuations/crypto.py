@@ -6,7 +6,7 @@ by one row per wallet (A = wallet, B = quantity) and "Total ..." rows. The tab's
 some coins out); that formula is parsed so the sheet's own number can be reproduced exactly.
 
 Quantity per (wallet, coin), best source first:
-  1. onchain       addresses / xpubs in ~/.config/card-tracker/crypto_wallets.json (+ xpubs found in the
+  1. onchain       addresses / xpubs in ~/.config/wealth-ledger/crypto_wallets.json (+ xpubs found in the
                    *.txt wallet exports in personal.json crypto.xpub_export_dir): BTC via mempool.space
                    (blockstream.info fallback),
                    ETH + ERC-20 USDT/USDC via public RPCs, TRX + TRC-20 USDT via TronGrid, SOL via Solana RPC
@@ -46,11 +46,11 @@ NAME = "crypto"
 EVERY_DAYS = 1
 ASSETS = ("Total cryptocurrency (USD)",)
 
-DB = Path.home() / ".local/share/card-tracker/txns.db"
-CONFIG = Path.home() / ".config/card-tracker/crypto_wallets.json"
+DB = Path.home() / ".local/share/wealth-ledger/txns.db"
+CONFIG = Path.home() / ".config/wealth-ledger/crypto_wallets.json"
 # set these to override personal.json (tests do); None = read personal.json "crypto" when first needed
 XPUB_EXPORT_DIR: Path | None = None   # folder of wallet-export .txt files to scan for xpub/ypub/zpub keys
-UA = {"User-Agent": "Mozilla/5.0 (card-tracker valuations)"}
+UA = {"User-Agent": "Mozilla/5.0 (wealth-ledger valuations)"}
 
 # wallets with their own balance-sheet row: only the coins the sheet's crypto total counts are counted here
 EXCHANGE_ROWS: set[str] | None = None

@@ -3,7 +3,7 @@
 Everything that identifies the owner (spreadsheet id, balance-sheet row labels, account-name patterns, extra
 classification rules, home/vehicle details, wallet names, ...) lives in a JSON file outside the repo:
 
-    ~/.config/card-tracker/personal.json      (override with $CARD_TRACKER_PERSONAL)
+    ~/.config/wealth-ledger/personal.json      (override with $WEALTH_LEDGER_PERSONAL)
 
 Start from personal.example.json in the repo root, copy it there and `chmod 600` it.
 """
@@ -14,7 +14,7 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
-DEFAULT_PATH = "~/.config/card-tracker/personal.json"
+DEFAULT_PATH = "~/.config/wealth-ledger/personal.json"
 
 
 class PersonalConfigError(RuntimeError):
@@ -22,7 +22,7 @@ class PersonalConfigError(RuntimeError):
 
 
 def path() -> Path:
-    return Path(os.environ.get("CARD_TRACKER_PERSONAL") or DEFAULT_PATH).expanduser()
+    return Path(os.environ.get("WEALTH_LEDGER_PERSONAL") or DEFAULT_PATH).expanduser()
 
 
 @lru_cache(maxsize=None)
@@ -30,8 +30,8 @@ def _load(p: str) -> dict:
     f = Path(p)
     if not f.exists():
         raise PersonalConfigError(
-            f"{f} not found. Copy personal.example.json from the card-tracker repo there, "
-            f"chmod 600 it and fill in your own values (or set CARD_TRACKER_PERSONAL).")
+            f"{f} not found. Copy personal.example.json from the wealth-ledger repo there, "
+            f"chmod 600 it and fill in your own values (or set WEALTH_LEDGER_PERSONAL).")
     try:
         data = json.loads(f.read_text())
     except ValueError as e:

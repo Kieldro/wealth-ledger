@@ -2,9 +2,9 @@
 # Monthly: has an institution you are waiting for become linkable in SimpleFIN (MX) yet? Logs a FOUND line
 # (no notifications). What to search for comes from personal.json "simplefin_watch":
 #   {"label": "...", "queries": ["...", ...], "ignore": {"<query>": "<exact result already known>"}}
-# ($CARD_TRACKER_PERSONAL overrides the path, as in personal.py.)
+# ($WEALTH_LEDGER_PERSONAL overrides the path, as in personal.py.)
 set -uo pipefail
-CFG=${CARD_TRACKER_PERSONAL:-$HOME/.config/card-tracker/personal.json}
+CFG=${WEALTH_LEDGER_PERSONAL:-$HOME/.config/wealth-ledger/personal.json}
 [[ -f $CFG ]] || { echo "$(date -Is) error: $CFG not found (see personal.example.json)" >&2; exit 1; }
 watch() { python3 -c 'import json,sys; w=json.load(open(sys.argv[1])).get("simplefin_watch") or {}
 k=sys.argv[2]

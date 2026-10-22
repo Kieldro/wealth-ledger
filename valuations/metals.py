@@ -33,7 +33,7 @@ YAHOO = {"Au": "GC=F", "Ag": "SI=F", "Pt": "PL=F", "Pd": "PA=F"}
 SPOT_LABELS = {"Silver Spot currently": "Ag", "Gold Spot currently": "Au",
                "Platinum Spot currently": "Pt", "Palladium spot currently": "Pd"}
 TOTAL_LABELS = {"ag stack total": "Ag", "au stack total": "Au", "pt stack total": "Pt", "pd stack total": "Pd"}
-UA = {"User-Agent": "Mozilla/5.0 (card-tracker valuations)"}
+UA = {"User-Agent": "Mozilla/5.0 (wealth-ledger valuations)"}
 
 
 def _sheet(rng: str) -> list[list]:
