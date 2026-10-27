@@ -195,6 +195,30 @@ footer code { font-size: 11.5px; }
       <p class="note" style="margin-top:8px"><button id="moreholds">Show all</button></p>
     </section>
 
+    <section class="card span-12" id="ira">
+      <div class="hd"><h2>Inherited IRA · 10-year rule</h2><span class="note">estimates, not tax advice</span></div>
+      <p class="sub" id="irasub">Loading…</p>
+      <div class="problems" id="iramiss"></div>
+      <div id="irastats" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px"></div>
+      <div class="cols2" style="margin-top:14px">
+        <div>
+          <h2>Even-spread plan</h2>
+          <p class="sub" id="iraplansub"></p>
+          <div class="tw"><table id="iraplan"></table></div>
+        </div>
+        <div>
+          <h2>Balance trend</h2>
+          <p class="sub" id="iratrendsub"></p>
+          <div class="chartbox sm"><canvas id="iratrend" aria-label="Inherited IRA balance trend" role="img"></canvas></div>
+          <h2 style="margin-top:12px">Annual minimum (RMD)</h2>
+          <p class="note" id="irarmd"></p>
+          <h2 style="margin-top:12px" id="iradist-h">Distributions this year</h2>
+          <div class="tw"><table id="iradist"></table></div>
+        </div>
+      </div>
+      <p class="note" id="iranotes" style="margin-top:12px"></p>
+    </section>
+
     <section class="card span-4">
       <h2>Credit cards</h2>
       <p class="sub">Balance owed per card.</p>
@@ -423,6 +447,70 @@ function renderDrafts(d) {
   $("drafts").innerHTML = h + "</tbody>";
 }
 
+const mdY = iso => new Date(iso + "T12:00").toLocaleDateString("en-US", {month: "short", day: "numeric", year: "numeric"});
+function renderInherited(r) {
+  const stat = (label, value, note, cls = "") => `<div><div class="label">${esc(label)}</div><div class="mid num ${cls}">${value}</div><div class="note">${note}</div></div>`;
+  $("iramiss").innerHTML = (r.missing || []).map(m => esc(m.msg)).join("<br>") + (r.error ? (r.missing?.length ? "<br>" : "") + esc(r.error) : "");
+  const a = r.account;
+  if (!a) { $("irasub").textContent = "No inherited IRA account found."; return; }
+  $("irasub").textContent = `${stripNum(a.account_name)} ${(a.account_name.match(/\((\d{4})\)$/) || [, ""])[1]} · ${a.institution || ""}, as of ${(a.as_of || a.snapshot_date || "").slice(0, 10)}. ${r.assumptions}`;
+  const d = r.deadline, p = r.plan, t = r.trend || {}, ty = r.this_year, rmd = r.rmd;
+  const trendNote = t.since ? `${signed(t.change)} (${t.change_pct >= 0 ? "+" : ""}${t.change_pct}%) since ${t.since.slice(5)}` : "no snapshots yet";
+  let s = d ? stat("Must be empty by", esc(mdY(d.date)), d.passed ? "deadline has passed" : `${d.years_left} year${d.years_left === 1 ? "" : "s"} after this one · ${d.distribution_years_left} tax years left incl. ${r.year}`, d.passed ? "down" : "")
+            : stat("Must be empty by", "—", "set death_year in personal.json");
+  s += stat("Balance", esc(f0(a.balance)), esc(trendNote));
+  s += stat(`Taken in ${ty.year}`, esc(f0(ty.taken)), ty.rows.length ? `${ty.rows.length} withdrawal${ty.rows.length > 1 ? "s" : ""}, incl. tax withheld` : (ty.partial ? `none since synced history began ${ty.history_starts.slice(5)}` : "none"));
+  if (p) s += stat("Suggested per year", esc(f0(p.flat_annual)), `even split over ${p.years} years · ${esc(f0(p.growth_annual))}/yr if it grows ${(100 * p.growth_rate).toFixed(1).replace(/\.0$/, "")}%`);
+  if (rmd && rmd.amount != null) s += stat(`${r.year} minimum (RMD)`, esc("~" + f0(rmd.amount)), rmd.status === "required" ? `required by ${rmd.due.slice(5)}${rmd.remaining > 0 ? ", " + esc(f0(rmd.remaining)) + " left" : ", met"}` : "only if the owner had started RMDs", rmd.status === "required" && rmd.remaining > 0 ? "down" : "");
+  else if (rmd) s += stat(`${r.year} minimum (RMD)`, rmd.status === "not_required" ? "none" : "—", rmd.status === "not_required" ? "owner hadn't started RMDs" : "see below");
+  $("irastats").innerHTML = s;
+
+  if (p) {
+    $("iraplansub").textContent = `Two ways to empty it by ${d.year}: equal amounts, or equal amounts that also use up an assumed ${(100 * p.growth_rate).toFixed(1).replace(/\.0$/, "")}% yearly growth (set growth_rate in personal.json). ${r.year} counts as one of the years; its row is what's left after this year's withdrawals.`;
+    let h = `<thead><tr><th>Year</th><th class="r">Even split</th><th class="r">At ${(100 * p.growth_rate).toFixed(1).replace(/\.0$/, "")}% growth</th><th class="r hide-sm">Left after (at growth)</th></tr></thead><tbody>`;
+    for (const x of p.schedule) h += `<tr><td>${x.year}${x.year === r.year ? ' <span class="note">remaining</span>' : x.year === d.year ? ' <span class="note">deadline</span>' : ""}</td>
+      <td class="r">${f0(x.flat)}</td><td class="r">${f0(x.growth)}</td><td class="r hide-sm note">${f0(x.end_balance_growth)}</td></tr>`;
+    $("iraplan").innerHTML = h + "</tbody>";
+  } else {
+    $("iraplansub").textContent = d && d.passed ? "Deadline has passed." : "Needs the owner's death year (see above).";
+    $("iraplan").innerHTML = "";
+  }
+
+  const ser = t.series || [];
+  $("iratrendsub").textContent = ser.length ? `${ser.length} daily snapshot${ser.length > 1 ? "s" : ""} since ${t.since}` +
+    (t.withdrawn ? `; ${f0(t.withdrawn)} withdrawn in that time, so the market move is ${signed(t.market_change)}.` : ".") : "No snapshots yet.";
+  if (window.Chart && ser.length) {
+    charts.ira?.destroy();
+    const ax = axisOpts();
+    charts.ira = new Chart($("iratrend"), {
+      type: "line",
+      data: {labels: ser.map(x => x.date), datasets: [{data: ser.map(x => x.balance), borderColor: css("--s2"), borderWidth: 2, backgroundColor: "transparent",
+        pointRadius: ser.length <= 31 ? 3 : 0, pointBackgroundColor: css("--s2"), pointBorderColor: css("--surface"), pointBorderWidth: 2, tension: 0}]},
+      options: {responsive: true, maintainAspectRatio: false, animation: false, interaction: {mode: "index", intersect: false},
+        scales: {x: {...ax, grid: {display: false}, ticks: {...ax.ticks, maxRotation: 0, autoSkip: true, maxTicksLimit: 5,
+                   callback(v) { return new Date(this.getLabelForValue(v) + "T12:00").toLocaleDateString("en-US", {month: "short", day: "numeric"}); }}},
+                 y: {...ax, grace: "5%", ticks: {...ax.ticks, maxTicksLimit: 4, callback: v => compact(v)}}},
+        plugins: {legend: {display: false}, tooltip: {callbacks: {label: ctx => ` ${f0(ctx.raw)}`}}}}
+    });
+  } else if (!window.Chart) $("iratrend").parentElement.innerHTML = '<p class="note">Chart library failed to load (offline?).</p>';
+
+  if (!rmd) $("irarmd").textContent = "Needs the owner's death year.";
+  else {
+    let txt = rmd.note || "";
+    if (rmd.amount != null) txt = `About ${f0(rmd.amount)} for ${rmd.year} = ${f0(rmd.basis_balance)} ÷ ${rmd.factor}. ${txt} Balance used: ${rmd.basis_source}.` +
+      (rmd.basis === "owner" ? " Uses the owner's remaining life expectancy, which is longer." : "");
+    $("irarmd").innerHTML = esc(txt) + (rmd.status === "unknown" ? ' <span class="badge b-sheet">owner RMD status unknown</span>' : "");
+  }
+
+  $("iradist-h").textContent = `Distributions in ${ty.year}`;
+  $("iradist").innerHTML = ty.rows.length
+    ? `<thead><tr><th>Date</th><th>Description</th><th class="r">Amount</th></tr></thead><tbody>` + ty.rows.map(x => `<tr class="${x.pending ? "dim" : ""}"><td class="note">${esc(x.date.slice(5))}</td><td class="name desc" title="${esc(x.description)}">${esc(x.description)}</td><td class="r">${f2(x.amount)}</td></tr>`).join("") +
+      `<tr class="total"><td colspan="2">Total</td><td class="r">${f2(ty.taken)}</td></tr></tbody>`
+    : `<tr><td class="note">None found${ty.partial ? ` (synced history starts ${esc(ty.history_starts)}; earlier ${ty.year} withdrawals aren't visible)` : ""}.</td></tr>`;
+  $("iranotes").innerHTML = (r.notes || []).map(esc).join(" ") + ` Source: <a href="https://www.irs.gov/publications/p590b" rel="noopener noreferrer" target="_blank" style="color:var(--accent)">IRS Publication 590-B</a> (10-year rule; Appendix B, Table I Single Life Expectancy).`;
+}
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => data.inherited && renderInherited(data.inherited));
+
 function merchTable(id, rows) {
   if (!rows || !rows.length) { $(id).innerHTML = '<tr><td class="note">No posted spending yet.</td></tr>'; return; }
   const max = rows[0].spent;
@@ -468,6 +556,7 @@ async function load(refresh = false) {
     trend: ["/api/trend", renderTrend], accounts: ["/api/accounts", renderAccounts],
     holdings: ["/api/holdings", renderHoldings], cards: ["/api/cards", renderCards], spending: ["/api/spending", renderSpending],
     drafts: ["/api/drafts", renderDrafts],
+    inherited: ["/api/inherited_ira", renderInherited],
   };
   // summary first when refreshing, so the trend uses the new sheet total
   if (refresh) await get("/api/refresh", {method: "POST"}).then(d => { data.summary = d; renderSummary(d); }).catch(e => $("problems").textContent = e.message);
