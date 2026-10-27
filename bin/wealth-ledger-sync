@@ -60,5 +60,10 @@ vout=$(cd "$ROOT" && "$PY" -m valuations.run 2>&1); vrc=$?
 echo "$vout"
 (( vrc != 0 )) && problem "Valuations: $(grep -m1 '^error' <<<"$vout" || tail -1 <<<"$vout")"
 
+# overdraft check: recurring auto-drafts vs checking balances; warning lines only, never a notification
+oout=$(cd "$ROOT" && "$PY" -m insights.overdraft --status --db "$DB" 2>&1); orc=$?
+if (( orc != 0 )); then problem "Overdraft check failed: $(tail -1 <<<"$oout")"
+else while IFS= read -r w; do [[ -n $w ]] && problem "$w"; done <<<"$oout"; fi
+
 { echo "last run $(date -Is) rc=$rc"; printf '%s\n' "${problems[@]}"; } > "$STATUS"
 exit $rc

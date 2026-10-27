@@ -56,6 +56,8 @@ button:disabled { opacity: .6; cursor: progress; }
 .logout { margin: 0; }
 .problems { background: var(--warn-bg); color: var(--warn); border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
 .problems:empty { display: none; }
+.alert { background: color-mix(in srgb, var(--neg) 14%, var(--surface)); color: var(--neg); border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
+.alert:empty { display: none; }
 
 .grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 12px; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px; min-width: 0; }
@@ -101,6 +103,7 @@ tr.sub td:first-child { padding-left: 26px; }
 .cls { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 5px; background: var(--surface-2); color: var(--text-2); white-space: nowrap; }
 .cls.spend { color: var(--neg); } .cls.income, .cls.refund { color: var(--pos); }
 .amt-pos { color: var(--pos); }
+td.neg { color: var(--neg); font-weight: 600; }
 .bar { height: 6px; border-radius: 3px; background: var(--s1); min-width: 2px; }
 .bart { width: 90px; }
 .desc { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
@@ -152,6 +155,7 @@ footer code { font-size: 11.5px; }
       <form method="post" action="/logout" class="logout"><button type="submit" title="Sign out of this device">Log out</button></form>
     </div>
   </header>
+  <div class="alert" id="odwarn" role="alert"></div>
   <div class="problems" id="problems"></div>
 
   <section class="hero" id="hero">
@@ -208,6 +212,12 @@ footer code { font-size: 11.5px; }
     </section>
 
     <section class="card span-12">
+      <h2>Upcoming auto-drafts</h2>
+      <p class="sub" id="draftsub">Recurring bills, card autopays and pay projected from history.</p>
+      <div class="tw"><table id="drafts"></table></div>
+    </section>
+
+    <section class="card span-12">
       <h2>Recent transactions</h2>
       <p class="sub">Latest 30 across all accounts. Pending rows are dimmed.</p>
       <div class="tw"><table id="recent"></table></div>
@@ -261,12 +271,13 @@ function srcBadge(c) {
 
 function renderSummary(s) {
   const st = s.status || {};
-  const bad = (st.rc && st.rc !== 0) || (st.problems || []).length;
+  const sync = (st.problems || []).filter(p => !OD_LINE.test(p));  // overdraft lines get their own banner
+  const bad = (st.rc && st.rc !== 0) || sync.length;
   $("status").innerHTML =
     `<span class="pill"><span class="dot ${bad ? "bad" : ""}"></span>Synced ${esc(fmtTime(st.last_run))}${st.rc ? " (rc=" + st.rc + ")" : ""}</span>` +
     `<button id="refresh" title="Re-read the balance sheet (networth.py); does not call the banks">Refresh</button>`;
   $("refresh").onclick = () => load(true);
-  const probs = [...(st.problems || [])];
+  const probs = [...sync];
   if (s.networth_error) probs.push(s.networth_error);
   $("problems").innerHTML = probs.length ? "<b>Sync problems:</b> " + probs.map(esc).join("<br>") : "";
   $("fetched").textContent = s.networth_fetched ? "sheet read " + fmtTime(s.networth_fetched) : "sheet not read yet";
@@ -399,6 +410,19 @@ function renderCards(c) {
   $("cards").innerHTML = h + "</tbody>";
 }
 
+const OD_LINE = /^(Overdraft risk|Low balance):/;
+function renderDrafts(d) {
+  $("odwarn").innerHTML = d.warnings.length ? d.warnings.map(esc).join("<br>") : "";
+  $("draftsub").textContent = `Next ${d.horizon_days} days, projected from history (bills at their largest recent amount, card autopays from the statement estimate, pay only when regular). ` +
+    d.accounts.map(a => `${stripNum(a.account)}: ${f0(a.balance)} now, low ${f0(a.low)}${a.low_date ? " on " + a.low_date.slice(5) : ""}.`).join(" ");
+  const rows = d.accounts.flatMap(a => a.events.map(e => ({...e, acct: stripNum(a.account)}))).sort((x, y) => x.date.localeCompare(y.date));
+  if (!rows.length) { $("drafts").innerHTML = '<tr><td class="note">Nothing recurring found.</td></tr>'; return; }
+  let h = `<thead><tr><th>Date</th><th>Item</th><th>Account</th><th class="r">Amount</th><th class="r">Balance after</th></tr></thead><tbody>`;
+  for (const r of rows) h += `<tr><td class="note">${esc(r.date.slice(5))}</td><td class="name" title="${esc(r.label)}">${esc(stripNum(r.label))}${r.estimate ? ' <span class="note">est.</span>' : ""}</td>
+    <td class="note">${esc(r.acct)}</td><td class="r ${r.amount > 0 ? "amt-pos" : ""}">${f2(r.amount)}</td><td class="r ${r.balance_after < 0 ? "neg" : ""}">${f2(r.balance_after)}</td></tr>`;
+  $("drafts").innerHTML = h + "</tbody>";
+}
+
 function merchTable(id, rows) {
   if (!rows || !rows.length) { $(id).innerHTML = '<tr><td class="note">No posted spending yet.</td></tr>'; return; }
   const max = rows[0].spent;
@@ -443,6 +467,7 @@ async function load(refresh = false) {
     summary: ["/api/summary", renderSummary],
     trend: ["/api/trend", renderTrend], accounts: ["/api/accounts", renderAccounts],
     holdings: ["/api/holdings", renderHoldings], cards: ["/api/cards", renderCards], spending: ["/api/spending", renderSpending],
+    drafts: ["/api/drafts", renderDrafts],
   };
   // summary first when refreshing, so the trend uses the new sheet total
   if (refresh) await get("/api/refresh", {method: "POST"}).then(d => { data.summary = d; renderSummary(d); }).catch(e => $("problems").textContent = e.message);

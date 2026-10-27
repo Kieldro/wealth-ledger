@@ -6,7 +6,7 @@
 
 Every path needs a login session (cookie) except /login, /logout (POST) and /robots.txt.
 Endpoints: /api/summary, POST /api/refresh (re-runs networth.py), /api/trend, /api/accounts,
-/api/holdings, /api/cards, /api/spending, /healthz. Page: /
+/api/holdings, /api/cards, /api/spending, /api/drafts (overdraft forecast), /healthz. Page: /
 """
 from __future__ import annotations
 
@@ -36,6 +36,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 import personal  # noqa: E402
+from insights import overdraft  # noqa: E402
 
 _DASH = personal.section("dashboard")
 DB = os.path.expanduser("~/.local/share/wealth-ledger/txns.db")
@@ -249,6 +250,16 @@ def api_cards(params) -> dict:
     return {"cards": rows, "total": round(sum(r["owed"] for r in rows), 2)}
 
 
+def api_drafts(params) -> dict:
+    con = db()
+    try:
+        fc = overdraft.forecast(con)
+    finally:
+        con.close()
+    return {"accounts": [a for a in fc if a["events"]], "warnings": overdraft.warnings(fc),
+            "horizon_days": overdraft.HORIZON, "buffer": overdraft.BUFFER}
+
+
 GENERIC_PAYEES = {"investment buy", "investment sell", "payment", "transfer", "deposit", "withdrawal"}
 
 
@@ -292,7 +303,8 @@ def api_spending(params) -> dict:
 
 
 ROUTES = {"/api/summary": api_summary, "/api/trend": api_trend, "/api/accounts": api_accounts,
-          "/api/holdings": api_holdings, "/api/cards": api_cards, "/api/spending": api_spending}
+          "/api/holdings": api_holdings, "/api/cards": api_cards, "/api/spending": api_spending,
+          "/api/drafts": api_drafts}
 
 
 # ---------- auth ----------
