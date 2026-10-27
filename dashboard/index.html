@@ -249,6 +249,25 @@ footer code { font-size: 11.5px; }
       <div class="tw"><table id="drafts"></table></div>
     </section>
 
+    <section class="card span-12" id="rentalcard">
+      <div class="hd"><h2 id="rental-h">Rental P&amp;L</h2><span class="note">cash basis, by month</span></div>
+      <p class="sub" id="rentalsub">Booking payouts, tenant rent and the property's expenses.</p>
+      <div class="chips" id="rentalchips"></div>
+      <div class="tw" style="margin-top:10px"><table id="rental"></table></div>
+      <div class="cols2" style="margin-top:12px">
+        <div>
+          <div class="chartbox sm"><canvas id="rentalchart" aria-label="Rental income, expenses and net by month" role="img"></canvas></div>
+          <div class="legend"><span><span class="sw" style="background:var(--s3)"></span>Income</span><span><span class="sw" style="background:var(--s2)"></span>Expenses</span><span><i style="background:var(--text-2)"></i>Net cash flow</span></div>
+        </div>
+        <div>
+          <h2>Matched transactions</h2>
+          <div class="tw"><table id="rentalitems"></table></div>
+          <p class="note" style="margin-top:8px"><button id="morerental">Show all</button></p>
+        </div>
+      </div>
+      <p class="note" id="rentalnote" style="margin-top:8px"></p>
+    </section>
+
     <section class="card span-12">
       <h2>Subscriptions &amp; unusual charges</h2>
       <p class="sub" id="subsub">Recurring card and checking charges found from history.</p>
@@ -553,6 +572,74 @@ function renderSubscriptions(s) {
   $("unusual").innerHTML = h + "</tbody>";
 }
 
+const RENTAL_COLS = r => [...r.months.map((m, i) => ({row: m, old: i < r.months.length - 1,  // phones: latest month only
+  label: new Date(m.month + "-15").toLocaleString("en-US", {month: "short"}) + (m.from_day ? ` (from ${m.from_day}th)` : m.mtd ? " MTD" : "")})),
+  {row: r.periods.t3m, label: "Last 3 mo"}, {row: r.periods.ytd, label: "YTD"}];
+let rentalLimit = 10;
+function renderRental(r) {
+  const cols = RENTAL_COLS(r), t3 = r.periods.t3m, ytd = r.periods.ytd;
+  const mdy = iso => new Date(iso + "T12:00").toLocaleDateString("en-US", {month: "short", day: "numeric"});
+  const cls = v => v < 0 ? "down" : v > 0 ? "up" : "";
+  const dash = '<span class="note">—</span>';
+  const est = c => c.principal_basis && c.principal_basis !== "measured" ? ` <span class="note" title="principal ${esc(c.principal_basis)}">est.</span>` : "";
+  $("rental-h").textContent = r.label + " P&L";
+  $("rentalchips").innerHTML = [t3, ytd].map(p => `<span class="chip" style="white-space:normal" title="${esc(p.since)} to ${esc(p.through)}">${esc(p.label)} (from ${esc(mdy(p.since))}): net <b class="${cls(p.net)}">${signed(p.net)}</b>` +
+    (p.months >= 1 ? ` · ${signed(p.net / p.months)}/mo` : "") +
+    (p.net_ex_principal != null ? ` · excl. principal <b class="${cls(p.net_ex_principal)}">${signed(p.net_ex_principal)}</b>` : "") + "</span>").join("");
+
+  const cell = (c, v, extra) => `<td class="r${c.old ? " hide-sm" : ""}${extra ? " " + extra : ""}">${v}</td>`;
+  const line = (label, get, trCls = "", tdCls = () => "") => `<tr class="${trCls}"><td class="name" title="${esc(label)}">${esc(label)}</td>${cols.map(c => cell(c, get(c.row), tdCls(c.row))).join("")}</tr>`;
+  const amt = v => v ? f0(v) : dash;
+  const group = label => `<tr class="group"><td colspan="${cols.length + 1}">${esc(label)}</td></tr>`;
+  let h = `<thead><tr><th></th>${cols.map(c => `<th class="r${c.old ? " hide-sm" : ""}">${esc(c.label)}</th>`).join("")}</tr></thead><tbody>` + group("Income");
+  for (const c of r.income_categories) h += line(c.label, row => amt(row.income[c.key]), "", row => (row.income[c.key] || 0) < 0 ? "down" : "");
+  h += line("Total income", row => f0(row.income_total), "total");
+  h += group("Expenses");
+  for (const c of r.expense_categories) h += line(c.label, row => amt(row.expenses[c.key]));
+  h += line("Total expenses", row => f0(row.expense_total), "total");
+  h += line("Net cash flow", row => signed(row.net), "total", row => cls(row.net));
+  if (r.mortgage_account) {
+    h += line("Mortgage principal (equity)", row => row.principal == null ? dash : f0(row.principal) + est(row), "dim");
+    h += line("Net excluding principal", row => row.net_ex_principal == null ? dash : signed(row.net_ex_principal), "", row => cls(row.net_ex_principal));
+  }
+  $("rental").innerHTML = h + "</tbody>";
+
+  const bases = r.months.map(m => m.principal_basis).filter(Boolean);
+  $("rentalsub").textContent = `Complete data starts ${mdy(r.since)}, so ${monthName(r.since.slice(0, 7))} is partial and this month is to date; YTD counts from then. ` +
+    "Cash basis: payouts arrive net of the booking site's fees, a refund to a tenant lowers rent, and the mortgage is the full payment (interest, any escrow and principal).";
+  $("rentalnote").textContent = (!r.mortgage_account ? "No mortgage loan account found, so principal can't be split out. "
+      : "Principal is equity, not a cost, so \"excluding principal\" adds it back to the cash flow. " +
+        (bases.includes("measured")
+          ? "It's measured from the loan balance where daily snapshots bracket a payment" +
+            (bases.some(b => b !== "measured") ? "; est. months reuse that scheduled principal plus any separately labelled extra principal. " : ". ")
+          : "No loan balance snapshot brackets a payment yet, so only separately labelled principal is shown (est.). ")) +
+    `Matching: ${r.rules.personal} pattern${r.rules.personal === 1 ? "" : "s"} from personal.json ("rental") plus ${r.rules.default} built-in (booking payouts, host software, mortgage ACH). Anything not matched, such as Venmo payments or store runs without a pattern, isn't counted.`;
+
+  const lbl = Object.fromEntries([...r.income_categories, ...r.expense_categories].map(c => [c.key, c.label]));
+  const items = r.items.slice(0, rentalLimit);
+  $("rentalitems").innerHTML = items.length ? `<thead><tr><th>Date</th><th>Item</th><th class="hide-sm">Category</th><th class="r">Amount</th></tr></thead><tbody>` +
+    items.map(i => `<tr><td class="note" style="white-space:nowrap">${esc(i.date.slice(5))}</td><td class="name" title="${esc(i.what)} · ${esc(stripNum(i.account))}">${esc(i.what)}</td>
+      <td class="hide-sm"><span class="cls">${esc(lbl[i.category] || i.category)}</span></td><td class="r ${i.amt > 0 ? "amt-pos" : ""}">${f2(i.amt)}</td></tr>`).join("") + "</tbody>"
+    : '<tr><td class="note">No rental transactions matched yet.</td></tr>';
+  $("morerental").hidden = r.items.length <= 10;
+  $("morerental").textContent = rentalLimit < r.items.length ? `Show all ${r.items.length}` : "Show latest 10";
+  $("morerental").onclick = () => { rentalLimit = rentalLimit < r.items.length ? 9999 : 10; renderRental(r); };
+
+  if (!window.Chart) { $("rentalchart").parentElement.innerHTML = '<p class="note">Chart library failed to load (offline?).</p>'; return; }
+  charts.rental?.destroy();
+  const ax = axisOpts();
+  charts.rental = new Chart($("rentalchart"), {
+    data: {labels: cols.slice(0, -2).map(c => c.label), datasets: [
+      {type: "line", label: "Net cash flow", data: r.months.map(m => m.net), borderColor: css("--text-2"), backgroundColor: css("--text-2"), borderWidth: 2, pointRadius: 3, tension: 0, order: 0},
+      {type: "bar", label: "Income", data: r.months.map(m => m.income_total), backgroundColor: css("--s3"), borderRadius: 3, maxBarThickness: 32, order: 1},
+      {type: "bar", label: "Expenses", data: r.months.map(m => m.expense_total), backgroundColor: css("--s2"), borderRadius: 3, maxBarThickness: 32, order: 1}]},
+    options: {responsive: true, maintainAspectRatio: false, animation: false, interaction: {mode: "index", intersect: false},
+      scales: {x: {...ax, grid: {display: false}}, y: {...ax, ticks: {...ax.ticks, maxTicksLimit: 5, callback: v => compact(v)}}},
+      plugins: {legend: {display: false}, tooltip: {callbacks: {label: ctx => ` ${ctx.dataset.label}: ${f0(ctx.raw)}`}}}}
+  });
+}
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => data.rental && renderRental(data.rental));
+
 function merchTable(id, rows) {
   if (!rows || !rows.length) { $(id).innerHTML = '<tr><td class="note">No posted spending yet.</td></tr>'; return; }
   const max = rows[0].spent;
@@ -676,7 +763,7 @@ async function load(refresh = false) {
     trend: ["/api/trend", renderTrend], accounts: ["/api/accounts", renderAccounts],
     holdings: ["/api/holdings", renderHoldings], cards: ["/api/cards", renderCards], spending: ["/api/spending", renderSpending],
     drafts: ["/api/drafts", renderDrafts], budget: ["/api/budget", renderBudget],
-    subscriptions: ["/api/subscriptions", renderSubscriptions],
+    subscriptions: ["/api/subscriptions", renderSubscriptions], rental: ["/api/rental", renderRental],
   };
   // summary first when refreshing, so the trend uses the new sheet total
   if (refresh) await get("/api/refresh", {method: "POST"}).then(d => { data.summary = d; renderSummary(d); }).catch(e => $("problems").textContent = e.message);
