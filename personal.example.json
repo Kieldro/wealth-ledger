@@ -86,6 +86,14 @@
    ["brokerage|individual|taxable", "taxable"]
   ]
  },
+ "budget": {
+  "_help": "insights/budget.py: [transaction regex on 'payee | description', budget-line regex on 'category/item' of the 'income sheet' tab]; tried before the generic defaults in budget.py. Put your landlord, utilities and people you pay here.",
+  "rules": [
+   ["EXAMPLE PROPERTY MGMT", "rent"],
+   ["ZELLE TRANSFER TO EXAMPLE PERSON", "childcare"],
+   ["EXAMPLE CITY UTILITIES", "^bills/water"]
+  ]
+ },
  "plaid": {"client_user_id": "wealth-ledger-user"},
  "simplefin_watch": {
   "_help": "bin/simplefin-institution-check: search SimpleFIN's institution list for these queries; ignore maps a query to the exact result that is already known.",

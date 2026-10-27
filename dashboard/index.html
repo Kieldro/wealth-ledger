@@ -119,6 +119,16 @@ td.neg { color: var(--neg); font-weight: 600; }
 .legend i { display: inline-block; width: 14px; height: 2px; vertical-align: middle; margin-right: 6px; background: var(--s1); }
 .cols2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .toggle { font-size: 12px; color: var(--text-2); display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+/* budget vs actual */
+.seg { display: inline-flex; gap: 6px; }
+.seg button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.track { position: relative; height: 6px; border-radius: 3px; background: var(--surface-2); }
+.track .bar { max-width: 100%; }
+.track .bar.over { background: var(--neg); }
+.track .pace { position: absolute; top: -3px; bottom: -3px; width: 2px; border-radius: 1px; background: var(--text-2); }
+#budtbl td:first-child { text-transform: capitalize; }
+#budtbl tr.sub td:first-child { text-transform: none; }
+#budtbl td.bart { vertical-align: middle; }
 footer { margin: 18px 0 8px; font-size: 12px; color: var(--muted); line-height: 1.6; }
 footer code { font-size: 11.5px; }
 .err { color: var(--neg); font-size: 13px; }
@@ -209,6 +219,14 @@ footer code { font-size: 11.5px; }
         <div><h2 id="tm-h">This month</h2><div class="tw"><table id="tm"></table></div></div>
         <div><h2 id="lm-h">Last month</h2><div class="tw"><table id="lm"></table></div></div>
       </div>
+    </section>
+
+    <section class="card span-12" id="budget">
+      <div class="hd"><h2>Budget vs actual</h2><span class="seg" id="bud-seg"></span></div>
+      <p class="sub" id="budsub">Monthly budget from the sheet against posted spending.</p>
+      <div class="chips" id="budchips"></div>
+      <div class="tw" style="margin-top:10px"><table id="budtbl"></table></div>
+      <p class="note" id="budnote" style="margin-top:8px"></p>
     </section>
 
     <section class="card span-12">
@@ -461,6 +479,70 @@ function renderSpending(sp) {
   $("recent").innerHTML = h + "</tbody>";
 }
 
+let budIdx = 0;  // 0 = this month, 1 = last month
+function budBar(actual, budget, frac) {
+  if (!(budget > 0)) return actual > 0 ? '<div class="track"><div class="bar over" style="width:100%"></div></div>' : "";
+  const w = Math.min(100, 100 * actual / budget);
+  const pace = frac != null && frac < 1 ? `<div class="pace" style="left:calc(${(100 * frac).toFixed(1)}% - 1px)" title="expected by today"></div>` : "";
+  return `<div class="track"><div class="bar ${actual > budget + 0.005 ? "over" : ""}" style="width:${w.toFixed(1)}%${actual > 0 ? "" : ";min-width:0"}"></div>${pace}</div>`;
+}
+function budPace(c, cur) {
+  if (!cur || !(c.budget > 0)) return "";
+  const d = c.actual - c.expected;
+  if (Math.abs(d) < 1) return '<span class="note">on pace</span>';
+  return d > 0 ? `<span class="down">${f0(d)} ahead</span>` : `<span class="note">${f0(-d)} under</span>`;
+}
+function renderBudget(b) {
+  const seg = $("bud-seg");
+  if (!b.months) {
+    seg.innerHTML = "";
+    $("budsub").innerHTML = `<span class="err">${esc(b.error || "Budget sheet not read yet.")}</span>`;
+    $("budchips").innerHTML = ""; $("budtbl").innerHTML = ""; $("budnote").textContent = "";
+    return;
+  }
+  seg.innerHTML = b.months.map((m, i) => `<button type="button" data-i="${i}" aria-pressed="${i === budIdx}">${esc(monthName(m.month))}${m.current ? " (MTD)" : ""}</button>`).join("");
+  seg.querySelectorAll("button").forEach(x => x.onclick = () => { budIdx = +x.dataset.i; renderBudget(b); });
+  const m = b.months[budIdx], cur = m.current, frac = m.elapsed_days / m.days;
+  const asOf = new Date(m.month + "-" + String(m.elapsed_days || 1).padStart(2, "0") + "T12:00").toLocaleDateString("en-US", {month: "short", day: "numeric"});
+  $("budsub").innerHTML = `“${esc(b.tab)}” tab of the sheet (column C, monthly) vs posted <code>class='spend'</code>. ` +
+    `<b>Categorization is pattern-based</b>: merchant text is matched to budget lines by rules, so it is approximate; spending no rule matches is “Other (unmapped)”.` +
+    (b.error ? ` <span class="err">${esc(b.error)} (showing the last good copy)</span>` : "");
+  const left = m.remaining, ahead = m.actual - m.expected;
+  $("budchips").innerHTML = [
+    `Budget <b>${f0(m.budget)}</b>`,
+    `Spent <b class="${m.actual > m.budget ? "down" : ""}">${f0(m.actual)}</b>`,
+    `${left < 0 ? "Over" : "Left"} <b class="${left < 0 ? "down" : "up"}">${f0(Math.abs(left))}</b>`,
+    cur ? `Expected by ${esc(asOf)} <b>${f0(m.expected)}</b> · <b class="${ahead > 0 ? "down" : "up"}">${f0(Math.abs(ahead))} ${ahead > 0 ? "ahead of" : "under"} pace</b>` : "",
+    `Unmapped <b>${f0(m.unmapped)}</b>`,
+  ].filter(Boolean).map(x => `<span class="chip">${x}</span>`).join("");
+  let h = `<thead><tr><th>Category</th><th class="r">Budget</th><th class="r">Actual</th><th class="bart"></th><th class="r">Left</th>${cur ? '<th class="r hide-sm">Pace</th>' : ""}</tr></thead><tbody>`;
+  m.categories.forEach((c, i) => {
+    const nSub = c.unmapped ? c.merchants.length : c.lines.length;
+    h += `<tr class="cat" data-k="b${i}"><td class="name" title="${esc(c.category)}">${esc(c.category)}${nSub ? ` <span class="note">${nSub}</span>` : ""}</td>
+      <td class="r">${c.unmapped ? "—" : f0(c.budget)}</td><td class="r ${c.over ? "neg" : ""}">${f0(c.actual)}</td>
+      <td class="bart">${budBar(c.actual, c.budget, cur ? frac : null)}</td>
+      <td class="r ${c.remaining < 0 ? "down" : ""}">${f0(c.remaining)}</td>${cur ? `<td class="r hide-sm">${budPace(c, cur)}</td>` : ""}</tr>`;
+    const subs = c.unmapped
+      ? c.merchants.map(x => `<tr class="sub" data-p="b${i}" hidden><td class="name" title="${esc(x.merchant)}">${esc(x.merchant)}${x.n > 1 ? ` <span class="note">×${x.n}</span>` : ""}</td><td></td><td class="r">${f0(x.spent)}</td><td class="bart"></td><td></td>${cur ? '<td class="hide-sm"></td>' : ""}</tr>`)
+      : c.lines.map(l => `<tr class="sub" data-p="b${i}" hidden><td class="name" title="${esc(l.item + (l.merchants.length ? " · " + l.merchants.map(x => x.merchant).join(", ") : ""))}">${esc(l.item)}${l.has_rule ? "" : ' <span class="note">no rule</span>'}${l.merchants.length ? `<div class="note desc">${esc(l.merchants.map(x => x.merchant + (x.n > 1 ? " ×" + x.n : "")).join(", "))}</div>` : ""}</td>
+          <td class="r">${f0(l.budget)}</td><td class="r ${l.actual > l.budget + 0.005 ? "neg" : ""}">${f0(l.actual)}</td>
+          <td class="bart">${budBar(l.actual, l.budget, null)}</td><td class="r ${l.remaining < 0 ? "down" : ""}">${f0(l.remaining)}</td>${cur ? '<td class="hide-sm"></td>' : ""}</tr>`);
+    h += subs.join("");
+  });
+  h += `<tr class="total"><td>Total</td><td class="r">${f0(m.budget)}</td><td class="r ${m.actual > m.budget ? "neg" : ""}">${f0(m.actual)}</td><td class="bart">${budBar(m.actual, m.budget, cur ? frac : null)}</td><td class="r ${left < 0 ? "down" : ""}">${f0(left)}</td>${cur ? `<td class="r hide-sm">${budPace(m, cur)}</td>` : ""}</tr></tbody>`;
+  $("budtbl").innerHTML = h;
+  $("budtbl").querySelectorAll("tr.cat").forEach(tr => tr.onclick = () =>
+    $("budtbl").querySelectorAll(`tr[data-p="${tr.dataset.k}"]`).forEach(x => x.hidden = !x.hidden));
+  const notes = ["Tap a category for its lines and merchants (“no rule” = no pattern points at that line yet)."];
+  if (cur) notes.push(`Pace = budget × ${m.elapsed_days}/${m.days} days (the tick on each bar); rent, mortgage and other lump bills post early, so pace runs ahead early in the month.`);
+  notes.push("Yearly items are budgeted at 1/12 a month, so an annual bill shows over in the month it posts.");
+  if (m.excluded.length) notes.push(`Not counted (saving, not spending): ${m.excluded.map(e => `${e.item} ${f0(e.budget)}`).join(", ")}.`);
+  if (b.sheet_total != null && Math.abs(b.sheet_total - m.budget) >= 1) notes.push(`The sheet's own Total row is ${f0(b.sheet_total)} (its SUM range differs from the lines counted here).`);
+  if (m.partial_data) notes.push(`Complete data starts ${m.since}, so this month is partial.`);
+  notes.push(`Sheet read ${fmtTime(b.fetched)}, cached 10 min.`);
+  $("budnote").textContent = notes.join(" ");
+}
+
 async function load(refresh = false) {
   const btn = $("refresh"); if (btn) { btn.disabled = true; btn.textContent = "Refreshing…"; }
   const parts = {
@@ -468,6 +550,7 @@ async function load(refresh = false) {
     trend: ["/api/trend", renderTrend], accounts: ["/api/accounts", renderAccounts],
     holdings: ["/api/holdings", renderHoldings], cards: ["/api/cards", renderCards], spending: ["/api/spending", renderSpending],
     drafts: ["/api/drafts", renderDrafts],
+    budget: ["/api/budget", renderBudget],
   };
   // summary first when refreshing, so the trend uses the new sheet total
   if (refresh) await get("/api/refresh", {method: "POST"}).then(d => { data.summary = d; renderSummary(d); }).catch(e => $("problems").textContent = e.message);

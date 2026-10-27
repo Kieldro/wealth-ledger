@@ -6,7 +6,8 @@
 
 Every path needs a login session (cookie) except /login, /logout (POST) and /robots.txt.
 Endpoints: /api/summary, POST /api/refresh (re-runs networth.py), /api/trend, /api/accounts,
-/api/holdings, /api/cards, /api/spending, /api/drafts (overdraft forecast), /healthz. Page: /
+/api/holdings, /api/cards, /api/spending, /api/drafts (overdraft forecast), /api/budget (budget vs actual),
+/healthz. Page: /
 """
 from __future__ import annotations
 
@@ -37,6 +38,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 import personal  # noqa: E402
 from insights import overdraft  # noqa: E402
+from insights import budget  # noqa: E402
 
 _DASH = personal.section("dashboard")
 DB = os.path.expanduser("~/.local/share/wealth-ledger/txns.db")
@@ -260,6 +262,39 @@ def api_drafts(params) -> dict:
             "horizon_days": overdraft.HORIZON, "buffer": overdraft.BUFFER}
 
 
+_bud_lock = threading.Lock()
+_bud = {"data": None, "fetched": 0.0, "error": None}
+
+
+def budget_sheet() -> dict:
+    """The income-sheet budget lines via gws, cached like networth(); a failed read keeps the stale copy."""
+    with _bud_lock:
+        if _bud["data"] is None or time.time() - _bud["fetched"] >= CACHE_TTL:
+            try:
+                _bud.update(data=budget.sheet_lines(), fetched=time.time(), error=None)
+            except Exception as e:
+                msg = getattr(e, "stderr", "") or str(e)
+                _bud["error"] = f"budget sheet read failed: {str(msg).strip()[-300:]}"
+        return dict(_bud)
+
+
+def api_budget(params) -> dict:
+    sh = budget_sheet()
+    res = {"error": sh["error"], "fetched": datetime.fromtimestamp(sh["fetched"]).astimezone().isoformat()
+           if sh["fetched"] else None, "tab": budget.TAB}
+    if not sh["data"]:
+        return res
+    this_m, last_m = budget.months()
+    con = db()
+    try:
+        res["months"] = [budget.compute(con, sh["data"]["lines"], m, since=LEDGER_START, label=merchant)
+                         for m in (this_m, last_m)]
+    finally:
+        con.close()
+    res["sheet_total"] = sh["data"]["sheet_total"]
+    return res
+
+
 GENERIC_PAYEES = {"investment buy", "investment sell", "payment", "transfer", "deposit", "withdrawal"}
 
 
@@ -304,7 +339,7 @@ def api_spending(params) -> dict:
 
 ROUTES = {"/api/summary": api_summary, "/api/trend": api_trend, "/api/accounts": api_accounts,
           "/api/holdings": api_holdings, "/api/cards": api_cards, "/api/spending": api_spending,
-          "/api/drafts": api_drafts}
+          "/api/drafts": api_drafts, "/api/budget": api_budget}
 
 
 # ---------- auth ----------
