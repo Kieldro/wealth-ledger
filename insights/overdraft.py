@@ -57,17 +57,18 @@ def _gaps(chain) -> list[int]:
     return [(b[0] - a[0]).days for a, b in zip(chain, chain[1:])]
 
 
-def chains(occ: list[tuple[date, float]], max_ratio: float | None = None,
-           min_len: int = 2) -> list[list[tuple[date, float]]]:
-    """Split one description's occurrences into monthly series (e.g. two Amex autopays a few days apart)."""
+def chains(occ: list[tuple[date, float]], max_ratio: float | None = None, min_len: int = 2,
+           gaps: tuple[int, int] = (MIN_GAP, MAX_GAP), expect_gap: float = 30) -> list[list[tuple[date, float]]]:
+    """Split one description's occurrences into monthly series (e.g. two Amex autopays a few days apart).
+    `gaps`/`expect_gap` set the spacing that links two occurrences (insights.subscriptions uses a yearly one)."""
     out: list[list] = []
     for d, a in sorted(occ):
         best, best_score = None, None
         for c in out:
             gap = (d - c[-1][0]).days
             ratio = max(abs(a), 0.01) / max(abs(c[-1][1]), 0.01)
-            if MIN_GAP <= gap <= MAX_GAP and (max_ratio is None or 1 / max_ratio <= ratio <= max_ratio):
-                expect = statistics.median(_gaps(c)) if len(c) > 1 else 30
+            if gaps[0] <= gap <= gaps[1] and (max_ratio is None or 1 / max_ratio <= ratio <= max_ratio):
+                expect = statistics.median(_gaps(c)) if len(c) > 1 else expect_gap
                 score = abs(gap - expect) + 5 * abs(math.log(ratio))
                 if best_score is None or score < best_score:
                     best, best_score = c, score
