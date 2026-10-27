@@ -150,6 +150,29 @@ def synced_series() -> list[dict]:
     return out
 
 
+def period_changes(series: list[dict]) -> dict:
+    """Change in the synced total vs 1/7/30 days ago (that exact day's snapshot) and month/year to date (the last
+    snapshot on or before the previous month-end / year-end). The sheet-only total is constant, so it cancels out."""
+    changes = {}
+    if not series:
+        return changes
+    cur_synced = series[-1]["synced"]
+    latest = date.fromisoformat(series[-1]["date"])
+    note = f"history starts {series[0]['date']}"
+    for n in (1, 7, 30):
+        target = (latest - timedelta(days=n)).isoformat()
+        past = [s for s in series if s["date"] <= target]
+        if past and past[-1]["date"] == target:
+            changes[str(n)] = {"delta": round(cur_synced - past[-1]["synced"], 2), "vs": target}
+        else:
+            changes[str(n)] = {"delta": None, "vs": target, "note": note}
+    for key, base in (("mtd", latest.replace(day=1) - timedelta(days=1)), ("ytd", date(latest.year - 1, 12, 31))):
+        past = [s for s in series if s["date"] <= base.isoformat()]
+        changes[key] = ({"delta": round(cur_synced - past[-1]["synced"], 2), "vs": past[-1]["date"]} if past
+                        else {"delta": None, "vs": base.isoformat(), "note": note})
+    return changes
+
+
 # ---------- endpoints ----------
 def api_summary(params) -> dict:
     nw = networth(refresh="refresh" in params)
@@ -176,19 +199,7 @@ def api_summary(params) -> dict:
             c[k] = round(c[k], 2)
     sheet_const = round(sum((l["used"] if l["type"] == "asset" else -l["used"])
                             for l in data["lines"] if not l["from"].startswith("live")), 2)
-    # change vs N days ago, using the trend (synced history + today's sheet-only total held constant)
-    series = synced_series()
-    changes = {}
-    if series:
-        cur_synced = series[-1]["synced"]
-        latest = date.fromisoformat(series[-1]["date"])
-        for n in (1, 7, 30):
-            target = (latest - timedelta(days=n)).isoformat()
-            past = [s for s in series if s["date"] <= target]
-            if past and past[-1]["date"] == target:
-                changes[str(n)] = {"delta": round(cur_synced - past[-1]["synced"], 2), "vs": target}
-            else:
-                changes[str(n)] = {"delta": None, "vs": target, "note": f"history starts {series[0]['date']}"}
+    changes = period_changes(synced_series())
     res.update(net_worth=data["net_worth"], assets=data["assets"], liabilities=data["liabilities"],
                sheet_net_worth=data.get("sheet_net_worth"), sheet_only_total=sheet_const,
                changes=changes, categories=list(cats.values()))
@@ -209,14 +220,31 @@ def api_trend(params) -> dict:
                     "superseded feeds excluded, as in networth.py) plus today's sheet-only total held constant."}
 
 
+STALE_DAYS = 3  # a balance the bank last updated more than this many days ago is flagged stale
+
+
+def freshness(r: dict, today: date | None = None) -> None:
+    """Normalise r['as_of'] for display and add age_days/stale. The bank's own balance date when the feed gives one
+    (SimpleFIN), else the day the sync saw it (Plaid's cached balances carry no timestamp)."""
+    raw = r.get("as_of") or ""
+    r["as_of"] = raw[:16].replace("T", " ") or r["snapshot_date"]
+    try:
+        seen = date.fromisoformat((raw or r["snapshot_date"] or "")[:10])
+    except ValueError:
+        r["age_days"], r["stale"] = None, False
+        return
+    r["age_days"] = ((today or date.today()) - seen).days
+    r["stale"] = r["age_days"] > STALE_DAYS
+
+
 def api_accounts(params) -> dict:
     rows = q("""SELECT account_name, institution, source, ROUND(balance,2) balance, as_of, snapshot_date,
                        COALESCE(kind,'unclassified') kind
                 FROM v_accounts ORDER BY kind, ABS(balance) DESC""")
     for r in rows:
-        r["as_of"] = (r["as_of"] or "")[:16].replace("T", " ") or r["snapshot_date"]
+        freshness(r)
         r["counted"] = r["kind"] in NW_KINDS
-    return {"accounts": rows}
+    return {"accounts": rows, "stale_days": STALE_DAYS}
 
 
 def api_holdings(params) -> dict:
@@ -245,11 +273,28 @@ def api_holdings(params) -> dict:
 
 
 def api_cards(params) -> dict:
-    rows = q("""SELECT account_name, institution, source, ROUND(-balance,2) owed, as_of, snapshot_date
-                FROM v_accounts WHERE kind='credit' ORDER BY balance""")
+    """Owed is positive dollars owed (negative = a credit balance). Available credit comes from the feed's
+    'available' field; SimpleFIN reports 0 for cards it has no figure for, so 0 counts as unknown. The limit is
+    approximated as owed + available (pending charges can make it a little off)."""
+    rows = q("""SELECT account_name, institution, source, ROUND(-bal,2) owed, available, as_of, snapshot_date
+                FROM v_balances_latest WHERE kind='credit' ORDER BY bal""")
+    known_owed = known_limit = 0.0
     for r in rows:
-        r["as_of"] = (r["as_of"] or "")[:16].replace("T", " ") or r["snapshot_date"]
-    return {"cards": rows, "total": round(sum(r["owed"] for r in rows), 2)}
+        freshness(r)
+        try:
+            avail = float(r["available"]) if r["available"] not in (None, "") else None
+        except ValueError:
+            avail = None
+        r["available"] = round(avail, 2) if avail and avail > 0 else None
+        limit = (max(r["owed"], 0) + r["available"]) if r["available"] is not None else None
+        r["limit"] = round(limit, 2) if limit else None
+        r["util_pct"] = round(100 * max(r["owed"], 0) / limit, 1) if limit else None
+        if limit:
+            known_owed += max(r["owed"], 0)
+            known_limit += limit
+    return {"cards": rows, "total": round(sum(r["owed"] for r in rows), 2),
+            "available": round(known_limit - known_owed, 2) if known_limit else None,
+            "util_pct": round(100 * known_owed / known_limit, 1) if known_limit else None}
 
 
 def api_drafts(params) -> dict:
@@ -295,6 +340,7 @@ def api_budget(params) -> dict:
     return res
 
 
+RECENT_LIMIT = 200  # recent transactions sent to the page (it shows 30 until you search or filter)
 GENERIC_PAYEES = {"investment buy", "investment sell", "payment", "transfer", "deposit", "withdrawal"}
 
 
@@ -328,7 +374,7 @@ def api_spending(params) -> dict:
         tops[m] = [{"merchant": k, "spent": round(v[0], 2), "n": v[1]}
                    for k, v in sorted(agg.items(), key=lambda kv: -kv[1][0])[:10]]
     recent = q("""SELECT date, account_name, ROUND(amt,2) amt, description, payee, class, pending FROM v_ledger
-                  ORDER BY date DESC, first_seen DESC, txn_id LIMIT 30""")
+                  ORDER BY date DESC, first_seen DESC, txn_id LIMIT ?""", (RECENT_LIMIT,))
     for r in recent:
         r["merchant"] = merchant(r["description"], r["payee"])
         r["account_name"] = re.sub(r"\s*\([0-9a-f-]+\)$", "", r["account_name"] or "")
