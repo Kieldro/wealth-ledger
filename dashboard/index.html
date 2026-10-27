@@ -218,6 +218,16 @@ footer code { font-size: 11.5px; }
     </section>
 
     <section class="card span-12">
+      <h2>Subscriptions &amp; unusual charges</h2>
+      <p class="sub" id="subsub">Recurring card and checking charges found from history.</p>
+      <div class="chips" id="subtot"></div>
+      <div class="cols2" style="margin-top:12px">
+        <div><h2>Recurring charges</h2><div class="tw"><table id="subs"></table></div></div>
+        <div><h2 id="unus-h">Unusual charges</h2><div class="tw"><table id="unusual"></table></div><p class="note" id="unusnote"></p></div>
+      </div>
+    </section>
+
+    <section class="card span-12">
       <h2>Recent transactions</h2>
       <p class="sub">Latest 30 across all accounts. Pending rows are dimmed.</p>
       <div class="tw"><table id="recent"></table></div>
@@ -423,6 +433,50 @@ function renderDrafts(d) {
   $("drafts").innerHTML = h + "</tbody>";
 }
 
+const SUB_GROUP = {subscription: "Subscriptions", bill: "Bills & utilities", person: "To people"};
+function renderSubscriptions(s) {
+  const t = s.totals, md = iso => iso ? `${Number(iso.slice(5, 7))}/${Number(iso.slice(8, 10))}` : "";
+  const nNew = s.subscriptions.filter(x => x.new).length, nUp = s.subscriptions.filter(x => x.price_change).length;
+  $("subsub").textContent = `Same merchant every month (26–36 days) or year (350–380 days) at a similar price, still active. ` +
+    `Bills and transfers to people are listed but totalled apart, so the subscriptions total is what you could cancel. ` +
+    `“New” = first charged in the last ${s.new_days} days.`;
+  $("subtot").innerHTML = Object.keys(SUB_GROUP).filter(k => t[k].count).map(k =>
+    `<span class="chip">${esc(SUB_GROUP[k])} <b>${f0(t[k].monthly)}/mo</b> · ${f0(t[k].yearly)}/yr · ${t[k].count}</span>`).join("") +
+    (nNew ? `<span class="chip"><b class="up">${nNew} new</b></span>` : "") +
+    (nUp ? `<span class="chip"><b class="down">${nUp} price increase${nUp > 1 ? "s" : ""}</b></span>` : "");
+  if (!s.subscriptions.length) $("subs").innerHTML = '<tr><td class="note">No recurring charges found.</td></tr>';
+  else {
+    let h = `<thead><tr><th>Merchant</th><th class="r">Last</th><th class="r">Next</th><th class="r">Per month</th></tr></thead><tbody>`;
+    for (const k of Object.keys(SUB_GROUP)) {
+      const rs = s.subscriptions.filter(x => x.category === k);
+      if (!rs.length) continue;
+      h += `<tr class="group"><td colspan="3">${esc(SUB_GROUP[k])}</td><td class="r">${f0(t[k].monthly)}</td></tr>`;
+      for (const r of rs) {
+        const pc = r.price_change;
+        const tags = (r.new ? ' <span class="badge b-live">new</span>' : "") +
+          (pc ? ` <span class="badge b-sheet" title="was ${esc(f2(pc.from))}">up ${pc.pct.toFixed(0)}%</span>` : "");
+        h += `<tr><td class="name" title="${esc(r.description)}">${esc(r.merchant)}${tags}<div class="note">${r.cadence}${r.varies ? ", amount varies" : ""} · ${esc(r.account)}</div></td>
+          <td class="r">${f2(r.last_amount)}<div class="note">${md(r.last_date)}</div></td>
+          <td class="r note">${md(r.next_date)}${r.late ? '<div class="down">not seen yet</div>' : ""}</td>
+          <td class="r">${f2(r.monthly)}</td></tr>`;
+      }
+    }
+    $("subs").innerHTML = h + "</tbody>";
+  }
+  $("unus-h").textContent = `Unusual charges · last ${s.window_days} days`;
+  const c = s.unusual_counts;
+  $("unusnote").textContent = `Fees (interest, late, returned/NSF, overdraft, foreign transaction) first, then the same charge twice within 3 days, ` +
+    `then charges over 2× that merchant's usual and over $50.` + (s.unusual_count > s.unusual.length ? ` Showing ${s.unusual.length} of ${s.unusual_count}.` : "");
+  if (!s.unusual.length) { $("unusual").innerHTML = '<tr><td class="note">Nothing unusual.</td></tr>'; return; }
+  const KIND = {fee: ["fee", "b-sheet"], duplicate: ["twice", "b-mixed"], large: ["large", "b-mixed"]};
+  let h = `<thead><tr><th>Date</th><th>Charge</th><th class="r">Amount</th></tr></thead><tbody>`;
+  for (const r of s.unusual) h += `<tr class="${r.pending ? "dim" : ""}"><td class="note" style="white-space:nowrap">${md(r.date)}</td>
+    <td title="${esc(r.description)}"><span class="badge ${KIND[r.kind][1]}">${KIND[r.kind][0]}</span> ${esc(r.merchant)}
+      <div class="note">${esc(r.reason)} · ${esc(r.account)}${r.pending ? " · pending" : ""}</div></td>
+    <td class="r">${f2(r.amount)}</td></tr>`;
+  $("unusual").innerHTML = h + "</tbody>";
+}
+
 function merchTable(id, rows) {
   if (!rows || !rows.length) { $(id).innerHTML = '<tr><td class="note">No posted spending yet.</td></tr>'; return; }
   const max = rows[0].spent;
@@ -467,7 +521,7 @@ async function load(refresh = false) {
     summary: ["/api/summary", renderSummary],
     trend: ["/api/trend", renderTrend], accounts: ["/api/accounts", renderAccounts],
     holdings: ["/api/holdings", renderHoldings], cards: ["/api/cards", renderCards], spending: ["/api/spending", renderSpending],
-    drafts: ["/api/drafts", renderDrafts],
+    drafts: ["/api/drafts", renderDrafts], subscriptions: ["/api/subscriptions", renderSubscriptions],
   };
   // summary first when refreshing, so the trend uses the new sheet total
   if (refresh) await get("/api/refresh", {method: "POST"}).then(d => { data.summary = d; renderSummary(d); }).catch(e => $("problems").textContent = e.message);

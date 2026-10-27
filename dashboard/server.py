@@ -6,7 +6,8 @@
 
 Every path needs a login session (cookie) except /login, /logout (POST) and /robots.txt.
 Endpoints: /api/summary, POST /api/refresh (re-runs networth.py), /api/trend, /api/accounts,
-/api/holdings, /api/cards, /api/spending, /api/drafts (overdraft forecast), /healthz. Page: /
+/api/holdings, /api/cards, /api/spending, /api/drafts (overdraft forecast), /api/subscriptions (recurring charges +
+unusual charges), /healthz. Page: /
 """
 from __future__ import annotations
 
@@ -36,7 +37,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 import personal  # noqa: E402
-from insights import overdraft  # noqa: E402
+from insights import overdraft, subscriptions  # noqa: E402
 
 _DASH = personal.section("dashboard")
 DB = os.path.expanduser("~/.local/share/wealth-ledger/txns.db")
@@ -260,6 +261,18 @@ def api_drafts(params) -> dict:
             "horizon_days": overdraft.HORIZON, "buffer": overdraft.BUFFER}
 
 
+def api_subscriptions(params) -> dict:
+    con = db()
+    try:
+        rep = subscriptions.report(con)
+    finally:
+        con.close()
+    for r in rep["subscriptions"] + rep["unusual"]:
+        r["merchant"] = merchant(r["description"], r["payee"])
+        r["account"] = re.sub(r"\s*\([0-9a-f-]+\)$", "", r["account"] or "")
+    return rep
+
+
 GENERIC_PAYEES = {"investment buy", "investment sell", "payment", "transfer", "deposit", "withdrawal"}
 
 
@@ -304,7 +317,7 @@ def api_spending(params) -> dict:
 
 ROUTES = {"/api/summary": api_summary, "/api/trend": api_trend, "/api/accounts": api_accounts,
           "/api/holdings": api_holdings, "/api/cards": api_cards, "/api/spending": api_spending,
-          "/api/drafts": api_drafts}
+          "/api/drafts": api_drafts, "/api/subscriptions": api_subscriptions}
 
 
 # ---------- auth ----------
