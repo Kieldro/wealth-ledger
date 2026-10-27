@@ -104,8 +104,9 @@ const s = document.getElementById('s');
 const h = Plaid.create({token: "%s",
   onSuccess: (pt, md) => fetch('/done', {method:'POST', body: JSON.stringify({public_token: pt,
       institution: (md.institution||{}).name || ''})}).then(r => r.text()).then(t => s.textContent = t),
-  onExit: (err) => { s.textContent = err ? 'Error: ' + (err.display_message || err.error_message) : 'Cancelled.';
-      fetch('/done', {method:'POST', body: '{}'}); }});
+  onEvent: (ev, md) => { if (ev === 'ERROR') fetch('/event', {method:'POST', body: JSON.stringify(md)}); },
+  onExit: (err, md) => { s.textContent = err ? 'Error: ' + (err.display_message || err.error_message) : 'Cancelled.';
+      fetch('/done', {method:'POST', body: JSON.stringify({exit: {error: err, ...md}})}); }});
 h.open();
 </script></body></html>"""
 
@@ -119,7 +120,9 @@ def link(cfg: dict, update_item: dict | None = None, products=("transactions",),
         body["products"] = list(products)
         if "transactions" in products:
             body["transactions"] = {"days_requested": 730}
-    lt = call(cfg, "/link/token/create", body)["link_token"]
+    resp = call(cfg, "/link/token/create", body)
+    lt = resp["link_token"]
+    print(f"link token request_id {resp.get('request_id')}")
     done = threading.Event()
 
     class H(http.server.BaseHTTPRequestHandler):
@@ -135,6 +138,14 @@ def link(cfg: dict, update_item: dict | None = None, products=("transactions",),
 
         def do_POST(self):
             msg = json.loads(self.rfile.read(int(self.headers["Content-Length"])) or b"{}")
+            if self.path == "/event" or "exit" in msg:  # ids Plaid support asks for on a failed link
+                md = msg.get("exit", msg)
+                err = md.get("error") or {}
+                print("link", "error" if self.path == "/event" else "exit", {k: md.get(k) for k in (
+                    "link_session_id", "request_id", "status", "error_code", "error_type")}
+                      | {k: err[k] for k in ("error_code", "error_type", "error_message") if k in err})
+                if self.path == "/event":
+                    return self._send("ok")
             if msg.get("public_token") and update_item:
                 text = f"Re-authenticated {update_item.get('institution') or update_item['item_id']}."
                 print(text)
