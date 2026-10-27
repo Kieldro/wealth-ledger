@@ -7,7 +7,8 @@
 Every path needs a login session (cookie) except /login, /logout (POST) and /robots.txt.
 Endpoints: /api/summary, POST /api/refresh (re-runs networth.py), /api/trend, /api/accounts,
 /api/holdings, /api/cards, /api/spending, /api/drafts (overdraft forecast), /api/budget (budget vs actual),
-/api/subscriptions (recurring charges + unusual charges), /api/rental (rental P&L), /healthz. Page: /
+/api/subscriptions (recurring charges + unusual charges), /api/rental (rental P&L),
+/api/inherited_ira (10-year rule tracker), /healthz. Page: /
 """
 from __future__ import annotations
 
@@ -37,7 +38,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 import personal  # noqa: E402
-from insights import budget, overdraft, rental, subscriptions  # noqa: E402
+from insights import budget, inherited_ira, overdraft, rental, subscriptions  # noqa: E402
 
 _DASH = personal.section("dashboard")
 DB = os.path.expanduser("~/.local/share/wealth-ledger/txns.db")
@@ -362,6 +363,14 @@ def api_rental(params) -> dict:
         con.close()
 
 
+def api_inherited_ira(params) -> dict:
+    con = db()
+    try:
+        return inherited_ira.report(con)
+    finally:
+        con.close()
+
+
 GENERIC_PAYEES = {"investment buy", "investment sell", "payment", "transfer", "deposit", "withdrawal"}
 
 
@@ -407,7 +416,7 @@ def api_spending(params) -> dict:
 ROUTES = {"/api/summary": api_summary, "/api/trend": api_trend, "/api/accounts": api_accounts,
           "/api/holdings": api_holdings, "/api/cards": api_cards, "/api/spending": api_spending,
           "/api/drafts": api_drafts, "/api/budget": api_budget, "/api/subscriptions": api_subscriptions,
-          "/api/rental": api_rental}
+          "/api/rental": api_rental, "/api/inherited_ira": api_inherited_ira}
 
 
 # ---------- auth ----------

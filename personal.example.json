@@ -94,6 +94,16 @@
    ["EXAMPLE CITY UTILITIES", "^bills/water"]
   ]
  },
+ "inherited_ira": {
+  "_help": "insights/inherited_ira.py (dashboard 'Inherited IRA'). account: v_accounts name LIKE pattern (default: BDA/INHERITED/BENEFICIARY). Facts: death_year of the original owner, owner_started_rmds true/false (null = unknown), your beneficiary_birth_year, optional owner_birth_year, growth_rate for the plan, optional year_end_balances {\"YYYY\": balance} when no Dec 31 snapshot exists.",
+  "account": "Example Inherited IRA%",
+  "death_year": null,
+  "owner_started_rmds": null,
+  "beneficiary_birth_year": null,
+  "owner_birth_year": null,
+  "growth_rate": 0.05,
+  "year_end_balances": {}
+ },
  "plaid": {"client_user_id": "wealth-ledger-user"},
  "simplefin_watch": {
   "_help": "bin/simplefin-institution-check: search SimpleFIN's institution list for these queries; ignore maps a query to the exact result that is already known.",
