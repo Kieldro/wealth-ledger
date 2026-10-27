@@ -100,6 +100,20 @@ tr.sub td:first-child { padding-left: 26px; }
 .b-sheet { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
 .b-mixed { background: var(--surface-2); color: var(--text-2); }
 .b-muted { background: var(--surface-2); color: var(--muted); }
+.b-stale { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); margin-right: 4px; }
+.util { height: 4px; border-radius: 2px; background: var(--surface-2); margin-top: 4px; overflow: hidden; }
+.util > div { height: 100%; background: var(--s1); }
+.util.hi > div { background: var(--warn); }
+.util.vhi > div { background: var(--neg); }
+.filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 0 0 10px; }
+.filters input, .filters select { font: inherit; font-size: 13px; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 5px 9px; min-width: 0; }
+.filters input { flex: 1 1 200px; max-width: 320px; }
+.filters input:focus, .filters select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+tr.cat:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+tr.cat td:first-child::before { content: "▸"; display: inline-block; width: 12px; color: var(--muted); font-size: 10px; }
+tr.cat[aria-expanded="true"] td:first-child::before { content: "▾"; }
+#cards td.name .note { white-space: normal; }
+@media (max-width: 640px) { .filters input, .filters select { font-size: 16px; } .filters input { max-width: none; } }
 .cls { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 5px; background: var(--surface-2); color: var(--text-2); white-space: nowrap; }
 .cls.spend { color: var(--neg); } .cls.income, .cls.refund { color: var(--pos); }
 .amt-pos { color: var(--pos); }
@@ -197,7 +211,7 @@ footer code { font-size: 11.5px; }
 
     <section class="card span-4">
       <h2>Credit cards</h2>
-      <p class="sub">Balance owed per card.</p>
+      <p class="sub" id="cardsub">Balance owed per card, available credit and utilization where the feed reports it, and the next projected autopay.</p>
       <div class="tw"><table id="cards"></table></div>
     </section>
 
@@ -219,7 +233,11 @@ footer code { font-size: 11.5px; }
 
     <section class="card span-12">
       <h2>Recent transactions</h2>
-      <p class="sub">Latest 30 across all accounts. Pending rows are dimmed.</p>
+      <p class="sub" id="recentsub">Latest 30 across all accounts. Pending rows are dimmed.</p>
+      <div class="filters" role="search">
+        <input type="search" id="txq" placeholder="Search description or account" aria-label="Search recent transactions by description or account" autocomplete="off">
+        <select id="txcls" aria-label="Filter by class"><option value="">All classes</option><option value="spend">Spend</option><option value="income">Income</option><option value="refund">Refund</option><option value="transfer">Transfer</option><option value="card_payment">Card payment</option><option value="investment">Investment</option></select>
+      </div>
       <div class="tw"><table id="recent"></table></div>
     </section>
   </div>
@@ -291,11 +309,13 @@ function renderSummary(s) {
   $("assetsnote").textContent = `${compact(live)} live · ${compact(s.assets - live)} sheet`;
   const mort = cats.find(c => c.key === "mortgage"), cardsC = cats.find(c => c.key === "cards");
   $("liabsnote").textContent = `Mortgage ${compact(-mort.value)} · cards ${compact(-cardsC.value)}`;
-  $("chg").innerHTML = ["1", "7", "30"].map(n => {
-    const c = s.changes[n];
-    if (!c || c.delta == null) return `<span class="chip" title="${esc(c ? c.note : "")}">${n}d <b>n/a</b></span>`;
+  // MTD/YTD only appear once history reaches back to the previous month-/year-end
+  const CHG_LABEL = {mtd: "MTD", ytd: "YTD"};
+  $("chg").innerHTML = ["1", "7", "30", "mtd", "ytd"].map(n => {
+    const c = s.changes[n], lbl = CHG_LABEL[n] || n + "d";
+    if (!c || c.delta == null) return CHG_LABEL[n] ? "" : `<span class="chip" title="${esc(c ? c.note : "")}">${lbl} <b>n/a</b></span>`;
     const cls = c.delta > 0 ? "up" : c.delta < 0 ? "down" : "";
-    return `<span class="chip" title="vs ${esc(c.vs)}">${n}d <b class="${cls}">${signed(c.delta)}</b></span>`;
+    return `<span class="chip" title="vs ${esc(c.vs)}">${lbl} <b class="${cls}">${signed(c.delta)}</b></span>`;
   }).join("");
   const missing = ["7", "30"].filter(n => s.changes[n] && s.changes[n].delta == null);
   $("nwnote").textContent = (missing.length ? (s.changes[missing[0]].note || "") + ", so " + missing.join("/") + "-day change is n/a. " : "") +
@@ -307,7 +327,7 @@ function renderSummary(s) {
   for (const c of cats) {
     if (!c.value && !c.lines.length) continue;
     const color = c.type === "asset" ? `var(${CAT_COLOR[c.key]})` : "var(--liab)";
-    rows += `<tr class="cat" data-k="${c.key}"><td><span class="sw" style="background:${color}"></span>${esc(c.label)}</td>
+    rows += `<tr class="cat" data-k="${c.key}" tabindex="0" role="button" aria-expanded="false"><td><span class="sw" style="background:${color}"></span>${esc(c.label)}</td>
       <td class="r ${c.value < 0 ? "down" : ""}">${f0(c.value)}</td>
       <td class="r hide-sm">${c.type === "asset" ? (100 * c.value / assetTotal).toFixed(1) + "%" : ""}</td><td class="r">${srcBadge(c)}</td></tr>`;
     for (const l of c.lines) rows += `<tr class="sub" data-p="${c.key}" hidden><td class="name" title="${esc(l.line)}">${esc(l.line)}</td><td class="r">${f0(l.value)}</td><td class="hide-sm"></td><td class="r"><span class="badge b-${l.source}">${l.source}</span></td></tr>`;
@@ -315,8 +335,14 @@ function renderSummary(s) {
   const sum = cats.reduce((a, c) => a + c.value, 0);
   rows += `<tr class="total"><td>Net worth</td><td class="r">${f0(sum)}</td><td class="hide-sm"></td><td></td></tr></tbody>`;
   $("cats").innerHTML = rows;
-  $("cats").querySelectorAll("tr.cat").forEach(tr => tr.onclick = () =>
-    $("cats").querySelectorAll(`tr[data-p="${tr.dataset.k}"]`).forEach(x => x.hidden = !x.hidden));
+  $("cats").querySelectorAll("tr.cat").forEach(tr => {
+    tr.onclick = () => {
+      const open = tr.getAttribute("aria-expanded") !== "true";
+      tr.setAttribute("aria-expanded", String(open));
+      $("cats").querySelectorAll(`tr[data-p="${tr.dataset.k}"]`).forEach(x => x.hidden = !open);
+    };
+    tr.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); tr.onclick(); } };
+  });
   $("donutc").textContent = compact(assetTotal);
   drawDonut(cats.filter(c => c.type === "asset" && c.value > 0), assetTotal);
 }
@@ -365,6 +391,14 @@ function renderTrend(t) {
   });
 }
 
+// "MM-DD" (+ time on wide screens), with a stale pill when the bank hasn't updated the balance in a while
+function asOf(r) {
+  const [d, t] = String(r.as_of || "").split(" ");
+  const age = r.age_days == null ? "" : r.age_days === 0 ? "today" : r.age_days === 1 ? "yesterday" : `${r.age_days} days ago`;
+  const pill = r.stale ? `<span class="badge b-stale" title="Balance last updated ${esc(age)}">stale</span>` : "";
+  return `<span title="${esc(r.as_of)}${age ? " (" + esc(age) + ")" : ""}">${pill}${esc((d || "").slice(5))}${t && !r.stale ? `<span class="hide-sm"> ${esc(t)}</span>` : ""}</span>`;
+}
+
 function renderAccounts(a) {
   const showZero = $("showzero").checked;
   const groups = {};
@@ -382,8 +416,10 @@ function renderAccounts(a) {
     h += `<tr class="group"><td colspan="2">${esc(KIND_LABEL[k] || k)}${tag}</td><td class="r">${f0(tot)}</td><td colspan="2" class="hide-sm"></td></tr>`;
     for (const r of rs) h += `<tr class="${r.counted || k === "crypto" ? "" : "dim"}"><td class="name" title="${esc(r.account_name)}">${esc(stripNum(r.account_name))} <span class="note">${esc((r.account_name.match(/\((\d{4})\)$/) || [, ""])[1])}</span></td>
       <td class="hide-sm name">${esc(r.institution)}</td><td class="r ${r.balance < 0 ? "down" : ""}">${f2(r.balance)}</td>
-      <td class="r note">${esc(r.as_of.slice(5))}</td><td class="r hide-sm note">${esc(r.source)}</td></tr>`;
+      <td class="r note">${asOf(r)}</td><td class="r hide-sm note">${esc(r.source)}</td></tr>`;
   }
+  const stale = a.accounts.filter(r => r.stale && (showZero || Math.abs(r.balance) >= 0.01)).length;
+  if (stale) h += `<tr><td colspan="5" class="note"><span class="badge b-stale">stale</span>${stale} feed${stale > 1 ? "s" : ""} with no new balance in over ${a.stale_days} days; the amount shown is the last one the bank sent.</td></tr>`;
   if (hidden) h += `<tr><td colspan="5" class="note">${hidden} zero-balance account${hidden > 1 ? "s" : ""} hidden</td></tr>`;
   $("accts").innerHTML = h + "</tbody>";
 }
@@ -402,17 +438,39 @@ function renderHoldings(hd) {
   $("moreholds").onclick = () => { holdLimit = holdLimit < hd.holdings.length ? 999 : 15; renderHoldings(hd); };
 }
 
+const owedCell = v => v < 0 ? `<span class="amt-pos" title="credit balance">${f2(-v)} cr</span>` : f2(v);
+function utilCell(pct) {
+  if (pct == null) return '<span class="note" title="The feed does not report available credit for this card">—</span>';
+  const lvl = pct >= 50 ? " vhi" : pct >= 30 ? " hi" : "";
+  return `${pct.toFixed(0)}%<div class="util${lvl}" aria-hidden="true"><div style="width:${Math.min(100, pct).toFixed(1)}%"></div></div>`;
+}
 function renderCards(c) {
-  let h = `<thead><tr><th>Card</th><th class="r">Owed</th><th class="r">As of</th></tr></thead><tbody>`;
-  for (const r of c.cards) h += `<tr><td class="name" title="${esc(r.account_name)}">${esc(stripNum(r.account_name).replace(/ Card \d{4}$/, ""))}<div class="note">${esc(r.institution)} · ${esc((r.account_name.match(/\((\d{4})\)$/) || [, ""])[1])}</div></td>
-    <td class="r">${f2(r.owed)}</td><td class="r note">${esc(r.as_of.slice(5))}</td></tr>`;
-  h += `<tr class="total"><td>Total</td><td class="r">${f2(c.total)}</td><td></td></tr>`;
+  // next projected autopay per card, from the overdraft forecast (/api/drafts); filled in once that loads
+  const today = new Date().toLocaleDateString("en-CA");
+  const nextPay = {};
+  for (const a of data.drafts?.accounts || []) for (const e of a.events) {
+    if (!e.label.endsWith(" autopay") || e.date < today) continue;
+    const k = e.label.slice(0, -" autopay".length);
+    if (!nextPay[k] || e.date < nextPay[k].date) nextPay[k] = e;
+  }
+  let h = `<thead><tr><th>Card</th><th class="r">Balance owed</th><th class="r" title="Utilization: balance owed / (owed + available credit)">Used</th></tr></thead><tbody>`;
+  for (const r of c.cards) {
+    const p = nextPay[r.account_name];
+    h += `<tr><td class="name" title="${esc(r.account_name)}">${esc(stripNum(r.account_name).replace(/ Card \d{4}$/, ""))}
+      <div class="note">${esc(r.institution)} · ${esc((r.account_name.match(/\((\d{4})\)$/) || [, ""])[1])} · ${asOf(r)}</div>
+      ${p ? `<div class="note" title="Projected from history; amount is the statement estimate">Autopay ${esc(p.date.slice(5))} · ${f0(-p.amount)} est.</div>` : ""}</td>
+      <td class="r">${owedCell(r.owed)}${r.available != null ? `<div class="note">${f0(r.available)} avail.</div>` : ""}</td>
+      <td class="r">${utilCell(r.util_pct)}</td></tr>`;
+  }
+  h += `<tr class="total"><td>Total</td><td class="r">${owedCell(c.total)}${c.available != null ? `<div class="note">${f0(c.available)} avail.</div>` : ""}</td>
+    <td class="r">${c.util_pct != null ? `<span title="Across cards that report available credit">${c.util_pct.toFixed(0)}%</span>` : ""}</td></tr>`;
   $("cards").innerHTML = h + "</tbody>";
 }
 
 const OD_LINE = /^(Overdraft risk|Low balance):/;
 function renderDrafts(d) {
   $("odwarn").innerHTML = d.warnings.length ? d.warnings.map(esc).join("<br>") : "";
+  if (data.cards) renderCards(data.cards);  // adds each card's next autopay
   $("draftsub").textContent = `Next ${d.horizon_days} days, projected from history (bills at their largest recent amount, card autopays from the statement estimate, pay only when regular). ` +
     d.accounts.map(a => `${stripNum(a.account)}: ${f0(a.balance)} now, low ${f0(a.low)}${a.low_date ? " on " + a.low_date.slice(5) : ""}.`).join(" ");
   const rows = d.accounts.flatMap(a => a.events.map(e => ({...e, acct: stripNum(a.account)}))).sort((x, y) => x.date.localeCompare(y.date));
@@ -453,8 +511,22 @@ function renderSpending(sp) {
         plugins: {legend: {display: false}, tooltip: {callbacks: {label: ctx => ` ${f0(ctx.raw)} · ${sp.monthly[ctx.dataIndex].n} txns`}}}}
     });
   }
+  renderRecent(sp.recent);
+}
+
+const RECENT_SHOWN = 30;
+function renderRecent(all) {
+  const words = $("txq").value.trim().toLowerCase().split(/\s+/).filter(Boolean), cls = $("txcls").value;
+  const filtering = words.length || cls;
+  const hit = all.filter(r => (!cls || r.class === cls) &&
+    words.every(w => `${r.description} ${r.payee || ""} ${r.merchant} ${r.account_name}`.toLowerCase().includes(w)));
+  const rows = filtering ? hit : hit.slice(0, RECENT_SHOWN);
+  $("recentsub").textContent = filtering
+    ? `${hit.length} of the latest ${all.length} transactions match. Pending rows are dimmed.`
+    : `Latest ${rows.length} across all accounts; search or filter to look through the latest ${all.length}. Pending rows are dimmed.`;
+  if (!rows.length) { $("recent").innerHTML = '<tr><td class="note">No matching transactions.</td></tr>'; return; }
   let h = `<thead><tr><th>Date</th><th>Merchant</th><th class="hide-sm">Account</th><th>Class</th><th class="r">Amount</th></tr></thead><tbody>`;
-  for (const r of sp.recent) h += `<tr class="${r.pending ? "dim" : ""}"><td class="note" style="white-space:nowrap">${esc(r.date.slice(5))}</td>
+  for (const r of rows) h += `<tr class="${r.pending ? "dim" : ""}"><td class="note" style="white-space:nowrap">${esc(r.date.slice(5))}</td>
     <td class="name" title="${esc(r.description)}">${esc(r.merchant)}${r.pending ? ' <span class="note">pending</span>' : ""}</td>
     <td class="hide-sm name note">${esc(r.account_name)}</td><td><span class="cls ${esc(r.class)}">${esc(r.class.replace("_", " "))}</span></td>
     <td class="r ${r.amt > 0 ? "amt-pos" : ""}">${f2(r.amt)}</td></tr>`;
@@ -476,6 +548,7 @@ async function load(refresh = false) {
   document.body.dataset.ready = "1";
 }
 $("showzero").onchange = () => data.accounts && renderAccounts(data.accounts);
+$("txq").oninput = $("txcls").onchange = () => data.spending && renderRecent(data.spending.recent);
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
   if (data.summary?.categories) drawDonut(data.summary.categories.filter(c => c.type === "asset" && c.value > 0), data.summary.assets);
   if (data.trend) renderTrend(data.trend); if (data.spending) renderSpending(data.spending);
