@@ -8,7 +8,7 @@ Private, read-only finance dashboard: net worth, allocation, trend, accounts, ho
 
 ## Auth
 Every path needs a login, including requests from 127.0.0.1 (a Cloudflare Tunnel would connect from localhost). Only `/login`, `POST /logout` and `/robots.txt` are public.
-- **Login:** `/login`. Success sets an HMAC-signed `ctd_session` cookie (HttpOnly, SameSite=Strict, 30 days; `Secure` when the request came over HTTPS via `X-Forwarded-Proto`/`Cf-Visitor`). Sessions are also tracked server-side, so **Log out** really revokes the cookie. Unauthenticated pages redirect to `/login`; `/api/*` and `/healthz` return 401.
+- **Login:** `/login`. Success sets an HMAC-signed `ctd_session` cookie (HttpOnly, SameSite=Lax, 365 days, sliding: opening the page after a day re-issues it for another 365, so a device in use never gets logged out; `Secure` when the request came over HTTPS via `X-Forwarded-Proto`/`Cf-Visitor`). Sessions are also tracked server-side, so **Log out** really revokes the cookie. Unauthenticated pages redirect to `/login`; `/api/*` and `/healthz` return 401.
 - **Credentials:** `~/.config/wealth-ledger/dashboard_auth.json` (must be 0600, else every login is refused): username, scrypt hash (N=2^17, r=8, p=1, random salt) and a random session-signing secret. Active sessions: `dashboard_sessions.json` in the same dir.
 - **Set or rotate the password** (signs out every device; the running service picks it up, no restart):
   `.venv/bin/python dashboard/server.py set-password [--username NAME]` (prompts), or add `--generate` to print a random 24-letter passphrase once. Without `--username` it keeps the current one, else uses `dashboard.default_username` from personal.json.

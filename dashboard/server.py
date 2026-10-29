@@ -426,7 +426,8 @@ CONF_DIR = os.path.expanduser("~/.config/wealth-ledger")
 AUTH_FILE = os.path.join(CONF_DIR, "dashboard_auth.json")
 SESSIONS_FILE = os.path.join(CONF_DIR, "dashboard_sessions.json")
 COOKIE = "ctd_session"
-SESSION_TTL = 30 * 86400
+SESSION_TTL = 365 * 86400  # sliding: any visit after RENEW_AFTER pushes expiry a full TTL out
+RENEW_AFTER = 86400
 SCRYPT = {"n": 2 ** 17, "r": 8, "p": 1}
 SCRYPT_MAXMEM = 256 * 1024 * 1024
 IP_MAX_FAILS, IP_WINDOW = 5, 15 * 60
@@ -564,6 +565,24 @@ class Auth:
         with self.lock:
             stored = self.sessions.get(k)
         return k if stored and stored > now else None
+
+    def renew(self, value: str) -> str | None:
+        """Fresh cookie (same session, expiry reset to a full TTL) once the session is RENEW_AFTER old; else None."""
+        k, c = self.check(value), self.creds()
+        if not k or not c:
+            return None
+        _, sid, exp, _ = value.split(".")
+        now = int(time.time())
+        if int(exp) > now + SESSION_TTL - RENEW_AFTER:
+            return None
+        exp = now + SESSION_TTL
+        with self.lock:
+            if k not in self.sessions:  # revoked meanwhile
+                return None
+            self.sessions[k] = exp
+            self._save_sessions()
+        msg = f"v1.{sid}.{exp}"
+        return f"{msg}.{self._sign(c['secret'], msg)}"
 
     def revoke(self, values: list[str]):
         keys = [k for k in (self.check(v) for v in values) if k]
@@ -818,8 +837,17 @@ class Handler(BaseHTTPRequestHandler):
     def _authed(self) -> bool:
         return any(AUTH.check(v) for v in self._cookie_values())
 
+    def _renewal(self) -> list[tuple[str, str]]:
+        for v in self._cookie_values():
+            if AUTH.check(v):
+                fresh = AUTH.renew(v)
+                return [self._set_cookie(fresh, SESSION_TTL)] if fresh else []
+        return []
+
     def _set_cookie(self, value: str, max_age: int) -> tuple[str, str]:
-        c = f"{COOKIE}={value}; Max-Age={max_age}; Path=/; HttpOnly; SameSite=Strict"
+        # Lax, not Strict: Strict drops the cookie when the dashboard is opened from a link in another app or site,
+        # which looks like being logged out. Cross-site POSTs are still refused by _cross_site().
+        c = f"{COOKIE}={value}; Max-Age={max_age}; Path=/; HttpOnly; SameSite=Lax"
         return ("Set-Cookie", c + "; Secure" if self._https() else c)
 
     def _deny(self, path: str):
@@ -828,7 +856,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._redirect("/login") if html else self._json(401, {"error": "unauthorized"})
 
     def _cross_site(self) -> bool:
-        # SameSite=Strict already keeps the cookie off cross-site requests; also refuse cross-site POSTs outright
+        # SameSite=Lax keeps the cookie off cross-site POSTs; also refuse them outright
         return self.headers.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none")
 
     def _read_form(self, limit: int = 4096) -> dict | None:
@@ -862,7 +890,7 @@ class Handler(BaseHTTPRequestHandler):
             if p in ("/", "/index.html"):
                 with open(os.path.join(HERE, "index.html"), "rb") as f:
                     page = f.read()
-                return self._send(200, page, "text/html; charset=utf-8", csp=index_csp(page))
+                return self._send(200, page, "text/html; charset=utf-8", self._renewal(), index_csp(page))
             if p == "/healthz":
                 return self._send(200, b"ok\n", "text/plain")
             fn = ROUTES.get(p)

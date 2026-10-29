@@ -1,4 +1,5 @@
 """Dashboard API helpers against a small synthetic database (no real data)."""
+import json
 from datetime import date
 
 import pytest
@@ -72,3 +73,35 @@ def test_period_changes_short_history():
     assert ch["mtd"]["delta"] is None and ch["ytd"]["delta"] is None
     assert ch["mtd"]["note"] == "history starts 2026-10-16"
     assert server.period_changes([]) == {}
+
+
+@pytest.fixture
+def auth(tmp_path, monkeypatch):
+    f = tmp_path / "auth.json"
+    f.write_text(json.dumps({"username": "u", "salt": server._b64e(b"s" * 16), "hash": server._b64e(b"h" * 32),
+                             "n": 2, "r": 1, "p": 1, "session_secret": "ab" * 32}))
+    f.chmod(0o600)
+    monkeypatch.setattr(server, "AUTH_FILE", str(f))
+    monkeypatch.setattr(server, "SESSIONS_FILE", str(tmp_path / "sessions.json"))
+    return server.Auth()
+
+
+def test_session_renews_after_a_day_and_keeps_working(auth, monkeypatch):
+    now = 1_800_000_000
+    monkeypatch.setattr(server.time, "time", lambda: now)
+    cookie = auth.new_session()
+    assert auth.renew(cookie) is None  # fresh: nothing to do
+    now += server.SESSION_TTL - 3600  # an hour before it would expire
+    fresh = auth.renew(cookie)
+    assert fresh and fresh != cookie and auth.check(fresh)
+    now += 7200  # original expiry has passed; the renewed cookie is still good
+    assert auth.check(cookie) is None and auth.check(fresh)
+
+
+def test_revoked_session_is_not_renewed(auth, monkeypatch):
+    now = 1_800_000_000
+    monkeypatch.setattr(server.time, "time", lambda: now)
+    cookie = auth.new_session()
+    auth.revoke([cookie])
+    now += 2 * server.RENEW_AFTER
+    assert auth.renew(cookie) is None
