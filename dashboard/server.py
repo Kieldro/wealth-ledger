@@ -238,7 +238,7 @@ def freshness(r: dict, today: date | None = None) -> None:
 
 
 def api_accounts(params) -> dict:
-    rows = q("""SELECT account_name, institution, source, ROUND(balance,2) balance, as_of, snapshot_date,
+    rows = q("""SELECT account_id, account_name, institution, source, ROUND(balance,2) balance, as_of, snapshot_date,
                        COALESCE(kind,'unclassified') kind
                 FROM v_accounts ORDER BY kind, ABS(balance) DESC""")
     for r in rows:
@@ -341,6 +341,25 @@ def api_budget(params) -> dict:
 
 
 RECENT_LIMIT = 200  # recent transactions sent to the page (it shows 30 until you search or filter)
+ACCOUNT_TXN_LIMIT = 5000  # one account's full history (clicked on the page); more than any account has today
+
+
+def api_account_txns(params) -> dict:
+    aid = (params.get("id") or [""])[0]
+    acct = q("SELECT account_id, account_name, institution, kind, ROUND(balance,2) balance FROM v_accounts "
+             "WHERE account_id=?", (aid,))
+    if not acct:
+        return {"error": "unknown account", "txns": []}
+    txns = q("""SELECT date, ROUND(amt,2) amt, description, payee, class, pending FROM v_ledger WHERE account_id=?
+                ORDER BY date DESC, first_seen DESC, txn_id LIMIT ?""", (aid, ACCOUNT_TXN_LIMIT + 1))
+    for r in txns:
+        r["merchant"] = merchant(r["description"], r["payee"])
+        r["account_name"] = re.sub(r"\s*\([0-9a-f-]+\)$", "", acct[0]["account_name"] or "")
+    posted = [r for r in txns[:ACCOUNT_TXN_LIMIT] if not r["pending"]]
+    return {"account": acct[0], "txns": txns[:ACCOUNT_TXN_LIMIT], "truncated": len(txns) > ACCOUNT_TXN_LIMIT,
+            "money_in": round(sum(r["amt"] for r in posted if r["amt"] > 0), 2),
+            "money_out": round(sum(r["amt"] for r in posted if r["amt"] < 0), 2),
+            "first": txns[min(len(txns), ACCOUNT_TXN_LIMIT) - 1]["date"] if txns else None}
 
 
 def api_subscriptions(params) -> dict:
@@ -416,7 +435,7 @@ def api_spending(params) -> dict:
 ROUTES = {"/api/summary": api_summary, "/api/trend": api_trend, "/api/accounts": api_accounts,
           "/api/holdings": api_holdings, "/api/cards": api_cards, "/api/spending": api_spending,
           "/api/drafts": api_drafts, "/api/budget": api_budget, "/api/subscriptions": api_subscriptions,
-          "/api/rental": api_rental, "/api/inherited_ira": api_inherited_ira}
+          "/api/rental": api_rental, "/api/inherited_ira": api_inherited_ira, "/api/account_txns": api_account_txns}
 
 
 # ---------- auth ----------

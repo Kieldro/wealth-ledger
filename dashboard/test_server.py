@@ -105,3 +105,21 @@ def test_revoked_session_is_not_renewed(auth, monkeypatch):
     auth.revoke([cookie])
     now += 2 * server.RENEW_AFTER
     assert auth.renew(cookie) is None
+
+
+def test_account_txns_lists_only_that_account(dbfile):
+    con = ctdb.connect(dbfile)
+    for i, (aid, d, amt, desc, pending) in enumerate([("c1", "2026-09-01", "-20.00", "COFFEE #12", 0),
+                                                      ("c1", "2026-09-03", "100.00", "PAYMENT THANK YOU", 0),
+                                                      ("c1", "2026-09-05", "-5.00", "SNACK", 1),
+                                                      ("c2", "2026-09-02", "-999.00", "OTHER CARD", 0)]):
+        con.execute(ctdb.upsert_sql("txns"), (f"t{i}", aid, aid, "Bank", d, None, amt, desc, None, None, pending,
+                                              "USD", "x", "x", "test"))
+    con.commit()
+    con.close()
+    r = server.api_account_txns({"id": ["c1"]})
+    assert [t["date"] for t in r["txns"]] == ["2026-09-05", "2026-09-03", "2026-09-01"]
+    assert r["account"]["account_id"] == "c1" and r["first"] == "2026-09-01" and not r["truncated"]
+    assert r["money_in"] == 100 and r["money_out"] == -20  # pending excluded from totals
+    assert server.api_account_txns({"id": ["nope"]})["error"] == "unknown account"
+    assert all("account_id" in a for a in server.api_accounts({})["accounts"])
