@@ -106,7 +106,7 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(txn_id) DO UPDATE SET
   account_name=excluded.account_name, institution=excluded.institution, posted=excluded.posted,
   transacted_at=excluded.transacted_at, amount=excluded.amount, description=excluded.description,
-  payee=excluded.payee, memo=excluded.memo, pending=excluded.pending, currency=excluded.currency,
+  payee=excluded.payee, memo=COALESCE(NULLIF(excluded.memo,''), {table}.memo), pending=excluded.pending, currency=excluded.currency,
   last_seen=excluded.last_seen, source=excluded.source
 """
 

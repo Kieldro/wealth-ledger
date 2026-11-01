@@ -314,7 +314,7 @@ footer code { font-size: 11.5px; }
       <div class="acctbar" id="acctbar" hidden><span id="acctinfo"></span><button type="button" id="acctclear">Show all accounts</button></div>
       <p class="sub" id="recentsub">Latest 30 across all accounts. Pending rows are dimmed.</p>
       <div class="filters" role="search">
-        <input type="search" id="txq" placeholder="Search description or account" aria-label="Search recent transactions by description or account" autocomplete="off">
+        <input type="search" id="txq" placeholder="Search description, note or account" aria-label="Search recent transactions by description or account" autocomplete="off">
         <select id="txcls" aria-label="Filter by class"><option value="">All classes</option><option value="spend">Spend</option><option value="income">Income</option><option value="refund">Refund</option><option value="transfer">Transfer</option><option value="card_payment">Card payment</option><option value="investment">Investment</option></select>
       </div>
       <div class="tw"><table id="recent"></table></div>
@@ -797,7 +797,7 @@ function renderRecent(all) {
   const words = $("txq").value.trim().toLowerCase().split(/\s+/).filter(Boolean), cls = $("txcls").value;
   const filtering = words.length || cls;
   const hit = all.filter(r => (!cls || r.class === cls) &&
-    words.every(w => `${r.description} ${r.payee || ""} ${r.merchant} ${r.account_name}`.toLowerCase().includes(w)));
+    words.every(w => `${r.description} ${r.payee || ""} ${r.memo || ""} ${r.merchant} ${r.account_name}`.toLowerCase().includes(w)));
   const rows = filtering || acct ? hit : hit.slice(0, RECENT_SHOWN);
   if (acct) {
     const a = acct.account, nm = stripNum(a.account_name), last4 = (a.account_name.match(/\((\d{4})\)$/) || [, ""])[1];
@@ -813,7 +813,7 @@ function renderRecent(all) {
   const yr = acct && rows.some(r => r.date.slice(0, 4) !== rows[0].date.slice(0, 4));  // show the year once history spans years
   let h = `<thead><tr><th>Date</th><th>Merchant</th>${acct ? "" : '<th class="hide-sm">Account</th>'}<th>Class</th><th class="r">Amount</th></tr></thead><tbody>`;
   for (const r of rows) h += `<tr class="${r.pending ? "dim" : ""}"><td class="note" style="white-space:nowrap">${esc(yr ? r.date : r.date.slice(5))}</td>
-    <td class="name" title="${esc(r.description)}">${esc(r.merchant)}${r.pending ? ' <span class="note">pending</span>' : ""}</td>
+    <td class="name" title="${esc(r.description)}">${esc(r.merchant)}${r.pending ? ' <span class="note">pending</span>' : ""}${r.memo ? `<div class="note desc" title="${esc(r.memo)}">“${esc(r.memo)}”</div>` : ""}</td>
     ${acct ? "" : `<td class="hide-sm name note">${esc(r.account_name)}</td>`}<td><span class="cls ${esc(r.class)}">${esc(r.class.replace("_", " "))}</span></td>
     <td class="r ${r.amt > 0 ? "amt-pos" : ""}">${f2(r.amt)}</td></tr>`;
   $("recent").innerHTML = h + "</tbody>";

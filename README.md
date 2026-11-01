@@ -21,6 +21,7 @@ details all live in `~/.config/wealth-ledger/personal.json`, outside the repo.
 | `networth.py` | Net worth = live synced balances + the sheet's manual rows + valuations |
 | `valuations/` | Daily/monthly estimates: `metals`, `crypto`, `home`, `cars`; `run.py` runs whichever are due |
 | `insights/overdraft.py` | Overdraft check: projects recurring bills, card autopays and pay 31 days ahead per checking account |
+| `insights/zelle_memos.py` | Adds the note typed on each Zelle (from the bank's Zelle emails, read with `gws`) to the matching transaction's memo |
 | `dashboard/` | Private dashboard (stdlib HTTP server + one HTML page), see `dashboard/README.md` |
 | `bin/wealth-ledger-sync` | Daily cron job: SimpleFIN + Plaid sync, valuations, overdraft check, backup; writes a status file, never notifies |
 | `bin/wealth-ledger-backup` | Daily integrity-checked, gzipped copy of the database to another disk (`backup` in `personal.json`); run by the sync |

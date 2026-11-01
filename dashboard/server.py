@@ -350,7 +350,7 @@ def api_account_txns(params) -> dict:
              "WHERE account_id=?", (aid,))
     if not acct:
         return {"error": "unknown account", "txns": []}
-    txns = q("""SELECT date, ROUND(amt,2) amt, description, payee, class, pending FROM v_ledger WHERE account_id=?
+    txns = q("""SELECT date, ROUND(amt,2) amt, description, payee, memo, class, pending FROM v_ledger WHERE account_id=?
                 ORDER BY date DESC, first_seen DESC, txn_id LIMIT ?""", (aid, ACCOUNT_TXN_LIMIT + 1))
     for r in txns:
         r["merchant"] = merchant(r["description"], r["payee"])
@@ -422,7 +422,7 @@ def api_spending(params) -> dict:
             a[1] += 1
         tops[m] = [{"merchant": k, "spent": round(v[0], 2), "n": v[1]}
                    for k, v in sorted(agg.items(), key=lambda kv: -kv[1][0])[:10]]
-    recent = q("""SELECT date, account_name, ROUND(amt,2) amt, description, payee, class, pending FROM v_ledger
+    recent = q("""SELECT date, account_name, ROUND(amt,2) amt, description, payee, memo, class, pending FROM v_ledger
                   ORDER BY date DESC, first_seen DESC, txn_id LIMIT ?""", (RECENT_LIMIT,))
     for r in recent:
         r["merchant"] = merchant(r["description"], r["payee"])

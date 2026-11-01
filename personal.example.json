@@ -105,6 +105,7 @@
   "year_end_balances": {}
  },
  "plaid": {"client_user_id": "wealth-ledger-user"},
+ "zelle_memos": {"_help": "insights/zelle_memos.py: Gmail search for your bank's Zelle emails (default: zelle)", "query": "zelle"},
  "backup": {
   "_help": "bin/wealth-ledger-backup (run after each daily sync): gzipped copy of the database into dir, which should be on a different disk and must already exist. Keeps keep_days of dailies plus every 1st-of-month copy. Leave out to turn backups off.",
   "dir": "/mnt/other-disk/backups/wealth-ledger",

@@ -55,6 +55,10 @@ if [[ -f $PLAID_CFG ]]; then
   (( prc != 0 )) && problem "Plaid sync failed: $(grep -m1 "^error" <<<"$pout" || tail -1 <<<"$pout"). If ITEM_LOGIN_REQUIRED: plaid_sync.py relink"
   (( rc == 0 )) && rc=$prc
 fi
+# notes the sender typed on each Zelle, from the bank's Zelle emails (feeds drop them); read-only Gmail via gws
+zout=$(cd "$ROOT" && "$PY" -m insights.zelle_memos --db "$DB" 2>&1) || problem "$(grep -m1 '^error' <<<"$zout" || tail -1 <<<"$zout")"
+echo "$zout" | tail -1
+
 # estimates for things no bank feed covers (metals/crypto daily, home/cars monthly); free sources only
 vout=$(cd "$ROOT" && "$PY" -m valuations.run 2>&1); vrc=$?
 echo "$vout"
