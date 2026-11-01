@@ -138,6 +138,15 @@ td.neg { color: var(--neg); font-weight: 600; }
 .chartbox.sm { height: 180px; }
 .legend { display: flex; gap: 14px; font-size: 12px; color: var(--text-2); margin-top: 6px; flex-wrap: wrap; }
 .legend i { display: inline-block; width: 14px; height: 2px; vertical-align: middle; margin-right: 6px; background: var(--s1); }
+.legend i.ring { width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--s1); background: transparent; }
+.legend i.dash { height: 0; background: none; border-top: 2px dashed var(--s1); }
+/* net worth trend range selector */
+.rng { flex-wrap: wrap; gap: 4px; }
+.rng button { padding: 2px 8px; font-size: 11.5px; min-width: 32px; }
+.rng button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.trendchg { font-size: 13px; color: var(--text-2); margin: 4px 0 1px; }
+.trendchg:empty { display: none; }
+.trendchg b { font-weight: 600; }
 .cols2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .toggle { font-size: 12px; color: var(--text-2); display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
 /* budget vs actual */
@@ -206,10 +215,12 @@ footer code { font-size: 11.5px; }
     </section>
 
     <section class="card span-5">
-      <h2>Net worth trend</h2>
+      <div class="hd"><h2>Net worth trend</h2>
+        <div class="seg rng" id="trendrng" role="group" aria-label="Trend date range"><button type="button" data-r="1M" aria-pressed="false" title="Last month">1M</button><button type="button" data-r="3M" aria-pressed="false" title="Last 3 months">3M</button><button type="button" data-r="6M" aria-pressed="false" title="Last 6 months">6M</button><button type="button" data-r="YTD" aria-pressed="false" title="Year to date">YTD</button><button type="button" data-r="1Y" aria-pressed="false" title="Last year">1Y</button><button type="button" data-r="3Y" aria-pressed="false" title="Last 3 years">3Y</button><button type="button" data-r="All" aria-pressed="false" title="All history">All</button></div></div>
+      <div class="trendchg num" id="trendchg"></div>
       <p class="sub" id="trendsub">Daily snapshots</p>
       <div class="chartbox"><canvas id="trend" aria-label="Net worth trend" role="img"></canvas></div>
-      <div class="legend"><span><i></i>Net worth (synced accounts daily + sheet-only items held constant)</span></div>
+      <div class="legend" id="trendlegend"><span><i></i>Net worth (synced accounts daily + sheet-only items held constant)</span></div>
       <p class="note" id="trendnote"></p>
     </section>
 
@@ -442,31 +453,110 @@ function axisOpts() {
   return {grid: {color: css("--grid")}, border: {display: false}, ticks: {color: css("--muted"), font: {size: 11}}};
 }
 
+// Net worth trend: sparse sheet snapshots (whole net worth, years back) + dense daily points, on a time-proportional
+// linear x axis (ms timestamps; no date adapter). Range choice is remembered per viewer when storage is available.
+const TREND_RANGES = ["1M", "3M", "6M", "YTD", "1Y", "3Y", "All"], TREND_KEY = "wl.trendRange", DAY_MS = 864e5;
+let trendRange = null;
+try { trendRange = localStorage.getItem(TREND_KEY); } catch { /* storage blocked */ }
+if (!TREND_RANGES.includes(trendRange)) trendRange = null;
+const dayMs = d => new Date(d + "T12:00").getTime();
+const fmtDay = d => new Date(d + "T12:00").toLocaleDateString("en-US", {month: "short", day: "numeric", year: "numeric"});
+function trendStart(r, end) {
+  const e = new Date(end), y = e.getFullYear(), m = e.getMonth(), d = e.getDate();
+  const back = {"1M": [0, 1], "3M": [0, 3], "6M": [0, 6], "1Y": [1, 0], "3Y": [3, 0]}[r];
+  if (back) return new Date(y - back[0], m - back[1], d, 12).getTime();
+  return r === "YTD" ? new Date(y, 0, 1).getTime() : -Infinity;
+}
+// month/day-aligned tick positions between min and max, at most maxN of them
+function timeTicks(min, max, maxN) {
+  const gen = (n, u) => {
+    const out = [];
+    if (u === "d") {
+      const d = new Date(min); d.setHours(0, 0, 0, 0); if (d.getTime() < min) d.setDate(d.getDate() + 1);
+      for (; d.getTime() <= max && out.length <= maxN; d.setDate(d.getDate() + n)) out.push(d.getTime());
+    } else {
+      const s = new Date(min); let d = new Date(s.getFullYear(), s.getMonth(), 1);
+      while (d.getTime() < min || (d.getFullYear() * 12 + d.getMonth()) % n) d = new Date(d.getFullYear(), d.getMonth() + 1, 1);
+      for (; d.getTime() <= max && out.length <= maxN; d = new Date(d.getFullYear(), d.getMonth() + n, 1)) out.push(d.getTime());
+    }
+    return out;
+  };
+  const steps = [[1, "d"], [2, "d"], [7, "d"], [14, "d"], [1, "m"], [2, "m"], [3, "m"], [6, "m"], [12, "m"], [24, "m"], [60, "m"], [120, "m"]];
+  for (const [n, u] of steps) { const t = gen(n, u); if (t.length <= maxN) return t; }
+  return gen(120, "m");
+}
+function syncTrendButtons(r) {
+  for (const b of document.querySelectorAll("#trendrng button")) b.setAttribute("aria-pressed", String(b.dataset.r === r));
+}
+for (const b of document.querySelectorAll("#trendrng button")) b.onclick = () => {
+  trendRange = b.dataset.r;
+  try { localStorage.setItem(TREND_KEY, trendRange); } catch { /* storage blocked */ }
+  if (data.trend) renderTrend(data.trend); else syncTrendButtons(trendRange);
+};
+
 function renderTrend(t) {
   const s = t.series || [];
-  $("trendsub").textContent = s.length ? `${s.length} daily snapshot${s.length > 1 ? "s" : ""} since ${s[0].date}` : "No snapshots yet";
+  const sheet = (Array.isArray(t.sheet_points) ? t.sheet_points : []).filter(p => p && p.date && p.net_worth != null);
+  const range = trendRange || (sheet.length ? "All" : "1M");
+  syncTrendButtons(range);
   $("trendnote").textContent = t.sheet_only_total != null
-    ? `Sheet-only items (${f0(t.sheet_only_total)}: home, self-custody crypto, metals, vehicles, cash…) are added as a constant at today's sheet values, so moves here are synced accounts only.` +
-      (s.length < 14 ? " History is short; it grows by one point per daily sync." : "")
+    ? `Sheet-only items (${f0(t.sheet_only_total)}: home, self-custody crypto, metals, vehicles, cash…) are added to the daily points as a constant at today's sheet values, so daily moves are synced accounts only.` +
+      (!sheet.length && s.length < 14 ? " History is short; it grows by one point per daily sync." : "")
     : "Sheet total unavailable; showing synced accounts only.";
+  const pts = [
+    ...sheet.map(p => ({x: dayMs(p.date), y: p.net_worth, date: p.date, kind: "sheet", source: p.source})),
+    ...s.map(p => ({x: dayMs(p.date), y: p.total ?? p.synced, date: p.date, kind: "daily", synced: p.synced, total: p.total})),
+  ].filter(p => p.y != null && isFinite(p.x)).sort((a, b) => a.x - b.x);
+  const inR = pts.length ? pts.filter(p => p.x >= trendStart(range, pts.at(-1).x)) : [];
+  const first = inR[0], last = inR.at(-1);
+  const nS = inR.filter(p => p.kind === "sheet").length, nD = inR.length - nS;
+  if (!inR.length) { $("trendsub").textContent = "No snapshots yet"; $("trendchg").innerHTML = ""; }
+  else {
+    const desc = nS && nD ? `${nS} sheet + ${nD} daily snapshots`
+      : `${nS || nD} ${nS ? "sheet" : "daily"} snapshot${inR.length > 1 ? "s" : ""}`;
+    const late = range !== "All" && first.x - trendStart(range, last.x) > 2 * DAY_MS;  // range reaches back past the data
+    $("trendsub").textContent = late ? `${desc} · data starts ${fmtDay(first.date)}` : `${desc} since ${fmtDay(first.date)}`;
+    if (inR.length > 1) {
+      const delta = last.y - first.y, pct = first.y ? 100 * delta / Math.abs(first.y) : null;
+      const cls = delta > 0 ? "up" : delta < 0 ? "down" : "";
+      $("trendchg").innerHTML = `<b class="${cls}">${signed(delta)}${pct != null ? ` (${pct < 0 ? "−" : "+"}${Math.abs(pct).toFixed(1)}%)` : ""}</b> since ${esc(fmtDay(first.date))}`;
+    } else $("trendchg").innerHTML = "";
+  }
+  $("trendlegend").innerHTML = (nD || !nS ? "<span><i></i>Daily: synced accounts + sheet-only items held constant</span>" : "") +
+    (nS ? '<span><i class="ring"></i>Sheet snapshot (whole net worth)</span><span><i class="dash"></i>between snapshots</span>' : "");
   if (!window.Chart) { $("trend").parentElement.innerHTML = '<p class="note">Chart library failed to load (offline?).</p>'; return; }
-  const ys = s.map(p => p.total ?? p.synced);
   charts.trend?.destroy();
-  const ax = axisOpts();
+  const ax = axisOpts(), s1 = css("--s1"), surf = css("--surface");
+  let xmin = first ? first.x : Date.now() - 7 * DAY_MS, xmax = last ? last.x : Date.now();
+  if (xmax - xmin < DAY_MS) { xmin -= 3 * DAY_MS; xmax += 3 * DAY_MS; }
+  const spanDays = (xmax - xmin) / DAY_MS, w = $("trend").parentElement.clientWidth || 320;
+  const pad = (xmax - xmin) * 8 / w; xmin -= pad; xmax += pad;  // ~8px so edge markers aren't clipped
+  const dailyR = w / spanDays >= 6 ? 3.5 : 0;  // dots only when daily points are visibly apart
+  const isSheet = c => c.raw?.kind === "sheet";
+  const tickFmt = spanDays > 400
+    ? v => { const d = new Date(v); return d.toLocaleDateString("en-US", {month: "short"}) + " '" + String(d.getFullYear()).slice(2); }
+    : v => new Date(v).toLocaleDateString("en-US", {month: "short", day: "numeric"});
   charts.trend = new Chart($("trend"), {
     type: "line",
-    data: {labels: s.map(p => p.date), datasets: [{label: "Net worth", data: ys, borderColor: css("--s1"), borderWidth: 2,
-      backgroundColor: "transparent", pointRadius: s.length <= 31 ? 3.5 : 0, pointHoverRadius: 5, pointBackgroundColor: css("--s1"),
-      pointBorderColor: css("--surface"), pointBorderWidth: 2, tension: 0}]},
-    options: {responsive: true, maintainAspectRatio: false, animation: false, interaction: {mode: "index", intersect: false},
-      scales: {x: {...ax, grid: {display: false}, ticks: {...ax.ticks, maxRotation: 0, autoSkip: true, maxTicksLimit: 6,
-                    callback(v) { const d = this.getLabelForValue(v); return new Date(d + "T12:00").toLocaleDateString("en-US", {month: "short", day: "numeric"}); }}},
+    data: {datasets: [{label: "Net worth", data: inR, borderColor: s1, borderWidth: 2, backgroundColor: "transparent", tension: 0,
+      pointRadius: c => isSheet(c) ? 3.5 : dailyR, pointHoverRadius: 5,
+      pointBackgroundColor: c => isSheet(c) ? surf : s1, pointHoverBackgroundColor: c => isSheet(c) ? surf : s1,
+      pointBorderColor: c => isSheet(c) ? s1 : surf, pointHoverBorderColor: c => isSheet(c) ? s1 : surf,
+      pointBorderWidth: c => isSheet(c) ? 1.75 : 2,
+      segment: {borderDash: c => inR[c.p0DataIndex]?.kind === "sheet" ? [5, 4] : undefined}}]},
+    options: {responsive: true, maintainAspectRatio: false, animation: false, interaction: {mode: "nearest", axis: "x", intersect: false},
+      scales: {x: {...ax, type: "linear", min: xmin, max: xmax, grid: {display: false},
+                   afterBuildTicks: sc => { sc.ticks = timeTicks(sc.min, sc.max, w < 420 ? 5 : 7).map(value => ({value})); },
+                   ticks: {...ax.ticks, maxRotation: 0, autoSkip: false, callback: tickFmt}},
                y: {...ax, grace: "5%", ticks: {...ax.ticks, maxTicksLimit: 5, callback(v, i, t) { const step = t.length > 1 ? Math.abs(t[1].value - t[0].value) : 1e3;
                  return step >= 1000 ? "$" + Math.round(v / 1e3).toLocaleString("en-US") + "k"
                       : step >= 100 ? "$" + (v / 1e3).toLocaleString("en-US", {minimumFractionDigits: 1, maximumFractionDigits: 1}) + "k" : f0(v); }}}},
       plugins: {legend: {display: false}, tooltip: {callbacks: {
-        label: ctx => ` ${f0(ctx.raw)}`,
-        afterLabel: ctx => { const p = s[ctx.dataIndex]; return p.total != null ? `  synced ${f0(p.synced)} + sheet ${f0(t.sheet_only_total)}` : ""; }}}}}
+        title: items => items.length ? fmtDay(items[0].raw.date) : "",
+        label: ctx => ` ${f0(ctx.raw.y)}`,
+        afterLabel: ctx => { const p = ctx.raw;
+          if (p.kind === "sheet") return `  sheet snapshot${p.source ? " · " + p.source : ""}`;
+          return p.total != null ? `  synced ${f0(p.synced)} + sheet ${f0(t.sheet_only_total)}` : ""; }}}}}
   });
 }
 

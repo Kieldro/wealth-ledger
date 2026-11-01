@@ -12,6 +12,8 @@ txn_rules     description LIKE-patterns -> class (first match by priority wins; 
               Seeded from BASE_RULES below plus the owner's own "rules" in personal.json.
 valuations    daily/monthly estimates for things no bank feed covers (metals, crypto wallets, home, cars),
               keyed by the balance-sheet row label they replace in networth.py (see valuations/).
+networth_history  past whole-net-worth points (Total Equity per dated balance-sheet column of the yearly
+              spreadsheets), from insights/nw_history.py; the dashboard trend shows them before the daily series.
 superseded    accounts whose feed was replaced by another source (e.g. a SimpleFIN account later fed by Plaid);
               hidden from every view and no longer written by that feed. History rows are kept.
 Views: v_ledger (txns + real date/amount + kind + class), v_balances_latest, v_holdings_latest, v_accounts.
@@ -61,6 +63,9 @@ CREATE TABLE IF NOT EXISTS superseded (account_id TEXT PRIMARY KEY, source TEXT 
 CREATE TABLE IF NOT EXISTS valuations (
   snapshot_date TEXT NOT NULL, asset TEXT NOT NULL, value REAL NOT NULL, source TEXT NOT NULL,
   detail TEXT, fetched_at TEXT NOT NULL, PRIMARY KEY (snapshot_date, asset)
+);
+CREATE TABLE IF NOT EXISTS networth_history (
+  date TEXT PRIMARY KEY, net_worth REAL, assets REAL, liabilities REAL, source TEXT, fetched_at TEXT
 );
 DROP VIEW IF EXISTS v_valuations_latest;
 CREATE VIEW v_valuations_latest AS

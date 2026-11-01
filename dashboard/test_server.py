@@ -123,3 +123,36 @@ def test_account_txns_lists_only_that_account(dbfile):
     assert r["money_in"] == 100 and r["money_out"] == -20  # pending excluded from totals
     assert server.api_account_txns({"id": ["nope"]})["error"] == "unknown account"
     assert all("account_id" in a for a in server.api_accounts({})["accounts"])
+
+
+def test_trend_sheet_points_before_first_daily(dbfile, monkeypatch):
+    line = {"line": "Home", "used": 1000.0, "type": "asset", "from": "sheet"}
+    monkeypatch.setattr(server, "networth", lambda refresh=False: {"data": {"lines": [line]}, "error": None})
+    con = ctdb.connect(dbfile)
+    con.executemany("INSERT INTO networth_history VALUES (?,?,?,?,?,?)", [
+        ("2025-07-01", 2000.456, 2100.0, 99.544, "Statements 2025, column D", "2026-10-01T00:00:00+00:00"),
+        ("2024-01-01", 1500.0, None, None, "Statements 2024, column G", "2026-10-01T00:00:00+00:00"),
+        (TODAY, 9.0, None, None, "Statements 2026, column B", "2026-10-01T00:00:00+00:00"),  # not before daily
+        ("2023-01-01", None, None, None, "Statements 2023, column F", "2026-10-01T00:00:00+00:00"),
+    ])
+    con.commit()
+    con.close()
+    out = server.api_trend({})
+    assert {"series", "sheet_only_total", "note", "first_daily", "sheet_points"} <= out.keys()
+    assert out["series"] == [{"date": TODAY, "synced": -310.0, "total": 690.0}]
+    assert out["first_daily"] == TODAY
+    assert out["sheet_points"] == [
+        {"date": "2024-01-01", "net_worth": 1500.0, "source": "Statements 2024, column G"},
+        {"date": "2025-07-01", "net_worth": 2000.46, "source": "Statements 2025, column D"}]
+
+
+def test_trend_without_history_table_or_snapshots(tmp_path, monkeypatch):
+    import sqlite3
+    path = tmp_path / "old.db"
+    sqlite3.connect(path).executescript(
+        "CREATE TABLE balances (snapshot_date, source, account_id, account_name, institution, balance, available,"
+        " currency, as_of); CREATE TABLE account_kind (account_id, kind, note); CREATE TABLE superseded (account_id);")
+    monkeypatch.setattr(server, "DB", str(path))
+    monkeypatch.setattr(server, "networth", lambda refresh=False: {"data": None, "error": "x"})
+    out = server.api_trend({})
+    assert out["series"] == [] and out["first_daily"] is None and out["sheet_points"] == []

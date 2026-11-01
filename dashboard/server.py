@@ -215,9 +215,22 @@ def api_trend(params) -> dict:
                                 for l in nw["data"]["lines"] if not l["from"].startswith("live")), 2)
     for s in series:
         s["total"] = round(s["synced"] + sheet_const, 2) if sheet_const is not None else None
+    first_daily = series[0]["date"] if series else None
     return {"series": series, "sheet_only_total": sheet_const,
             "note": "Synced accounts from daily snapshots (custodial accounts, crypto exchange wallets and "
-                    "superseded feeds excluded, as in networth.py) plus today's sheet-only total held constant."}
+                    "superseded feeds excluded, as in networth.py) plus today's sheet-only total held constant.",
+            "first_daily": first_daily, "sheet_points": sheet_points(first_daily)}
+
+
+def sheet_points(before: str | None) -> list[dict]:
+    """Past whole-net-worth points from the yearly balance sheets (insights/nw_history.py), ascending, only dates
+    before the first daily snapshot. [] when the table is missing (older DB) or empty."""
+    try:
+        rows = q("SELECT date, ROUND(net_worth, 2) net_worth, source FROM networth_history "
+                 "WHERE net_worth IS NOT NULL AND (? IS NULL OR date < ?) ORDER BY date", (before, before))
+    except sqlite3.OperationalError:
+        return []
+    return rows
 
 
 STALE_DAYS = 3  # a balance the bank last updated more than this many days ago is flagged stale

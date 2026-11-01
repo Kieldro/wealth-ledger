@@ -59,6 +59,10 @@ fi
 zout=$(cd "$ROOT" && "$PY" -m insights.zelle_memos --db "$DB" 2>&1) || problem "$(grep -m1 '^error' <<<"$zout" || tail -1 <<<"$zout")"
 echo "$zout" | tail -1
 
+# past net-worth points from the yearly balance sheets (dashboard trend history); weekly, read-only Sheets via gws
+hout=$(cd "$ROOT" && "$PY" -m insights.nw_history --if-stale --db "$DB" 2>&1) || problem "$(grep -m1 '^error' <<<"$hout" || tail -1 <<<"$hout")"
+echo "$hout" | tail -1
+
 # estimates for things no bank feed covers (metals/crypto daily, home/cars monthly); free sources only
 vout=$(cd "$ROOT" && "$PY" -m valuations.run 2>&1); vrc=$?
 echo "$vout"
