@@ -164,6 +164,28 @@ def warnings_from(data: dict) -> list[str]:
     return out
 
 
+STALE_DAYS = 4  # a connection whose newest balance is older than this is stuck (weekends included)
+
+
+def stale_warnings(data: dict, now: datetime, max_days: int = STALE_DAYS) -> list[str]:
+    """One warning per connection whose accounts all have an old balance-date. SimpleFIN keeps reporting such a
+    connection as OK with no errlist entry (Coinbase stuck 10/16..11/01), so this is the only sign of it."""
+    conns = {c.get("conn_id"): c.get("name") for c in data.get("connections") or []}
+    newest: dict[str, datetime] = {}
+    for a in data.get("accounts") or []:
+        bd = _ts(a.get("balance-date"))
+        c = a.get("conn_id")
+        if bd and (c not in newest or bd > newest[c]):
+            newest[c] = bd
+    out = []
+    for c, bd in sorted(newest.items(), key=lambda kv: kv[1]):
+        age = (now - bd).days
+        if age > max_days:
+            out.append(f"stale: Connection to {conns.get(c) or c} has not updated since {bd.date()} ({age} days); "
+                       f"open beta-bridge.simplefin.org > My account > Adjust on it to refresh (conn={c})")
+    return out
+
+
 def normalize(data: dict) -> list[Txn]:
     conns = {c.get("conn_id"): c.get("name") for c in data.get("connections") or []}
     rows = []
@@ -276,6 +298,7 @@ def sync(args) -> None:
     for ws, we in windows(start, end):
         data = fetch_window(access_url, ws, we)
         warns.update(warnings_from(data))
+        warns.update(stale_warnings(data, datetime.now(timezone.utc)))
         for a in data.get("accounts") or []:
             conn_accts.setdefault(a.get("conn_id"), set()).add(a["id"])
         holdings, balances = holdings_from(data), balances_from(data)  # point-in-time: keep the last window's
