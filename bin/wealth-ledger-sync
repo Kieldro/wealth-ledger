@@ -64,6 +64,10 @@ vout=$(cd "$ROOT" && "$PY" -m valuations.run 2>&1); vrc=$?
 echo "$vout"
 (( vrc != 0 )) && problem "Valuations: $(grep -m1 '^error' <<<"$vout" || tail -1 <<<"$vout")"
 
+# yellow label + note on balance-sheet rows nothing keeps current (formatting only; never writes values)
+mout=$(cd "$ROOT" && "$PY" sheet_marks.py 2>&1) || problem "$(grep -m1 '^error' <<<"$mout" || tail -1 <<<"$mout")"
+echo "$mout" | tail -1
+
 # overdraft check: recurring auto-drafts vs checking balances; warning lines only, never a notification
 oout=$(cd "$ROOT" && "$PY" -m insights.overdraft --status --db "$DB" 2>&1); orc=$?
 if (( orc != 0 )); then problem "Overdraft check failed: $(tail -1 <<<"$oout")"

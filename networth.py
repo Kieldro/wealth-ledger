@@ -54,7 +54,8 @@ def sheet_rows() -> dict[str, float]:
     return rows
 
 
-def main() -> int:
+def compute() -> dict:
+    """{assets, liabilities, net_worth, sheet_net_worth, lines}; each line says where its number came from."""
     sheet = sheet_rows()
     db = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
     accts = db.execute("SELECT account_id, account_name, balance, kind, as_of FROM v_accounts").fetchall()
@@ -101,6 +102,12 @@ def main() -> int:
     liabs = sum(l["used"] for l in lines if l["type"] == "liability")
     result = {"assets": round(assets, 2), "liabilities": round(liabs, 2), "net_worth": round(assets - liabs, 2),
               "sheet_net_worth": sheet.get("Total Equity"), "lines": lines}
+    return result
+
+
+def main() -> int:
+    result = compute()
+    lines = result["lines"]
     if "--json" in sys.argv:
         print(json.dumps(result, indent=1))
         return 0
@@ -108,7 +115,7 @@ def main() -> int:
     for l in sorted(lines, key=lambda l: (l["type"], -abs(l["used"]))):
         f = lambda v: "" if v is None else f"{v:,.0f}"
         print(f"{l['line'][:42]:42} {l['type']:9} {f(l['sheet']):>12} {f(l['live']):>12} {f(l['used']):>12}  {l['from']}")
-    print(f"\nassets {assets:,.0f}  liabilities {liabs:,.0f}  NET WORTH {assets - liabs:,.0f}"
+    print(f"\nassets {result['assets']:,.0f}  liabilities {result['liabilities']:,.0f}  NET WORTH {result['net_worth']:,.0f}"
           f"   (sheet's own Total Equity: {result['sheet_net_worth'] or 0:,.0f})")
     return 0
 
