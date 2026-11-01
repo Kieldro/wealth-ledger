@@ -105,6 +105,11 @@
   "year_end_balances": {}
  },
  "plaid": {"client_user_id": "wealth-ledger-user"},
+ "backup": {
+  "_help": "bin/wealth-ledger-backup (run after each daily sync): gzipped copy of the database into dir, which should be on a different disk and must already exist. Keeps keep_days of dailies plus every 1st-of-month copy. Leave out to turn backups off.",
+  "dir": "/mnt/other-disk/backups/wealth-ledger",
+  "keep_days": 30
+ },
  "simplefin_watch": {
   "_help": "bin/simplefin-institution-check: search SimpleFIN's institution list for these queries; ignore maps a query to the exact result that is already known.",
   "label": "the account you are waiting for",

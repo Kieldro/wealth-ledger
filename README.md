@@ -22,7 +22,8 @@ details all live in `~/.config/wealth-ledger/personal.json`, outside the repo.
 | `valuations/` | Daily/monthly estimates: `metals`, `crypto`, `home`, `cars`; `run.py` runs whichever are due |
 | `insights/overdraft.py` | Overdraft check: projects recurring bills, card autopays and pay 31 days ahead per checking account |
 | `dashboard/` | Private dashboard (stdlib HTTP server + one HTML page), see `dashboard/README.md` |
-| `bin/wealth-ledger-sync` | Daily cron job: SimpleFIN + Plaid sync, valuations, overdraft check; writes a status file, never notifies |
+| `bin/wealth-ledger-sync` | Daily cron job: SimpleFIN + Plaid sync, valuations, overdraft check, backup; writes a status file, never notifies |
+| `bin/wealth-ledger-backup` | Daily integrity-checked, gzipped copy of the database to another disk (`backup` in `personal.json`); run by the sync |
 | `bin/simplefin-institution-check` | Monthly check whether an institution you are waiting for is in SimpleFIN yet |
 | `scraper/` | Experimental Playwright bank-scraper base class, tested against a local mock bank |
 | `tiller/` | Experimental Tiller Money Google Sheet -> SQLite sync |

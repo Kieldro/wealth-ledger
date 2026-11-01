@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Daily SimpleFIN + Plaid -> SQLite sync for wealth-ledger, then the valuation providers.
+# Daily SimpleFIN + Plaid -> SQLite sync for wealth-ledger, then the valuation providers and a database backup.
 # Plaid covers accounts SimpleFIN can't reach; its keys + items are in ~/.config/wealth-ledger/plaid.json.
 #   wealth-ledger-sync                 daily sync (cron). Never sends notifications: problems go to the log
 #                                     and to the status file ($WEALTH_LEDGER_STATUS, default ~/.cache/wealth-ledger-status).
@@ -64,6 +64,10 @@ echo "$vout"
 oout=$(cd "$ROOT" && "$PY" -m insights.overdraft --status --db "$DB" 2>&1); orc=$?
 if (( orc != 0 )); then problem "Overdraft check failed: $(tail -1 <<<"$oout")"
 else while IFS= read -r w; do [[ -n $w ]] && problem "$w"; done <<<"$oout"; fi
+
+# copy of the database to another disk (personal.json "backup"); never blocks the sync result
+bout=$("$ROOT/bin/wealth-ledger-backup" 2>&1) || problem "Backup failed: $(tail -1 <<<"$bout")"
+echo "$bout"
 
 { echo "last run $(date -Is) rc=$rc"; printf '%s\n' "${problems[@]}"; } > "$STATUS"
 exit $rc
