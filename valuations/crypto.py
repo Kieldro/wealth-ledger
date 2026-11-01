@@ -470,9 +470,13 @@ def gemini_sign(payload: dict, secret: str) -> tuple[str, str]:
     return b64, hmac.new(secret.encode(), b64.encode(), hashlib.sha384).hexdigest()
 
 
-def gemini_balances(key: str, secret: str) -> tuple[dict[str, float], dict]:
-    """POST /v1/balances; time-based nonce in epoch seconds (must be within 30 s of Gemini's clock)."""
-    b64, sig = gemini_sign({"request": "/v1/balances", "nonce": str(int(time.time()))}, secret)
+def gemini_balances(key: str, secret: str, account: str = "primary") -> tuple[dict[str, float], dict]:
+    """POST /v1/balances; time-based nonce in epoch seconds (must be within 30 s of Gemini's clock). A master
+    (account-group) key must name the account it reads; an account-level key must not."""
+    payload = {"request": "/v1/balances", "nonce": str(int(time.time()))}
+    if key.startswith("master-"):
+        payload["account"] = account
+    b64, sig = gemini_sign(payload, secret)
     try:
         rows = _req("https://api.gemini.com/v1/balances", b"",
                     {"Content-Type": "text/plain", "Content-Length": "0", "Cache-Control": "no-cache",
