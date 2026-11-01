@@ -26,6 +26,7 @@ Every path needs a login, including requests from 127.0.0.1 (a Cloudflare Tunnel
 ## Notes
 - Categories map networth.py lines using `dashboard.exact` / `dashboard.rules` in personal.json (generic regex fallbacks in `server.py`); unknown lines fall into "Other". Sheet values are only as fresh as the last manual update and are badged `sheet`.
 - Trend = daily synced snapshots (same accounts networth.py counts: no custodial accounts, crypto exchange wallets or superseded feeds) + today's sheet-only total held constant. 1/7/30-day changes show n/a until that much history exists. Before the first daily snapshot (`first_daily`), `/api/trend` also returns `sheet_points`: whole net worth (Total Equity) per dated column of the yearly balance-sheet spreadsheets, stored weekly by `insights/nw_history.py`.
+- `/api/trend` also returns `prices` (`{"BTC"|"XAU": {date: usd}}`, every series and sheet_points date, that day's close or the nearest earlier one; XAU is USD per troy oz) and `spot` (`{"BTC"|"XAU": {usd, date, source}}` or null, the latest price: the `prices` table, or the valuations providers' live spot when newer), from `insights/prices.py`, for net worth in bitcoin and gold.
 - Spending = `class='spend'`, posted, since `dashboard.ledger_start`. Merchant names are lightly normalized from payee/description.
 - Holdings exclude custodial accounts and blank-symbol sweeps. SimpleFIN has no cost basis.
 - Port change: edit `--port` in the unit, then `systemctl --user daemon-reload && systemctl --user restart wealth-ledger-dashboard`.

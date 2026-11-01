@@ -147,6 +147,14 @@ td.neg { color: var(--neg); font-weight: 600; }
 .trendchg { font-size: 13px; color: var(--text-2); margin: 4px 0 1px; }
 .trendchg:empty { display: none; }
 .trendchg b { font-weight: 600; }
+/* net worth unit switch ($ / BTC / gold oz): one choice drives the headline and the trend chart */
+.nwhd { display: flex; justify-content: space-between; align-items: center; gap: 6px 8px; flex-wrap: wrap; }
+.unitsw[hidden] { display: none; }
+.unitsw button { min-width: 0; }
+.unitsw button[aria-disabled="true"] { opacity: .45; cursor: not-allowed; border-color: var(--border); }
+.big .u { font-size: .5em; font-weight: 600; color: var(--text-2); letter-spacing: 0; margin-left: .25em; }
+.nwunit { font-size: 12px; color: var(--text-2); margin: -3px 0 6px; }
+.nwunit:empty { display: none; }
 .cols2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .toggle { font-size: 12px; color: var(--text-2); display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
 /* budget vs actual */
@@ -199,7 +207,9 @@ footer code { font-size: 11.5px; }
   <div class="problems" id="problems"></div>
 
   <section class="hero" id="hero">
-    <div class="card"><div class="label">Net worth</div><div class="big" id="nw">—</div><div class="chips" id="chg"></div><div class="note" id="nwnote" style="margin-top:6px"></div></div>
+    <div class="card"><div class="nwhd"><div class="label">Net worth</div>
+      <div class="seg rng unitsw" id="nwunitsw" role="group" aria-label="Show net worth in" hidden><button type="button" data-u="USD" aria-pressed="true">$</button><button type="button" data-u="BTC" aria-pressed="false">₿ BTC</button><button type="button" data-u="XAU" aria-pressed="false">Gold oz</button></div></div>
+      <div class="big" id="nw">—</div><div class="nwunit num" id="nwunit"></div><div class="chips" id="chg"></div><div class="note" id="nwnote" style="margin-top:6px"></div></div>
     <div class="card"><div class="label">Assets</div><div class="mid num" id="assets">—</div><div class="note" id="assetsnote"></div></div>
     <div class="card"><div class="label">Liabilities</div><div class="mid num" id="liabs">—</div><div class="note" id="liabsnote"></div></div>
   </section>
@@ -221,6 +231,7 @@ footer code { font-size: 11.5px; }
       <p class="sub" id="trendsub">Daily snapshots</p>
       <div class="chartbox"><canvas id="trend" aria-label="Net worth trend" role="img"></canvas></div>
       <div class="legend" id="trendlegend"><span><i></i>Net worth (synced accounts daily + sheet-only items held constant)</span></div>
+      <p class="note" id="trendunitnote" style="margin:6px 0 0" hidden></p>
       <p class="note" id="trendnote"></p>
     </section>
 
@@ -389,9 +400,9 @@ function renderSummary(s) {
   if (s.networth_error) probs.push(s.networth_error);
   $("problems").innerHTML = probs.length ? "<b>Sync problems:</b> " + probs.map(esc).join("<br>") : "";
   $("fetched").textContent = s.networth_fetched ? "sheet read " + fmtTime(s.networth_fetched) : "sheet not read yet";
-  if (s.net_worth == null) { $("nw").textContent = "unavailable"; return; }
+  renderNW(s);
+  if (s.net_worth == null) return;
 
-  $("nw").textContent = f0(s.net_worth);
   $("assets").textContent = f0(s.assets);
   $("liabs").textContent = f0(s.liabilities);
   const cats = s.categories;
@@ -453,6 +464,66 @@ function axisOpts() {
   return {grid: {color: css("--grid")}, border: {display: false}, ticks: {color: css("--muted"), font: {size: 11}}};
 }
 
+// Net worth unit: US dollars, bitcoin or troy ounces of gold. One shared choice (remembered per viewer) drives the
+// headline and the trend chart. BTC/gold need /api/trend "spot" (headline) and "prices" (per-date closes, chart);
+// a unit whose data is missing is disabled, and the switch is hidden when neither is available.
+const UNITS = {
+  USD: {title: "US dollars"},
+  BTC: {title: "Bitcoin", name: "BTC", per: "/BTC", close: "BTC close"},
+  XAU: {title: "Troy ounces of gold", name: "Gold", per: "/oz", close: "gold close"},
+};
+const UNIT_KEY = "wl.nwUnit";
+let nwUnit = "USD";
+try { const u = localStorage.getItem(UNIT_KEY); if (u && Object.hasOwn(UNITS, u)) nwUnit = u; } catch { /* storage blocked */ }
+const unitAvail = (u, t) => u === "USD" ||
+  !!(t && t.spot?.[u]?.usd > 0 && t.prices?.[u] && typeof t.prices[u] === "object" && Object.keys(t.prices[u]).length);
+const curUnit = () => unitAvail(nwUnit, data.trend) ? nwUnit : "USD";
+// ₿ with 2 decimals (3 under 10); gold ounces with 1 decimal under 1,000 oz, else whole ounces
+function fmtUnit(v, u) {
+  if (v == null || !isFinite(v)) return "—";
+  if (u === "USD") return f0(v);
+  const a = Math.abs(v), sg = v < 0 ? "−" : "";
+  if (u === "BTC") { const d = a < 10 ? 3 : 2; return sg + "₿" + a.toLocaleString("en-US", {minimumFractionDigits: d, maximumFractionDigits: d}); }
+  const d = a < 1000 ? 1 : 0;
+  return sg + a.toLocaleString("en-US", {minimumFractionDigits: d, maximumFractionDigits: d}) + " oz";
+}
+const signedUnit = (v, u) => u === "USD" ? signed(v) : (v > 0 ? "+" : "") + fmtUnit(v, u);
+const fmtShortDay = d => { const x = new Date(d + "T12:00"); if (isNaN(x)) return d;
+  return x.toLocaleDateString("en-US", {month: "short", day: "numeric", ...(x.getFullYear() !== new Date().getFullYear() ? {year: "numeric"} : {})}); };
+const priceAt = (usd, u) => `${f0(usd)}${UNITS[u].per}`;
+
+function syncUnitSwitch() {
+  const t = data.trend, sw = $("nwunitsw"), cur = curUnit();
+  sw.hidden = !["BTC", "XAU"].some(u => unitAvail(u, t));
+  for (const b of sw.querySelectorAll("button")) {
+    const u = b.dataset.u, ok = unitAvail(u, t);
+    b.setAttribute("aria-pressed", String(u === cur));
+    if (ok) { b.removeAttribute("aria-disabled"); b.title = UNITS[u].title; }
+    else { b.setAttribute("aria-disabled", "true"); b.title = `${UNITS[u].name} prices unavailable right now`; }
+  }
+}
+for (const b of document.querySelectorAll("#nwunitsw button")) b.onclick = () => {
+  if (b.getAttribute("aria-disabled") === "true") return;
+  nwUnit = b.dataset.u;
+  try { localStorage.setItem(UNIT_KEY, nwUnit); } catch { /* storage blocked */ }
+  renderNW();
+  if (data.trend) renderTrend(data.trend);
+};
+
+// headline net worth in the chosen unit, priced at the latest spot; USD amount + price as a sub-line
+function renderNW(s = data.summary) {
+  syncUnitSwitch();
+  const el = $("nw"), sub = $("nwunit"), u = curUnit();
+  sub.textContent = ""; sub.removeAttribute("title");
+  if (!s) return;
+  if (s.net_worth == null) { el.textContent = "unavailable"; return; }
+  if (u === "USD") { el.textContent = f0(s.net_worth); return; }
+  const sp = data.trend.spot[u], v = s.net_worth / sp.usd;
+  el.innerHTML = u === "BTC" ? esc(fmtUnit(v, u)) : `${esc(fmtUnit(v, u).replace(/ oz$/, ""))}<span class="u">oz gold</span>`;
+  sub.textContent = `${f0(s.net_worth)} at ${priceAt(sp.usd, u)}${sp.date ? ", " + fmtShortDay(sp.date) : ""}`;
+  if (sp.source) sub.title = "Price source: " + sp.source;
+}
+
 // Net worth trend: sparse sheet snapshots (whole net worth, years back) + dense daily points, on a time-proportional
 // linear x axis (ms timestamps; no date adapter). Range choice is remembered per viewer when storage is available.
 const TREND_RANGES = ["1M", "3M", "6M", "YTD", "1Y", "3Y", "All"], TREND_KEY = "wl.trendRange", DAY_MS = 864e5;
@@ -499,6 +570,11 @@ function renderTrend(t) {
   const sheet = (Array.isArray(t.sheet_points) ? t.sheet_points : []).filter(p => p && p.date && p.net_worth != null);
   const range = trendRange || (sheet.length ? "All" : "1M");
   syncTrendButtons(range);
+  renderNW();  // spot prices arrive with the trend; the headline follows the same unit choice
+  const u = curUnit(), P = u === "USD" ? null : t.prices[u];
+  $("trendunitnote").hidden = !P;
+  $("trendunitnote").textContent = P ? `Priced at each day's ${UNITS[u].close} (nearest previous trading day).` : "";
+  $("trend")?.setAttribute("aria-label", "Net worth trend" + (P ? " in " + (u === "BTC" ? "bitcoin" : "ounces of gold") : ""));
   $("trendnote").textContent = t.sheet_only_total != null
     ? `Sheet-only items (${f0(t.sheet_only_total)}: home, self-custody crypto, metals, vehicles, cash…) are added to the daily points as a constant at today's sheet values, so daily moves are synced accounts only.` +
       (!sheet.length && s.length < 14 ? " History is short; it grows by one point per daily sync." : "")
@@ -507,10 +583,16 @@ function renderTrend(t) {
     ...sheet.map(p => ({x: dayMs(p.date), y: p.net_worth, date: p.date, kind: "sheet", source: p.source})),
     ...s.map(p => ({x: dayMs(p.date), y: p.total ?? p.synced, date: p.date, kind: "daily", synced: p.synced, total: p.total})),
   ].filter(p => p.y != null && isFinite(p.x)).sort((a, b) => a.x - b.x);
+  if (P) {  // y = USD / that date's close; dates without a price are skipped in this unit
+    for (let i = pts.length - 1; i >= 0; i--) {
+      const p = pts[i], px = Number(P[p.date]);
+      if (px > 0) { p.usd = p.y; p.price = px; p.y = p.usd / px; } else pts.splice(i, 1);
+    }
+  }
   const inR = pts.length ? pts.filter(p => p.x >= trendStart(range, pts.at(-1).x)) : [];
   const first = inR[0], last = inR.at(-1);
   const nS = inR.filter(p => p.kind === "sheet").length, nD = inR.length - nS;
-  if (!inR.length) { $("trendsub").textContent = "No snapshots yet"; $("trendchg").innerHTML = ""; }
+  if (!inR.length) { $("trendsub").textContent = P && (sheet.length || s.length) ? `No ${UNITS[u].name} prices for these dates` : "No snapshots yet"; $("trendchg").innerHTML = ""; }
   else {
     const desc = nS && nD ? `${nS} sheet + ${nD} daily snapshots`
       : `${nS || nD} ${nS ? "sheet" : "daily"} snapshot${inR.length > 1 ? "s" : ""}`;
@@ -519,7 +601,7 @@ function renderTrend(t) {
     if (inR.length > 1) {
       const delta = last.y - first.y, pct = first.y ? 100 * delta / Math.abs(first.y) : null;
       const cls = delta > 0 ? "up" : delta < 0 ? "down" : "";
-      $("trendchg").innerHTML = `<b class="${cls}">${signed(delta)}${pct != null ? ` (${pct < 0 ? "−" : "+"}${Math.abs(pct).toFixed(1)}%)` : ""}</b> since ${esc(fmtDay(first.date))}`;
+      $("trendchg").innerHTML = `<b class="${cls}">${esc(signedUnit(delta, u))}${pct != null ? ` (${pct < 0 ? "−" : "+"}${Math.abs(pct).toFixed(1)}%)` : ""}</b> since ${esc(fmtDay(first.date))}`;
     } else $("trendchg").innerHTML = "";
   }
   $("trendlegend").innerHTML = (nD || !nS ? "<span><i></i>Daily: synced accounts + sheet-only items held constant</span>" : "") +
@@ -549,14 +631,19 @@ function renderTrend(t) {
                    afterBuildTicks: sc => { sc.ticks = timeTicks(sc.min, sc.max, w < 420 ? 5 : 7).map(value => ({value})); },
                    ticks: {...ax.ticks, maxRotation: 0, autoSkip: false, callback: tickFmt}},
                y: {...ax, grace: "5%", ticks: {...ax.ticks, maxTicksLimit: 5, callback(v, i, t) { const step = t.length > 1 ? Math.abs(t[1].value - t[0].value) : 1e3;
+                 if (u === "XAU") { const a = Math.abs(v), d = step < 1 ? 1 : 0; return (v < 0 ? "−" : "") + a.toLocaleString("en-US", {minimumFractionDigits: d, maximumFractionDigits: d}) + " oz"; }
+                 if (u === "BTC") { const d = Math.max(...t.map(x => Math.abs(x.value))) < 10 ? 3 : 2;  // same decimals on every tick
+                   return (v < 0 ? "−" : "") + "₿" + Math.abs(v).toLocaleString("en-US", {minimumFractionDigits: d, maximumFractionDigits: d}); }
                  return step >= 1000 ? "$" + Math.round(v / 1e3).toLocaleString("en-US") + "k"
                       : step >= 100 ? "$" + (v / 1e3).toLocaleString("en-US", {minimumFractionDigits: 1, maximumFractionDigits: 1}) + "k" : f0(v); }}}},
       plugins: {legend: {display: false}, tooltip: {callbacks: {
         title: items => items.length ? fmtDay(items[0].raw.date) : "",
-        label: ctx => ` ${f0(ctx.raw.y)}`,
-        afterLabel: ctx => { const p = ctx.raw;
-          if (p.kind === "sheet") return `  sheet snapshot${p.source ? " · " + p.source : ""}`;
-          return p.total != null ? `  synced ${f0(p.synced)} + sheet ${f0(t.sheet_only_total)}` : ""; }}}}}
+        label: ctx => ` ${fmtUnit(ctx.raw.y, u)}`,
+        afterLabel: ctx => { const p = ctx.raw, out = [];
+          if (P) out.push(`  ${f0(p.usd)} at ${priceAt(p.price, u)}`);
+          if (p.kind === "sheet") out.push(`  sheet snapshot${p.source ? " · " + p.source : ""}`);
+          else if (p.total != null) out.push(`  synced ${f0(p.synced)} + sheet ${f0(t.sheet_only_total)}`);
+          return out; }}}}}
   });
 }
 

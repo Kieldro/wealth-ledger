@@ -156,3 +156,44 @@ def test_trend_without_history_table_or_snapshots(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "networth", lambda refresh=False: {"data": None, "error": "x"})
     out = server.api_trend({})
     assert out["series"] == [] and out["first_daily"] is None and out["sheet_points"] == []
+
+
+def test_trend_prices_cover_every_date_and_spot(dbfile, monkeypatch):
+    monkeypatch.setattr(server, "networth", lambda refresh=False: {"data": None, "error": "x"})
+    con = ctdb.connect(dbfile)
+    con.executemany("INSERT INTO networth_history (date, net_worth, source) VALUES (?,?,?)", [
+        ("2020-04-19", 1.0, "s"),   # before any price: left out
+        ("2020-04-25", 2.0, "s"),   # a Saturday: Friday's gold close
+    ])
+    con.executemany("INSERT INTO prices VALUES (?,?,?,?)", [
+        ("2020-04-20", "BTC", 6800.0, "coinbase"), ("2020-04-24", "BTC", 7500.0, "coinbase"),
+        ("2020-04-25", "BTC", 7550.0, "coinbase"), ("2020-04-24", "XAU", 1720.0, "yahoo GC=F"),
+        ("2026-10-30", "XAU", 3900.0, "yahoo GC=F"), (TODAY, "BTC", 80000.0, "coinbase")])
+    con.execute("INSERT INTO valuations VALUES (?,?,?,?,?,?)", (
+        TODAY, "Total metals value", 1.0, "spot: swissquote",
+        json.dumps({"metals": {"gold": {"oz": 1, "spot": 3950.5, "source": "swissquote"}}}), TODAY))
+    con.execute("INSERT INTO valuations VALUES (?,?,?,?,?,?)", (
+        TODAY, "Total cryptocurrency (USD)", 1.0, "x",
+        json.dumps({"prices": {"BTC": {"usd": 79000.0, "source": "coingecko"}}}), TODAY))
+    con.commit()
+    con.close()
+    out = server.api_trend({})
+    assert [p["date"] for p in out["sheet_points"]] == ["2020-04-19", "2020-04-25"]
+    assert out["prices"]["BTC"] == {"2020-04-25": 7550.0, TODAY: 80000.0}
+    assert out["prices"]["XAU"] == {"2020-04-25": 1720.0, TODAY: 3900.0}
+    # BTC has today's row; today's gold only exists as the metals provider's live spot
+    assert out["spot"]["BTC"] == {"usd": 80000.0, "date": TODAY, "source": "coinbase"}
+    assert out["spot"]["XAU"] == {"usd": 3950.5, "date": TODAY, "source": "valuations (swissquote)"}
+    json.dumps(out)
+
+
+def test_trend_prices_without_prices_table(tmp_path, monkeypatch):
+    import sqlite3
+    path = tmp_path / "old.db"
+    sqlite3.connect(path).executescript(
+        "CREATE TABLE balances (snapshot_date, source, account_id, account_name, institution, balance, available,"
+        " currency, as_of); CREATE TABLE account_kind (account_id, kind, note); CREATE TABLE superseded (account_id);")
+    monkeypatch.setattr(server, "DB", str(path))
+    monkeypatch.setattr(server, "networth", lambda refresh=False: {"data": None, "error": "x"})
+    out = server.api_trend({})
+    assert out["prices"] == {"BTC": {}, "XAU": {}} and out["spot"] == {"BTC": None, "XAU": None}

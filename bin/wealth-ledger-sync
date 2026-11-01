@@ -63,6 +63,10 @@ echo "$zout" | tail -1
 hout=$(cd "$ROOT" && "$PY" -m insights.nw_history --if-stale --db "$DB" 2>&1) || problem "$(grep -m1 '^error' <<<"$hout" || tail -1 <<<"$hout")"
 echo "$hout" | tail -1
 
+# daily BTC + gold closes (dashboard prices net worth in bitcoin and gold); keyless public APIs, 1 request each once backfilled
+pxout=$(cd "$ROOT" && "$PY" -m insights.prices --db "$DB" 2>&1) || problem "$(grep -m1 '^error' <<<"$pxout" || tail -1 <<<"$pxout")"
+echo "$pxout" | tail -1
+
 # estimates for things no bank feed covers (metals/crypto daily, home/cars monthly); free sources only
 vout=$(cd "$ROOT" && "$PY" -m valuations.run 2>&1); vrc=$?
 echo "$vout"

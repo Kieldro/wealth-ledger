@@ -39,6 +39,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 import personal  # noqa: E402
 from insights import budget, inherited_ira, overdraft, rental, subscriptions  # noqa: E402
+from insights import prices as price_hist  # noqa: E402
 
 _DASH = personal.section("dashboard")
 DB = os.path.expanduser("~/.local/share/wealth-ledger/txns.db")
@@ -216,10 +217,46 @@ def api_trend(params) -> dict:
     for s in series:
         s["total"] = round(s["synced"] + sheet_const, 2) if sheet_const is not None else None
     first_daily = series[0]["date"] if series else None
+    points = sheet_points(first_daily)
     return {"series": series, "sheet_only_total": sheet_const,
             "note": "Synced accounts from daily snapshots (custodial accounts, crypto exchange wallets and "
                     "superseded feeds excluded, as in networth.py) plus today's sheet-only total held constant.",
-            "first_daily": first_daily, "sheet_points": sheet_points(first_daily)}
+            "first_daily": first_daily, "sheet_points": points,
+            **trend_prices([s["date"] for s in series] + [p["date"] for p in points])}
+
+
+# where the valuations providers keep today's spot (valuations/crypto.py, valuations/metals.py detail JSON)
+SPOT_VALUATIONS = {"BTC": ("Total cryptocurrency (USD)", "$.prices.BTC.usd", "$.prices.BTC.source"),
+                   "XAU": ("Total metals value", "$.metals.gold.spot", "$.metals.gold.source")}
+
+
+def trend_prices(dates, today: str | None = None) -> dict:
+    """BTC (USD per coin) and XAU (USD per troy oz) for pricing the trend in bitcoin and gold (insights/prices.py).
+    prices: {sym: {date: usd}} for every trend date (series + sheet_points; that day's close or the nearest earlier
+    one; a date before the first stored price is left out). spot: {sym: {usd, date, source}} = the latest price,
+    from the prices table or, when newer, the valuations providers' live spot; None when neither has one."""
+    today = today or date.today().isoformat()
+    dates = sorted(set(dates))
+    out = {"prices": {}, "spot": {}}
+    for sym in price_hist.SYMBOLS:
+        try:
+            rows = q("SELECT date, usd, source FROM prices WHERE symbol = ? ORDER BY date", (sym,))
+        except sqlite3.OperationalError:  # older DB without the table
+            rows = []
+        out["prices"][sym] = price_hist.asof([(r["date"], r["usd"]) for r in rows], dates)
+        best = {"usd": rows[-1]["usd"], "date": rows[-1]["date"], "source": rows[-1]["source"]} if rows else None
+        if best is None or best["date"] < today:
+            asset, usd_path, src_path = SPOT_VALUATIONS[sym]
+            try:
+                v = q("SELECT snapshot_date d, json_extract(detail, ?) usd, json_extract(detail, ?) src FROM valuations "
+                      "WHERE asset = ? AND json_extract(detail, ?) IS NOT NULL ORDER BY snapshot_date DESC LIMIT 1",
+                      (usd_path, src_path, asset, usd_path))
+            except sqlite3.OperationalError:
+                v = []
+            if v and (best is None or v[0]["d"] > best["date"]):
+                best = {"usd": float(v[0]["usd"]), "date": v[0]["d"], "source": f"valuations ({v[0]['src']})"}
+        out["spot"][sym] = best
+    return out
 
 
 def sheet_points(before: str | None) -> list[dict]:
