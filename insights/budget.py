@@ -6,6 +6,8 @@ B item, C monthly $; read with `gws`, like networth.py; never written). Actuals 
 pending=0, put on a budget line by regex rules over "payee | description": the owner's own rules from
 personal.json "budget.rules" first, then the generic DEFAULT_RULES below. Spending no rule matches is
 "Other (unmapped)". Categorization is pattern-based, so it is approximate (e.g. warehouse clubs sell non-food).
+Amazon card charges matched to order items (insights/amazon.py) are split across the items' budget lines in
+proportion to the item totals instead, so the charge's total is kept.
 
 A rule is [transaction regex, budget-line regex]. The line regex is searched (case-insensitive) in
 "category/item" of each sheet line and the first line it matches wins, so "electricity" takes the first
@@ -29,6 +31,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import personal  # noqa: E402
+from insights import amazon  # noqa: E402
 
 DB = Path(os.environ.get("WEALTH_LEDGER_DB") or Path.home() / ".local/share/wealth-ledger/txns.db")
 TAB = "income sheet"
@@ -168,11 +171,13 @@ def month_bounds(month: str) -> tuple[date, date]:
 
 
 def compute(con: sqlite3.Connection, lines: list[dict], month: str, today: date | None = None,
-            rule_list=None, since: str | None = None, label=default_label, exclude: re.Pattern | None = None) -> dict:
+            rule_list=None, since: str | None = None, label=default_label, exclude: re.Pattern | None = None,
+            amazon_rules=None) -> dict:
     """Budget vs actual for one month (YYYY-MM).
 
     lines: parse_sheet()["lines"]. since: first day of complete data (sets partial_data). exclude: category regex
-    for saving lines, which are listed but not counted (default exclude_re())."""
+    for saving lines, which are listed but not counted (default exclude_re()). amazon_rules: item rules for split
+    Amazon charges (default amazon.item_rules()); a split part is labelled "<merchant>: <item>"."""
     today = today or date.today()
     exclude = exclude_re() if exclude is None else exclude
     excluded = [l for l in lines if exclude.search(l["category"]) and abs(l["budget"]) >= 0.005]
@@ -191,23 +196,36 @@ def compute(con: sqlite3.Connection, lines: list[dict], month: str, today: date 
 
     out_lines = [dict(l, actual=0.0, n=0, merchants={}, has_rule=i in targeted) for i, l in enumerate(lines)]
     unmapped = {"actual": 0.0, "n": 0, "merchants": {}}
+    splits = amazon.charge_splits(con, lines, first.isoformat(), last.isoformat(), amazon_rules)
+
+    def add(dest, spent, k):
+        dest["actual"] += spent
+        dest["n"] += 1
+        m = dest["merchants"].setdefault(k, [0.0, 0])
+        m[0] += spent
+        m[1] += 1
+
     con.row_factory = sqlite3.Row
-    for r in con.execute("""SELECT date, amt, description, payee FROM v_ledger
+    for r in con.execute("""SELECT txn_id, date, amt, description, payee FROM v_ledger
                             WHERE class='spend' AND pending=0 AND date BETWEEN ? AND ?""",
                          (first.isoformat(), last.isoformat())):
-        text = _text(r["payee"], r["description"])
         spent = -r["amt"]
+        k = label(r["description"], r["payee"])
+        parts = splits.get(r["txn_id"])
+        if parts:  # an Amazon charge matched to its items: each item's share goes to the item's line
+            left = spent
+            for j, (idx, share, name) in enumerate(parts):
+                part = left if j == len(parts) - 1 else round(spent * share, 2)
+                left -= part
+                add(out_lines[idx] if idx is not None else unmapped, part, f"{k}: {name}")
+            continue
+        text = _text(r["payee"], r["description"])
         dest = unmapped
         for txn_re, idx in resolved:
             if txn_re.search(text):
                 dest = out_lines[idx] if idx is not None else unmapped
                 break  # first matching rule decides; a rule whose line isn't in the sheet leaves it unmapped
-        dest["actual"] += spent
-        dest["n"] += 1
-        k = label(r["description"], r["payee"])
-        m = dest["merchants"].setdefault(k, [0.0, 0])
-        m[0] += spent
-        m[1] += 1
+        add(dest, spent, k)
 
     def merchants(d, top=8):
         return [{"merchant": k, "spent": round(v[0], 2), "n": v[1]}

@@ -274,6 +274,8 @@ def sync(cfg: dict, db_path: Path) -> None:
             except PlaidError as e:
                 failed += 1
                 print(f"error: {label}: {e}", file=sys.stderr)
+        for dup, orig in ctdb.flag_late_duplicates(db):
+            print(f"late duplicate hidden: {dup} (copy of {orig})")
     finally:
         db.close()
     save_config(cfg)

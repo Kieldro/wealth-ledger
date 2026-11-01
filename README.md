@@ -23,6 +23,7 @@ details all live in `~/.config/wealth-ledger/personal.json`, outside the repo.
 | `valuations/` | Daily/monthly estimates: `metals`, `crypto`, `home`, `cars`; `run.py` runs whichever are due |
 | `insights/overdraft.py` | Overdraft check: projects recurring bills, card autopays and pay 31 days ahead per checking account |
 | `insights/zelle_memos.py` | Adds the note typed on each Zelle (from the bank's Zelle emails, read with `gws`) to the matching transaction's memo |
+| `insights/amazon.py` | Imports an Amazon "Your Orders" data export (items, refunds; no addresses/gift/tracking), matches Amazon card charges to the shipments they paid for, so `insights/budget.py` splits each charge across its items' budget lines |
 | `insights/nw_history.py` | Past net-worth points (Total Equity per dated column) from the yearly balance-sheet spreadsheets, read with `gws`, for the dashboard trend; weekly |
 | `insights/prices.py` | Daily BTC and gold (USD/troy oz) closes into `prices` (Coinbase candles, Kraken fallback; Yahoo COMEX GC=F, Coinbase PAXG fallback; keyless) so the dashboard can show net worth in bitcoin and gold; backfills once, then 1 request per symbol daily |
 | `dashboard/` | Private dashboard (stdlib HTTP server + one HTML page), see `dashboard/README.md` |

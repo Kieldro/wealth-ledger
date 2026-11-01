@@ -16,6 +16,9 @@ networth_history  past whole-net-worth points (Total Equity per dated balance-sh
               spreadsheets), from insights/nw_history.py; the dashboard trend shows them before the daily series.
 prices        daily USD closes of BTC (per coin) and XAU (per troy oz of gold), from insights/prices.py; the
               dashboard trend uses them to price net worth in bitcoin and in gold.
+amazon_items / amazon_refunds  items and refunds from an Amazon "Your Orders" data export (insights/amazon.py;
+              no addresses, gift details or tracking). amazon_matches links an Amazon card charge (txn_id) to the
+              order items it paid for (items = JSON [[asin, line], ...]); insights/budget.py splits it by item.
 superseded    accounts whose feed was replaced by another source (e.g. a SimpleFIN account later fed by Plaid);
               hidden from every view and no longer written by that feed. History rows are kept.
 Views: v_ledger (txns + real date/amount + kind + class), v_balances_latest, v_holdings_latest, v_accounts.
@@ -26,6 +29,7 @@ Spending = class 'spend'; card payments and transfers show up on both sides, so 
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timezone
 
 import personal
 
@@ -62,6 +66,7 @@ CREATE TABLE IF NOT EXISTS txn_rules (
   UNIQUE (pattern, kind, direction)
 );
 CREATE TABLE IF NOT EXISTS superseded (account_id TEXT PRIMARY KEY, source TEXT NOT NULL, note TEXT);
+CREATE TABLE IF NOT EXISTS late_duplicates (txn_id TEXT PRIMARY KEY, dup_of TEXT NOT NULL, reason TEXT, found_at TEXT);
 CREATE TABLE IF NOT EXISTS valuations (
   snapshot_date TEXT NOT NULL, asset TEXT NOT NULL, value REAL NOT NULL, source TEXT NOT NULL,
   detail TEXT, fetched_at TEXT NOT NULL, PRIMARY KEY (snapshot_date, asset)
@@ -71,6 +76,18 @@ CREATE TABLE IF NOT EXISTS networth_history (
 );
 CREATE TABLE IF NOT EXISTS prices (
   date TEXT NOT NULL, symbol TEXT NOT NULL, usd REAL NOT NULL, source TEXT, PRIMARY KEY (date, symbol)
+);
+CREATE TABLE IF NOT EXISTS amazon_items (
+  order_id TEXT NOT NULL, asin TEXT NOT NULL, line INTEGER NOT NULL, order_date TEXT, ship_date TEXT, name TEXT,
+  department TEXT, qty REAL, amount REAL, shipping REAL, discounts REAL, pay_last4 TEXT, status TEXT,
+  source TEXT NOT NULL, PRIMARY KEY (order_id, asin, line)
+);
+CREATE TABLE IF NOT EXISTS amazon_refunds (
+  order_id TEXT NOT NULL, line INTEGER NOT NULL, refund_date TEXT, amount REAL, qty REAL, reason TEXT, status TEXT,
+  PRIMARY KEY (order_id, line)
+);
+CREATE TABLE IF NOT EXISTS amazon_matches (
+  txn_id TEXT PRIMARY KEY, order_id TEXT, method TEXT NOT NULL, confidence REAL, items TEXT
 );
 DROP VIEW IF EXISTS v_valuations_latest;
 CREATE VIEW v_valuations_latest AS
@@ -89,7 +106,8 @@ CREATE VIEW v_ledger AS
            WHEN k.kind = 'credit' THEN 'refund'
            ELSE 'income' END) AS class
   FROM txns t LEFT JOIN account_kind k USING (account_id)
-  WHERE t.account_id NOT IN (SELECT account_id FROM superseded);
+  WHERE t.account_id NOT IN (SELECT account_id FROM superseded)
+    AND t.txn_id NOT IN (SELECT txn_id FROM late_duplicates);
 DROP VIEW IF EXISTS v_balances_latest;
 CREATE VIEW v_balances_latest AS
   SELECT b.*, CAST(b.balance AS REAL) AS bal, k.kind FROM balances b LEFT JOIN account_kind k USING (account_id)
@@ -155,6 +173,41 @@ BASE_RULES = [
     (30, "Interest Paid%", None, "in", "income", None),
     (30, "%Redemption%", "checking", "in", "income", "card rewards redeemed"),
 ]
+
+
+LATE_DUP_LAG_DAYS = 7   # a copy that first shows up this long after its own date...
+LATE_DUP_WINDOW_DAYS = 4  # ...within this many days of an identical earlier charge is a feed duplicate
+
+
+def flag_late_duplicates(db: sqlite3.Connection) -> list[tuple[str, str]]:
+    """Mark feed duplicates so v_ledger drops them: a posted charge that arrives LATE_DUP_LAG_DAYS+ after its
+    date and repeats an identical posted charge (same account, amount and description) from 0-4 days earlier
+    that the feed delivered first. Seen on the Coinbase One Card through Plaid (2026-10: the copy never moved
+    the card balance). Rows from an account's first import are never flagged: legitimate repeat purchases
+    (the same coffee every morning) all arrive together then. Reversible: DELETE FROM late_duplicates."""
+    rows = db.execute("""
+        SELECT b.txn_id, a.txn_id FROM txns a JOIN txns b
+          ON a.account_id = b.account_id AND a.amount = b.amount AND a.description = b.description
+         AND a.txn_id <> b.txn_id AND a.pending = 0 AND b.pending = 0
+         AND b.posted BETWEEN a.posted AND date(a.posted, ?)
+         AND a.first_seen < b.first_seen
+        WHERE julianday(substr(b.first_seen, 1, 10)) - julianday(b.posted) >= ?
+          AND substr(b.first_seen, 1, 10) > (SELECT date(MIN(first_seen), '+1 day') FROM txns c
+                                            WHERE c.account_id = b.account_id)
+          AND b.txn_id NOT IN (SELECT txn_id FROM late_duplicates)
+          AND a.txn_id NOT IN (SELECT txn_id FROM late_duplicates)
+        ORDER BY b.posted, a.posted DESC""", (f"+{LATE_DUP_WINDOW_DAYS} days", LATE_DUP_LAG_DAYS)).fetchall()
+    used_orig = {r[0] for r in db.execute("SELECT dup_of FROM late_duplicates")}
+    out, seen = [], set()
+    for dup, orig in rows:  # one copy per original
+        if dup in seen or orig in used_orig:
+            continue
+        seen.add(dup); used_orig.add(orig); out.append((dup, orig))
+    now = datetime.now(timezone.utc).isoformat()
+    db.executemany("INSERT OR IGNORE INTO late_duplicates VALUES (?,?,?,?)",
+                   [(d, o, "identical charge re-delivered late by the feed", now) for d, o in out])
+    db.commit()
+    return out
 
 
 def personal_rules() -> list[tuple]:
