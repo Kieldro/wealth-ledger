@@ -787,7 +787,8 @@ def fetch() -> list[dict]:
     return [{
         "asset": "Total cryptocurrency (USD)",
         "value": res["total"],
-        "source": "qty: " + "/".join(srcs) + "; prices: " + ", ".join(sorted({r["price_source"] for r in res["rows"]})),
+        "source": "qty: " + "/".join(srcs) + "; prices: " + ", ".join(sorted({r["price_source"] for r in res["rows"]
+                                                                          if r["price_source"]})),
         "detail": {
             "holdings": res["rows"],
             "by_coin": res["by_coin"],
