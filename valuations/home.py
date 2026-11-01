@@ -9,8 +9,11 @@ Sources (free, no account, verified 2026-10-21):
   2. The county appraisal district's market value for the property (TrueProdigy public API, the one the
      <county>.prodigycad.com sites use). Valued as of Jan 1 of the tax year; a protested value is better
      read as a conservative floor-ish anchor than a sale price.
-Zillow, Redfin, Realtor.com, Trulia, Homes.com and Movoto all return 403/429 (bot walls) from a home
-connection, so they are not used. RentCast's free tier (50 calls/mo) would add a third AVM but needs a sign-up.
+  3. Zillow's Zestimate (and rent Zestimate) through Apify's maxcopell/zillow-detail-scraper actor, because
+     zillow.com bot-walls a home connection. Needs an Apify token in ~/.config/apify/token (or $APIFY_TOKEN);
+     ~$0.0036 per lookup on Apify's free plan, so weekly runs cost about $0.02 a month. Skipped without a token.
+Redfin, Realtor.com, Trulia, Homes.com and Movoto return 403/429 (bot walls) from a home connection, so they
+are not used.
 
 Value = median of the available estimates (mean when there are two). If they differ by more than 15%,
 `detail.disagreement` says so; the median is still the conservative middle.
@@ -32,7 +35,7 @@ import personal  # noqa: E402
 
 _CFG = personal.section("home")
 NAME = "home"
-EVERY_DAYS = 30
+EVERY_DAYS = 7  # Zillow refreshes its Zestimate often; ComeHome falls back quietly if its WAF objects
 ASSET = personal.require("home", "asset")
 ASSETS = (ASSET,)
 
@@ -126,6 +129,28 @@ def cad() -> dict:
             "history": {x["pYear"]: x["marketValue"] for x in sorted(years, key=lambda x: x["pYear"])}}
 
 
+APIFY_ACTOR = "maxcopell~zillow-detail-scraper"
+
+
+def zillow() -> dict:
+    tok = os.environ.get("APIFY_TOKEN") or ""
+    if not tok:
+        f = Path.home() / ".config/apify/token"
+        tok = f.read_text().strip() if f.exists() else ""
+    if not tok:
+        raise RuntimeError("no Apify token")
+    r = requests.post(f"https://api.apify.com/v2/acts/{APIFY_ACTOR}/run-sync-get-dataset-items",
+                      params={"timeout": 240, "maxTotalChargeUsd": 0.05}, headers={"Authorization": f"Bearer {tok}"},
+                      json={"addresses": [ADDRESS], "propertyStatus": "RECENTLY_SOLD"}, timeout=300)
+    r.raise_for_status()
+    rows = [x for x in r.json() if isinstance(x, dict) and x.get("zestimate")]
+    if not rows:
+        raise RuntimeError("Zillow returned no Zestimate")
+    x = rows[0]
+    return {"zestimate": float(x["zestimate"]), "rent_zestimate": x.get("rentZestimate"), "zpid": x.get("zpid"),
+            "living_area": x.get("livingArea"), "url": f"https://www.zillow.com/homedetails/{x.get('zpid')}_zpid/"}
+
+
 def fetch() -> list[dict]:
     estimates, detail, errors = {}, {"address": ADDRESS}, {}
     try:
@@ -142,6 +167,12 @@ def fetch() -> list[dict]:
         detail["cad"] = {"url": CAD_URL, "property_id": CAD_PID, **t, "note": CAD_NOTE}
     except Exception as e:
         errors["cad"] = str(e)[:300]
+    try:
+        z = zillow()
+        estimates["zillow_zestimate"] = z["zestimate"]
+        detail["zillow"] = {**z, "provider": "Zillow Zestimate via Apify"}
+    except Exception as e:
+        errors["zillow"] = str(e)[:300]
     if not estimates:
         raise RuntimeError(f"no home estimate available: {errors}")
 
@@ -150,10 +181,11 @@ def fetch() -> list[dict]:
     spread = vals[-1] / vals[0] - 1
     detail.update({
         "estimates": estimates,
-        "method": "median of available estimates (ComeHome/HouseCanary AVM, appraisal-district market value), rounded to $100",
+        "method": "median of available estimates (ComeHome/HouseCanary AVM, appraisal-district market value, Zillow "
+                  "Zestimate), rounded to $100",
         "spread_pct": round(100 * spread, 1),
-        "sources": [COMEHOME_URL, CAD_URL],
-        "not_used": "Zillow/Redfin/Realtor/Trulia/Homes.com/Movoto block automated requests (403/429)",
+        "sources": [COMEHOME_URL, CAD_URL] + ([detail["zillow"]["url"]] if "zillow" in detail else []),
+        "not_used": "Redfin/Realtor/Trulia/Homes.com/Movoto block automated requests (403/429)",
     })
     if spread > 0.15:
         detail["disagreement"] = f"sources differ by {spread:.0%}; median used as conservative middle"
