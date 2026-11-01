@@ -277,3 +277,33 @@ def test_gemini_advanced_deposit_counts_as_cash(monkeypatch):
     monkeypatch.setattr(c, "_req", lambda *a, **k: rows)
     qty, _ = c.gemini_balances("account-x", "secret")
     assert qty == {"USD": 1669.44, "BTC": 0.5}
+
+
+def test_coinbase_jwt_signs_with_ed25519_and_ecdsa_keys():
+    import base64, json
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    ed = Ed25519PrivateKey.generate()
+    raw = ed.private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw, serialization.NoEncryption())
+    ed_key = base64.b64encode(raw + ed.public_key().public_bytes(serialization.Encoding.Raw,
+                                                                    serialization.PublicFormat.Raw)).decode()
+    pem = ec.generate_private_key(ec.SECP256R1()).private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption()).decode()
+    for key, alg in ((ed_key, "EdDSA"), (pem, "ES256")):
+        tok = c.coinbase_jwt("organizations/x/apiKeys/y", key, "GET", "/api/v3/brokerage/accounts")
+        h, p, sig = tok.split(".")
+        pad = lambda s: s + "=" * (-len(s) % 4)
+        assert json.loads(base64.urlsafe_b64decode(pad(h)))["alg"] == alg
+        assert json.loads(base64.urlsafe_b64decode(pad(p)))["uri"] == "GET api.coinbase.com/api/v3/brokerage/accounts"
+        assert len(base64.urlsafe_b64decode(pad(sig))) == 64
+
+
+def test_coinbase_balances_sum_available_and_hold(monkeypatch):
+    monkeypatch.setattr(c, "coinbase_jwt", lambda *a: "t")
+    monkeypatch.setattr(c, "_req", lambda *a, **k: {"accounts": [
+        {"currency": "BTC", "available_balance": {"value": "0.1"}, "hold": {"value": "0.02"}},
+        {"currency": "ETH2", "available_balance": {"value": "0"}, "hold": {"value": "0"}},
+        {"currency": "USD", "available_balance": {"value": "5.5"}}]})
+    qty, _ = c.coinbase_balances("n", "k")
+    assert qty == {"BTC": pytest.approx(0.12), "USD": 5.5}

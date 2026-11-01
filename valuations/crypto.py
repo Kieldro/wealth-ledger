@@ -10,7 +10,7 @@ Quantity per (wallet, coin), best source first:
                    *.txt wallet exports in personal.json crypto.xpub_export_dir): BTC via mempool.space
                    (blockstream.info fallback),
                    ETH + ERC-20 USDT/USDC via public RPCs, TRX + TRC-20 USDT via TronGrid, SOL via Solana RPC
-  2. exchange-api  Gemini / Kraken private balance calls, only if read-only keys are in that file
+  2. exchange-api  Gemini / Kraken / Coinbase private balance calls, only if read-only keys are in that file
   3. simplefin     exchange wallets synced into txns.db (kind='crypto'); networth.py counts them nowhere else
   4. sheet         the crypto tab's manual quantity
 Prices: CoinGecko simple/price, falling back per coin to Kraken then Coinbase public tickers, then the
@@ -496,6 +496,48 @@ def gemini_balances(key: str, secret: str, account: str = "primary") -> tuple[di
     return out, {r["currency"]: r["amount"] for r in rows if float(r["amount"])}
 
 
+def coinbase_jwt(name: str, private_key: str, method: str, path: str) -> str:
+    """CDP API key JWT for one request: Ed25519 (base64 key) or ECDSA (PEM key)."""
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+
+    def b64u(b: bytes) -> str:
+        return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+    now = int(time.time())
+    pem = private_key.lstrip().startswith("-----BEGIN")
+    hdr = {"alg": "ES256" if pem else "EdDSA", "kid": name, "nonce": os.urandom(16).hex(), "typ": "JWT"}
+    claims = {"sub": name, "iss": "cdp", "nbf": now, "exp": now + 120, "uri": f"{method} api.coinbase.com{path}"}
+    msg = f"{b64u(json.dumps(hdr).encode())}.{b64u(json.dumps(claims).encode())}".encode()
+    if pem:
+        key = serialization.load_pem_private_key(private_key.encode(), password=None)
+        r, s = decode_dss_signature(key.sign(msg, ec.ECDSA(hashes.SHA256())))
+        sig = r.to_bytes(32, "big") + s.to_bytes(32, "big")
+    else:
+        sig = Ed25519PrivateKey.from_private_bytes(base64.b64decode(private_key)[:32]).sign(msg)
+    return msg.decode() + "." + b64u(sig)
+
+
+def coinbase_balances(name: str, private_key: str) -> tuple[dict[str, float], dict]:
+    """Advanced Trade GET /accounts (a view-only CDP key is enough): available + held per currency."""
+    path = "/api/v3/brokerage/accounts"
+    try:
+        d = _req(f"https://api.coinbase.com{path}?limit=250",
+                 headers={"Authorization": "Bearer " + coinbase_jwt(name, private_key, "GET", path)})
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"coinbase: HTTP {e.code}") from None
+    out: dict[str, float] = {}
+    raw = {}
+    for a in d.get("accounts") or []:
+        q = float(a["available_balance"]["value"]) + float((a.get("hold") or {}).get("value") or 0)
+        if q:
+            c = norm_coin(a["currency"])
+            out[c] = out.get(c, 0.0) + q
+            raw[a["currency"]] = q
+    return out, raw
+
+
 # ---------------------------------------------------------------- config
 
 TEMPLATE = {
@@ -512,6 +554,7 @@ TEMPLATE = {
     "_sol_example": [{"wallet": "Mobile", "address": "base58 address"}],
     "gemini": {"api_key": "", "api_secret": "", "_note": "read-only key, Fund Management: balances only"},
     "kraken": {"api_key": "", "api_secret": "", "_note": "read-only key, Query Funds only"},
+    "coinbase": {"key_file": "", "_note": "CDP API key file (View permission only), chmod 600"},
 }
 
 
@@ -625,8 +668,15 @@ def onchain_sources(cfg: dict, btc_lookup=None) -> tuple[list[dict], list[str]]:
 
 def exchange_sources(cfg: dict) -> tuple[list[dict], list[str]]:
     out, warns = [], []
-    for w, fn in (("Gemini", gemini_balances), ("Kraken", kraken_balances)):
+    for w, fn in (("Gemini", gemini_balances), ("Kraken", kraken_balances), ("Coinbase", coinbase_balances)):
         k = cfg.get(w.lower()) or {}
+        if k.get("key_file"):  # a CDP key file as downloaded: {"name": ..., "privateKey": ...}
+            try:
+                f = json.loads(Path(k["key_file"]).expanduser().read_text())
+                k = {"api_key": f["name"], "api_secret": f["privateKey"]}
+            except (OSError, ValueError, KeyError) as ex:
+                warns.append(f"{w} API: key file unreadable ({type(ex).__name__})")
+                continue
         if not (k.get("api_key") and k.get("api_secret")):
             continue
         try:
