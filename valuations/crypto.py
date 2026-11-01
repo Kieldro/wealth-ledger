@@ -489,8 +489,10 @@ def gemini_balances(key: str, secret: str, account: str = "primary") -> tuple[di
         raise RuntimeError(f"gemini: HTTP {e.code} {reason}".strip()) from None
     out: dict[str, float] = {}
     for r in rows:
+        # "amount" leaves out an ACH deposit Gemini has advanced for trading but not yet cleared (it can go
+        # negative after a buy); that money has already left the bank, so it is counted via "available"
         c = norm_coin(r["currency"])
-        out[c] = out.get(c, 0.0) + float(r["amount"])
+        out[c] = out.get(c, 0.0) + max(float(r["amount"]), float(r.get("available") or r["amount"]))
     return out, {r["currency"]: r["amount"] for r in rows if float(r["amount"])}
 
 
@@ -728,9 +730,13 @@ def combine(sheet: dict, live: list[dict], px: dict[str, tuple[float, str]]) -> 
         if abs(q) < 1e-12 and abs(sheet_q) < 1e-12:
             continue
         p, psrc = px.get(c, (None, None))
-        # at the exchange rows only the (wallet, coin) rows the sheet's total counts; the rest is in their own row
-        counted = (c in counted_coins and w in sheet["coins"].get(c, {}).get("wallets", {})) \
-            if w in exchanges else True
+        # at the exchange rows only the (wallet, coin) rows the sheet's total counts; the rest is in their own row.
+        # An exchange read through its API counts every coin, and its USD becomes that row (exchange_cash)
+        if w in exchanges and src == "exchange-api":
+            counted = c != "USD"
+        else:
+            counted = (c in counted_coins and w in sheet["coins"].get(c, {}).get("wallets", {})) \
+                if w in exchanges else True
         if p is None:
             missing.append(f"{w} {c}")
             p, counted = 0.0, False
@@ -749,8 +755,12 @@ def combine(sheet: dict, live: list[dict], px: dict[str, tuple[float, str]]) -> 
     sheet_wallets = {w for d in sheet["coins"].values() for w in d["wallets"]}
     unmatched = sorted({wallet_name(e["wallet"]) for e in live if any(abs(q) > 1e-12 for q in e["qty"].values())}
                        - sheet_wallets)
+    cash = {r["wallet"]: r["value"] for r in rows
+            if r["wallet"] in exchanges and r["qty_source"] == "exchange-api" and r["coin"] == "USD"}
+    cash.update({wallet_name(e["wallet"]): cash.get(wallet_name(e["wallet"]), 0.0) for e in live
+                 if e["source"] == "exchange-api" and wallet_name(e["wallet"]) in exchanges})
     return {"total": total, "rows": rows, "by_coin": dict(sorted(by_coin.items(), key=lambda kv: -kv[1]["value"])),
-            "unmatched": unmatched, "warnings": warns}
+            "unmatched": unmatched, "warnings": warns, "exchange_cash": cash}
 
 
 def sheet_reproduction(sheet: dict) -> float:
@@ -803,7 +813,9 @@ def fetch() -> list[dict]:
             "warnings": w1 + w2 + w3 + w4 + res["warnings"] + [
                 f"live wallet {w!r} has no row on the crypto tab (typo in crypto_wallets.json?)" for w in res["unmatched"]],
         },
-    }]
+    }] + [{"asset": w, "value": round(usd, 2), "source": "exchange-api USD balance",  # the exchange's own sheet row
+           "detail": {"note": "cash at the exchange, incl. deposits credited for trading that have not cleared"}}
+          for w, usd in sorted(res["exchange_cash"].items())]
 
 
 if __name__ == "__main__":

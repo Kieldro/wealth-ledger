@@ -203,7 +203,7 @@ def test_live_wallet_names_normalized_like_sheet():
     res = c.combine(s, live, px)
     btc = [r for r in res["rows"] if r["coin"] == "BTC" and r["wallet"].startswith("Hodl")]
     assert len(btc) == 1 and btc[0]["qty"] == 0.5  # no double count with the sheet's "Hodl" row
-    assert not [r for r in res["rows"] if r["wallet"] == "Betax" and r["coin"] == "TRX"][0]["counted"]
+    assert [r for r in res["rows"] if r["wallet"] == "Betax" and r["coin"] == "TRX"][0]["counted"]  # read by API
     assert res["unmatched"] == []
 
 
@@ -235,7 +235,7 @@ def test_exchange_rows_counted_per_wallet_coin_and_unpriced_not_fatal():
              "qty": {"XMR": 1.0, "BTC": 0.1, "XXLM": 50.0}}]
     res = c.combine(s, live, px)
     r = {(x["wallet"], x["coin"]): x for x in res["rows"]}
-    assert r[("Betax", "XMR")]["counted"] and not r[("Betax", "BTC")]["counted"]
+    assert r[("Betax", "XMR")]["counted"] and r[("Betax", "BTC")]["counted"]  # read by API: every priced coin
     assert not r[("Betax", "XXLM")]["counted"] and res["warnings"] == ["no price for Betax XXLM, not counted"]
 
 
@@ -258,3 +258,22 @@ def test_xpub_export_dedup_by_key(monkeypatch, tmp_path):
     out, _ = c.onchain_sources({"btc": [{"wallet": "Hodl", "xpub": ZPUB, "gap": 1}]},
                                btc_lookup=lambda a: (100, 1) if a == good else (0, 0))
     assert len(out) == 1 and out[0]["qty"]["BTC"] == 100 / 1e8
+
+
+def test_exchange_read_by_api_counts_all_coins_and_its_cash_is_its_own_row():
+    s = c.parse_sheet(VALUES, FORMULAS)
+    px = {k: (d["price"], "sheet") for k, d in s["coins"].items()} | {"USD": (1.0, "par"), "TRX": (0.3, "sheet")}
+    live = [{"wallet": "Betax", "source": "exchange-api", "coins": None,
+             "qty": {"XMR": 1.0, "BTC": 0.1, "TRX": 100.0, "USD": 713.0}}]
+    res = c.combine(s, live, px)
+    r = {(x["wallet"], x["coin"]): x for x in res["rows"]}
+    assert r[("Betax", "BTC")]["counted"] and r[("Betax", "TRX")]["counted"] and not r[("Betax", "USD")]["counted"]
+    assert res["exchange_cash"] == {"Betax": 713.0}
+
+
+def test_gemini_advanced_deposit_counts_as_cash(monkeypatch):
+    rows = [{"currency": "USD", "amount": "-330.56", "available": "1669.44"},
+            {"currency": "BTC", "amount": "0.5", "available": "0.5"}]
+    monkeypatch.setattr(c, "_req", lambda *a, **k: rows)
+    qty, _ = c.gemini_balances("account-x", "secret")
+    assert qty == {"USD": 1669.44, "BTC": 0.5}
