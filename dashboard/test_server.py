@@ -217,3 +217,35 @@ def test_trend_prices_for_units_without_a_live_spot(dbfile, monkeypatch):
     assert out["spot"]["IRR"]["usd"] == 5.375e-07 and out["spot"]["HG"] == {"usd": 6.5, "date": "2026-10-28",
                                                                              "source": "yahoo HG=F"}
     assert out["spot"]["XAG"] == {"usd": 49.12, "date": TODAY, "source": "valuations (swissquote)"}
+
+
+def test_bench_dates_weekly_then_daily_plus_every_trend_date():
+    g = server.bench_dates(["2024-01-03", "2024-01-05", "2026-10-30"], "2026-11-02")
+    assert g[:3] == ["2024-01-03", "2024-01-05", "2024-01-10"]  # weekly steps keep the odd trend date too
+    daily_from = date(2026, 11, 2).toordinal() - server.BENCH_DAILY_DAYS
+    recent = [d for d in g if date.fromisoformat(d).toordinal() >= daily_from + 7]
+    assert len(recent) == len(set(recent)) == server.BENCH_DAILY_DAYS - 6 and g[-1] == "2026-11-02"
+    assert server.bench_dates([], "2026-11-02") == []
+
+
+def test_trend_benchmarks_are_overlays_not_units(dbfile, monkeypatch):
+    """S&P 500 / Nasdaq ride in "benchmarks" only (the page's unit picker reads "prices" and "spot"), aligned with
+    benchmarks.dates; units with a price history are there too so an overlay can be priced in the shown unit."""
+    monkeypatch.setattr(server, "networth", lambda refresh=False: {"data": None, "error": "x"})
+    monkeypatch.setattr(server, "BENCH_DAILY_DAYS", 3)
+    con = ctdb.connect(dbfile)
+    con.execute("INSERT INTO networth_history (date, net_worth, source) VALUES ('2020-04-24', 2.0, 's')")
+    con.executemany("INSERT INTO prices VALUES (?,?,?,?)", [
+        ("2020-04-24", "SPX", 2836.7, "yahoo ^GSPC"), ("2020-04-24", "XAU", 1720.0, "yahoo GC=F"),
+        ("2020-04-30", "SPX", 2912.4, "yahoo ^GSPC"), ("2020-04-24", "KWD", 3.2, "yahoo KWD=X")])
+    con.commit()
+    con.close()
+    out = server.api_trend({})
+    b = out["benchmarks"]
+    assert b["dates"][:2] == ["2020-04-24", "2020-05-01"] and b["dates"][-1] == TODAY
+    assert set(b["prices"]) == set(prices.SYMBOLS + prices.BENCHMARKS) - prices.LATEST_ONLY
+    assert all(len(v) == len(b["dates"]) for v in b["prices"].values())
+    assert b["prices"]["SPX"][:2] == [2836.7, 2912.4] and b["prices"]["XAU"][1] == 1720.0
+    assert b["prices"]["IXIC"] == [None] * len(b["dates"])
+    assert "SPX" not in out["prices"] and "SPX" not in out["spot"] and "IXIC" not in out["spot"]
+    json.dumps(out)

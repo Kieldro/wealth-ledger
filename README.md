@@ -25,7 +25,7 @@ details all live in `~/.config/wealth-ledger/personal.json`, outside the repo.
 | `insights/zelle_memos.py` | Adds the note typed on each Zelle (from the bank's Zelle emails, read with `gws`) to the matching transaction's memo |
 | `insights/amazon.py` | Imports an Amazon "Your Orders" data export (items, refunds; no addresses/gift/tracking), matches Amazon card charges to the shipments they paid for, so `insights/budget.py` splits each charge across its items' budget lines |
 | `insights/nw_history.py` | Past net-worth points (Total Equity per dated column) from the yearly balance-sheet spreadsheets, read with `gws`, for the dashboard trend; weekly |
-| `insights/prices.py` | Daily BTC and gold (USD/troy oz) closes into `prices` (Coinbase candles, Kraken fallback; Yahoo COMEX GC=F, Coinbase PAXG fallback; keyless) so the dashboard can show net worth in bitcoin and gold; backfills once, then 1 request per symbol daily |
+| `insights/prices.py` | Daily closes into `prices` (keyless): BTC (Coinbase candles, Kraken fallback), gold/silver/platinum/copper (Yahoo COMEX futures; Coinbase PAXG fallback for gold), rial and dinar (latest rate only) so the dashboard can show every value in them, plus the S&P 500 and Nasdaq (Yahoo ^GSPC, ^IXIC) for the trend's benchmark overlays; backfills once, then 1 request per symbol daily |
 | `dashboard/` | Private dashboard (stdlib HTTP server + one HTML page), see `dashboard/README.md` |
 | `bin/wealth-ledger-sync` | Daily cron job: SimpleFIN + Plaid sync, valuations, overdraft check, backup; writes a status file, never notifies |
 | `bin/wealth-ledger-backup` | Daily integrity-checked, gzipped copy of the database to another disk (`backup` in `personal.json`); run by the sync |

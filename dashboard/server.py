@@ -232,20 +232,46 @@ SPOT_VALUATIONS = {"BTC": ("Total cryptocurrency (USD)", "$.prices.BTC.usd", "$.
                    "XPT": ("Total metals value", "$.metals.platinum.spot", "$.metals.platinum.source")}
 
 
+BENCH_DAILY_DAYS = 400  # benchmark overlays: one point per day this far back (covers the 1Y range), weekly before
+
+
+def bench_dates(dates, today: str) -> list[str]:
+    """Dates the benchmark overlays are drawn at: weekly from the first trend date, daily over the last
+    BENCH_DAILY_DAYS, plus every trend date (so each net-worth point has an exact match to rebase on)."""
+    if not dates:
+        return []
+    end = date.fromisoformat(today)
+    daily_from = end - timedelta(days=BENCH_DAILY_DAYS)
+    out, d = set(dates), date.fromisoformat(min(dates))
+    while d <= end:
+        out.add(d.isoformat())
+        d += timedelta(days=7 if d < daily_from else 1)
+    return sorted(x for x in out if x <= today)
+
+
 def trend_prices(dates, today: str | None = None) -> dict:
     """USD per unit of every display unit in insights/prices.py (BTC, metals, rial, dinar), for showing values in it.
     prices: {sym: {date: usd}} for every trend date (series + sheet_points; that day's close or the nearest earlier
     one; a date before the first stored price is left out). spot: {sym: {usd, date, source}} = the latest price,
-    from the prices table or, when newer, the valuations providers' live spot; None when neither has one."""
+    from the prices table or, when newer, the valuations providers' live spot; None when neither has one.
+    benchmarks: {dates: [...bench_dates], prices: {sym: [usd or None per date]}} for the trend's overlays (S&P 500,
+    Nasdaq, gold, bitcoin) and every unit with a price history, so the page can price an overlay in the shown unit."""
     today = today or date.today().isoformat()
     dates = sorted(set(dates))
-    out = {"prices": {}, "spot": {}}
-    for sym in price_hist.SYMBOLS:
+    grid = bench_dates(dates, today)
+    out = {"prices": {}, "spot": {}, "benchmarks": {"dates": grid, "prices": {}}}
+    for sym in price_hist.SYMBOLS + price_hist.BENCHMARKS:
         try:
             rows = q("SELECT date, usd, source FROM prices WHERE symbol = ? ORDER BY date", (sym,))
         except sqlite3.OperationalError:  # older DB without the table
             rows = []
-        out["prices"][sym] = price_hist.asof([(r["date"], r["usd"]) for r in rows], dates)
+        series = [(r["date"], r["usd"]) for r in rows]
+        if sym not in price_hist.LATEST_ONLY:
+            at = price_hist.asof(series, grid)
+            out["benchmarks"]["prices"][sym] = [at.get(d) for d in grid]
+        if sym in price_hist.BENCHMARKS:
+            continue
+        out["prices"][sym] = price_hist.asof(series, dates)
         best = {"usd": rows[-1]["usd"], "date": rows[-1]["date"], "source": rows[-1]["source"]} if rows else None
         if (best is None or best["date"] < today) and sym in SPOT_VALUATIONS:
             asset, usd_path, src_path = SPOT_VALUATIONS[sym]

@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Daily USD prices of the units the dashboard can show every value in: bitcoin, metals and two currencies.
+"""Daily USD prices of the units the dashboard can show every value in (bitcoin, metals and two currencies), plus
+two stock indexes the net-worth trend can overlay as benchmarks.
 
 Table `prices(date, symbol, usd, source)`: one row per day per symbol, always USD per one unit:
   BTC one bitcoin; XAU, XAG, XPT one troy ounce of gold, silver, platinum; HG one pound of copper;
   IRR one Iranian rial (about 1.9 million to the dollar, so values become enormous);
   KWD one Kuwaiti dinar (the most valuable currency unit, about $3.25, so values shrink).
+  SPX, IXIC  the S&P 500 and Nasdaq Composite index levels (price indexes, dividends not included). BENCHMARKS:
+             trend overlays only, never a display unit.
 Free, keyless sources only:
   BTC  Coinbase Exchange daily candles (UTC days, 300 per request, paged), falling back to Kraken's public OHLC
        (only its last 720 days, so it can top up but not backfill).
@@ -16,6 +19,7 @@ Free, keyless sources only:
   IRR, KWD      Yahoo exchange rates (IRR=X, KWD=X are units per dollar; stored inverted as USD per unit). Only
                 the latest rate is kept (LATEST_ONLY): the dashboard converts every date at today's rate, since
                 Yahoo's rial history is the official 42,000 until Jan 2026 and the market rate after it.
+  SPX, IXIC     Yahoo index closes (^GSPC, ^IXIC); weekdays only, like gold.
 
 The first run backfills from a few days before the earliest date the trend needs (the first networth_history point
 or the first daily balance snapshot). Later runs only re-fetch the last few days (today's candle is still moving),
@@ -44,14 +48,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import ctdb  # noqa: E402
 
 DEFAULT_DB = Path(os.environ.get("WEALTH_LEDGER_DB") or "~/.local/share/wealth-ledger/txns.db").expanduser()
-SYMBOLS = ("BTC", "XAU", "XAG", "XPT", "HG", "IRR", "KWD")
+SYMBOLS = ("BTC", "XAU", "XAG", "XPT", "HG", "IRR", "KWD")  # display units
+BENCHMARKS = ("SPX", "IXIC")  # trend overlays only (BTC and XAU double as overlays too)
 UA = {"User-Agent": "Mozilla/5.0 (wealth-ledger prices)"}
 LEAD_DAYS = 7       # fetch this many days before the earliest needed date, so a weekend/holiday start has a price
 REFETCH_DAYS = 3    # re-fetch the last few stored days each run: the latest candle is still in progress
 PAGE = 300          # Coinbase returns at most 300 candles per request
 PAUSE = 0.5         # seconds between paged requests
 PLAUSIBLE = {"BTC": (100, 10_000_000), "XAU": (200, 50_000), "XAG": (3, 2_000), "XPT": (100, 50_000),
-             "HG": (0.5, 100), "IRR": (1e-8, 5e-6), "KWD": (1, 20)}  # USD per unit; anything outside is a bad row
+             "HG": (0.5, 100), "IRR": (1e-8, 5e-6), "KWD": (1, 20),
+             "SPX": (100, 1_000_000), "IXIC": (100, 1_000_000)}  # USD per unit; anything outside is a bad row
 LATEST_ONLY = {"IRR", "KWD"}  # no backfill: these convert at today's rate everywhere
 SIG_DIGITS = 8  # stored precision: significant digits, since a rial is a fraction of a millionth of a dollar
 
@@ -145,6 +151,8 @@ SOURCES = {  # symbol -> [(source name, fetch(start, end) -> {date: usd})], best
     "HG": [("yahoo HG=F", lambda s, e: yahoo_daily("HG=F", s, e))],
     "IRR": [("yahoo IRR=X", lambda s, e: per_unit(yahoo_daily("IRR=X", s, e)))],
     "KWD": [("yahoo KWD=X", lambda s, e: per_unit(yahoo_daily("KWD=X", s, e)))],
+    "SPX": [("yahoo ^GSPC", lambda s, e: yahoo_daily("^GSPC", s, e))],
+    "IXIC": [("yahoo ^IXIC", lambda s, e: yahoo_daily("^IXIC", s, e))],
 }
 
 

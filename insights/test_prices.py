@@ -146,7 +146,28 @@ def test_currencies_are_stored_inverted_with_their_tiny_digits(con, monkeypatch)
 
 
 def test_every_symbol_has_a_source_and_a_plausible_range():
-    assert set(prices.SYMBOLS) == set(prices.SOURCES) == set(prices.PLAUSIBLE)
+    assert set(prices.SYMBOLS + prices.BENCHMARKS) == set(prices.SOURCES) == set(prices.PLAUSIBLE)
+    assert not set(prices.BENCHMARKS) & set(prices.SYMBOLS)  # overlays only, never a display unit
+
+
+def test_indexes_backfill_the_whole_trend_from_yahoo(con, monkeypatch):
+    """S&P 500 / Nasdaq: full history back to the first networth_history point, from ^GSPC / ^IXIC."""
+    urls = []
+
+    def get(url):
+        urls.append(url)
+        return {"chart": {"result": [{"meta": {"exchangeTimezoneName": "America/New_York"},
+                                      "timestamp": [_ts("2025-03-07T05:00:00"), _ts("2026-10-30T04:00:00")],
+                                      "indicators": {"quote": [{"close": [5770.2, 6840.0]}]}}], "error": None}}
+    monkeypatch.setattr(prices, "_get", get)
+    monkeypatch.setattr(prices, "SOURCES", {k: prices.SOURCES[k] for k in prices.BENCHMARKS})
+    today = date(2026, 11, 1)
+    assert prices.plan(con, "SPX", today) == [(date(2025, 3, 3), today)]
+    rep = prices.update(con, today=today)
+    assert rep["SPX"]["source"] == "yahoo ^GSPC" and rep["IXIC"]["source"] == "yahoo ^IXIC"
+    assert "/chart/%5EGSPC?" in urls[0] and "/chart/%5EIXIC?" in urls[1]
+    assert con.execute("SELECT date, usd FROM prices WHERE symbol='SPX' ORDER BY date").fetchall() == [
+        ("2025-03-07", 5770.2), ("2026-10-30", 6840.0)]
 
 
 def test_currencies_fetch_only_recent_days(con):

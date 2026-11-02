@@ -119,6 +119,7 @@ tr.acct:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; 
 tr.cat td:first-child::before { content: "▸"; display: inline-block; width: 12px; color: var(--muted); font-size: 10px; }
 tr.cat[aria-expanded="true"] td:first-child::before { content: "▾"; }
 #cards td.name .note { white-space: normal; }
+#cards td.name { max-width: 180px; }
 @media (max-width: 640px) { .filters input, .filters select { font-size: 16px; } .filters input { max-width: none; } }
 .cls { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 5px; background: var(--surface-2); color: var(--text-2); white-space: nowrap; }
 .cls.spend { color: var(--neg); } .cls.income, .cls.refund { color: var(--pos); }
@@ -147,6 +148,15 @@ td.neg { color: var(--neg); font-weight: 600; }
 .trendchg { font-size: 13px; color: var(--text-2); margin: 4px 0 1px; }
 .trendchg:empty { display: none; }
 .trendchg b { font-weight: 600; }
+/* benchmark overlays on the trend (S&P 500, Nasdaq, gold, bitcoin): toggle chips, colour from --c */
+.bench { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 0 0 8px; font-size: 12px; color: var(--muted); }
+.bench button { padding: 2px 9px; font-size: 11.5px; color: var(--text-2); display: inline-flex; align-items: center; gap: 5px; }
+.bench button i { width: 12px; height: 2px; border-radius: 1px; background: var(--c); }
+.bench button[aria-pressed="true"] { border-color: var(--c); color: var(--text); font-weight: 600; }
+.bench button:disabled { cursor: not-allowed; opacity: .45; }
+.bench button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.bench [data-b="SPX"] { --c: var(--s3); } .bench [data-b="IXIC"] { --c: var(--s7); }
+.bench [data-b="XAU"] { --c: var(--s4); } .bench [data-b="BTC"] { --c: var(--s2); }
 /* display unit picker ($, BTC, metals, rial, dinar): one choice converts every value on the page */
 .unitpick { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-2); flex-wrap: wrap; }
 .unitpick[hidden] { display: none; }
@@ -276,7 +286,7 @@ footer code { font-size: 11.5px; }
 
     <section class="card span-4">
       <h2>Credit cards</h2>
-      <p class="sub" id="cardsub">Balance owed per card, available credit and utilization where the feed reports it, and the next projected autopay.</p>
+      <p class="sub" id="cardsub">Balance owed per card against its credit limit, utilization, and the next projected autopay.</p>
       <div class="tw"><table id="cards"></table></div>
     </section>
 
@@ -602,6 +612,48 @@ for (const b of document.querySelectorAll("#trendrng button")) b.onclick = () =>
   if (data.trend) renderTrend(data.trend); else syncTrendButtons(trendRange);
 };
 
+// Benchmark overlays: "if net worth had tracked X". Each benchmark is priced in the shown unit first (the S&P 500 in
+// bitcoin when the page shows BTC), then rebased to net worth at the range's first point, so the lines start together.
+// /api/trend "benchmarks" holds every path on one date grid; the toggles are remembered per viewer.
+const BENCH = {SPX: {label: "S&P 500", color: "--s3"}, IXIC: {label: "Nasdaq", color: "--s7"},
+  XAU: {label: "Gold", color: "--s4"}, BTC: {label: "Bitcoin", color: "--s2"}}, BENCH_KEY = "wl.trendBench";
+let benchOn = [];
+try { const v = JSON.parse(localStorage.getItem(BENCH_KEY) || "[]"); if (Array.isArray(v)) benchOn = v.filter(k => Object.hasOwn(BENCH, k)); } catch { /* storage blocked or bad value */ }
+const benchHas = (t, k) => !!t?.benchmarks?.prices?.[k]?.some(v => v > 0);
+function syncBenchButtons(t) {
+  for (const b of document.querySelectorAll("#trendbench button")) {
+    const k = b.dataset.b, has = benchHas(t, k);
+    b.disabled = !!t && !has;
+    b.setAttribute("aria-pressed", String(has && benchOn.includes(k)));
+  }
+}
+for (const b of document.querySelectorAll("#trendbench button")) b.onclick = () => {
+  const k = b.dataset.b;
+  benchOn = benchOn.includes(k) ? benchOn.filter(x => x !== k) : [...benchOn, k];
+  try { localStorage.setItem(BENCH_KEY, JSON.stringify(benchOn)); } catch { /* storage blocked */ }
+  if (data.trend) renderTrend(data.trend); else syncBenchButtons(null);
+};
+// inR: the net-worth points in range, already in unit u. -> [{key, data: [{x, y, date}], at: Map(date -> point),
+// pct over the range}] for each benchmark that's on; data is empty when it has no price on the first date.
+function benchPaths(t, u, inR) {
+  const b = t.benchmarks, first = inR[0], last = inR.at(-1);
+  if (!b?.dates?.length || inR.length < 2) return [];
+  // a currency unit converts every date at today's rate, which cancels out in the rebase (same as dollars)
+  const UP = u === "USD" || UNITS[u].spotOnly ? null : b.prices[u] || [];
+  const inUnit = (k, i) => { const v = b.prices[k]?.[i], px = UP ? UP[i] : 1; return v > 0 && px > 0 ? v / px : null; };
+  let i0 = b.dates.indexOf(first.date);
+  if (i0 < 0) i0 = b.dates.findIndex(d => d >= first.date);
+  return benchOn.filter(k => benchHas(t, k)).map(k => {
+    const base = i0 < 0 ? null : inUnit(k, i0), data = [];
+    for (let i = i0; base != null && i < b.dates.length && b.dates[i] <= last.date; i++) {
+      const v = inUnit(k, i);
+      if (v != null) data.push({x: dayMs(b.dates[i]), y: first.y * v / base, date: b.dates[i]});
+    }
+    return {key: k, data, at: new Map(data.map(p => [p.date, p])), pct: data.length ? 100 * (data.at(-1).y / first.y - 1) : null};
+  });
+}
+const pctStr = p => p == null || !isFinite(p) ? "n/a" : (p < 0 ? "−" : "+") + Math.abs(p).toFixed(1) + "%";
+
 function renderTrend(t) {
   const s = t.series || [];
   const sheet = (Array.isArray(t.sheet_points) ? t.sheet_points : []).filter(p => p && p.date && p.net_worth != null);
@@ -643,8 +695,19 @@ function renderTrend(t) {
       $("trendchg").innerHTML = `<b class="${cls}">${esc(signedUnit(delta, u))}${pct != null ? ` (${pct < 0 ? "−" : "+"}${Math.abs(pct).toFixed(1)}%)` : ""}</b> since ${esc(fmtDay(first.date))}`;
     } else $("trendchg").innerHTML = "";
   }
+  syncBenchButtons(t);
+  // rebasing needs a positive starting net worth (a negative one would turn every gain into a loss)
+  const paths = first?.y > 0 ? benchPaths(t, u, inR) : [];
+  const benchNote = $("trendbenchnote");
+  benchNote.hidden = !benchOn.length || !inR.length;
+  benchNote.textContent = benchNote.hidden ? "" : !(first.y > 0) ? "Benchmarks need a positive net worth at the start of the range."
+    : `Benchmarks: what net worth would be had it tracked each one since ${fmtDay(first.date)}` + (P ? ` (priced in ${UNITS[u].long})` : "") +
+      ". S&P 500 and Nasdaq are price indexes (dividends not included)." +
+      (paths.some(p => !p.data.length) ? ` No price on ${fmtDay(first.date)} for ${paths.filter(p => !p.data.length).map(p => BENCH[p.key].label).join(", ")}.` : "");
   $("trendlegend").innerHTML = (nD || !nS ? "<span><i></i>Daily: synced accounts + sheet-only items held constant</span>" : "") +
-    (nS ? '<span><i class="ring"></i>Sheet snapshot (whole net worth)</span><span><i class="dash"></i>between snapshots</span>' : "");
+    (nS ? '<span><i class="ring"></i>Sheet snapshot (whole net worth)</span><span><i class="dash"></i>between snapshots</span>' : "") +
+    paths.filter(p => p.data.length).map(p => `<span><i style="background:var(${BENCH[p.key].color})"></i>${esc(BENCH[p.key].label)} ` +
+      `<b class="${p.pct > 0 ? "up" : p.pct < 0 ? "down" : ""}">${pctStr(p.pct)}</b></span>`).join("");
   if (!window.Chart) { $("trend").parentElement.innerHTML = '<p class="note">Chart library failed to load (offline?).</p>'; return; }
   charts.trend?.destroy();
   const ax = axisOpts(), s1 = css("--s1"), surf = css("--surface");
@@ -654,6 +717,12 @@ function renderTrend(t) {
   const pad = (xmax - xmin) * 8 / w; xmin -= pad; xmax += pad;  // ~8px so edge markers aren't clipped
   const dailyR = w / spanDays >= 6 ? 3.5 : 0;  // dots only when daily points are visibly apart
   const isSheet = c => c.raw?.kind === "sheet";
+  // hover/tooltip track the net-worth points only; overlay values for that date are added in afterLabel
+  Chart.Interaction.modes.netWorth ??= (chart, e) => {
+    let best = null;
+    chart.getDatasetMeta(0).data.forEach((el, index) => { const d = Math.abs(el.x - e.x); if (!best || d < best.d) best = {d, element: el, datasetIndex: 0, index}; });
+    return best ? [best] : [];
+  };
   const tickFmt = spanDays > 400
     ? v => { const d = new Date(v); return d.toLocaleDateString("en-US", {month: "short"}) + " '" + String(d.getFullYear()).slice(2); }
     : v => new Date(v).toLocaleDateString("en-US", {month: "short", day: "numeric"});
@@ -664,8 +733,10 @@ function renderTrend(t) {
       pointBackgroundColor: c => isSheet(c) ? surf : s1, pointHoverBackgroundColor: c => isSheet(c) ? surf : s1,
       pointBorderColor: c => isSheet(c) ? s1 : surf, pointHoverBorderColor: c => isSheet(c) ? s1 : surf,
       pointBorderWidth: c => isSheet(c) ? 1.75 : 2,
-      segment: {borderDash: c => inR[c.p0DataIndex]?.kind === "sheet" ? [5, 4] : undefined}}]},
-    options: {responsive: true, maintainAspectRatio: false, animation: false, interaction: {mode: "nearest", axis: "x", intersect: false},
+      segment: {borderDash: c => inR[c.p0DataIndex]?.kind === "sheet" ? [5, 4] : undefined}},
+      ...paths.filter(p => p.data.length).map(p => ({label: BENCH[p.key].label, data: p.data, borderColor: css(BENCH[p.key].color), borderWidth: 1.5,
+        backgroundColor: "transparent", tension: 0, pointRadius: 0, pointHoverRadius: 0, order: 1}))]},
+    options: {responsive: true, maintainAspectRatio: false, animation: false, interaction: {mode: "netWorth", intersect: false},
       scales: {x: {...ax, type: "linear", min: xmin, max: xmax, grid: {display: false},
                    afterBuildTicks: sc => { sc.ticks = timeTicks(sc.min, sc.max, w < 420 ? 5 : 7).map(value => ({value})); },
                    ticks: {...ax.ticks, maxRotation: 0, autoSkip: false, callback: tickFmt}},
