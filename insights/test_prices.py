@@ -132,3 +132,25 @@ def test_asof_nearest_earlier_date():
     assert prices.asof(s, ["2026-10-28", "2026-10-29", "2026-11-01", "2026-11-05"]) == {
         "2026-10-29": 1.0, "2026-11-01": 2.0, "2026-11-05": 3.0}
     assert prices.asof([], ["2026-10-29"]) == {}
+
+
+def test_currencies_are_stored_inverted_with_their_tiny_digits(con, monkeypatch):
+    """IRR=X / KWD=X quote units per dollar; the table holds USD per unit, kept to 8 significant digits."""
+    rate = {"IRR=X": 1860475.0, "KWD=X": 0.3082}
+    monkeypatch.setattr(prices, "yahoo_daily", lambda sym, s, e: {"2026-10-30": rate[sym]})
+    monkeypatch.setattr(prices, "SOURCES", {k: prices.SOURCES[k] for k in ("IRR", "KWD")})
+    prices.update(con, today=date(2026, 10, 30))
+    got = dict(con.execute("SELECT symbol, usd FROM prices").fetchall())
+    assert got["IRR"] == pytest.approx(1 / 1860475, rel=1e-7) and got["IRR"] > 0
+    assert got["KWD"] == pytest.approx(3.2446464, rel=1e-7)
+
+
+def test_every_symbol_has_a_source_and_a_plausible_range():
+    assert set(prices.SYMBOLS) == set(prices.SOURCES) == set(prices.PLAUSIBLE)
+
+
+def test_currencies_fetch_only_recent_days(con):
+    con.execute("INSERT INTO networth_history (date, net_worth) VALUES ('2020-04-21', 1.0)")
+    today = date(2026, 11, 1)
+    assert prices.plan(con, "IRR", today) == [(today - timedelta(days=prices.LEAD_DAYS), today)]
+    assert prices.plan(con, "XAG", today)[0][0] == date(2020, 4, 14)

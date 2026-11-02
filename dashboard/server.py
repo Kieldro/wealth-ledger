@@ -227,11 +227,13 @@ def api_trend(params) -> dict:
 
 # where the valuations providers keep today's spot (valuations/crypto.py, valuations/metals.py detail JSON)
 SPOT_VALUATIONS = {"BTC": ("Total cryptocurrency (USD)", "$.prices.BTC.usd", "$.prices.BTC.source"),
-                   "XAU": ("Total metals value", "$.metals.gold.spot", "$.metals.gold.source")}
+                   "XAU": ("Total metals value", "$.metals.gold.spot", "$.metals.gold.source"),
+                   "XAG": ("Total metals value", "$.metals.silver.spot", "$.metals.silver.source"),
+                   "XPT": ("Total metals value", "$.metals.platinum.spot", "$.metals.platinum.source")}
 
 
 def trend_prices(dates, today: str | None = None) -> dict:
-    """BTC (USD per coin) and XAU (USD per troy oz) for pricing the trend in bitcoin and gold (insights/prices.py).
+    """USD per unit of every display unit in insights/prices.py (BTC, metals, rial, dinar), for showing values in it.
     prices: {sym: {date: usd}} for every trend date (series + sheet_points; that day's close or the nearest earlier
     one; a date before the first stored price is left out). spot: {sym: {usd, date, source}} = the latest price,
     from the prices table or, when newer, the valuations providers' live spot; None when neither has one."""
@@ -245,7 +247,7 @@ def trend_prices(dates, today: str | None = None) -> dict:
             rows = []
         out["prices"][sym] = price_hist.asof([(r["date"], r["usd"]) for r in rows], dates)
         best = {"usd": rows[-1]["usd"], "date": rows[-1]["date"], "source": rows[-1]["source"]} if rows else None
-        if best is None or best["date"] < today:
+        if (best is None or best["date"] < today) and sym in SPOT_VALUATIONS:
             asset, usd_path, src_path = SPOT_VALUATIONS[sym]
             try:
                 v = q("SELECT snapshot_date d, json_extract(detail, ?) usd, json_extract(detail, ?) src FROM valuations "

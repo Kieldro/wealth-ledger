@@ -147,15 +147,16 @@ td.neg { color: var(--neg); font-weight: 600; }
 .trendchg { font-size: 13px; color: var(--text-2); margin: 4px 0 1px; }
 .trendchg:empty { display: none; }
 .trendchg b { font-weight: 600; }
-/* net worth unit switch ($ / BTC / gold oz): one choice drives the headline and the trend chart */
-.nwhd { display: flex; justify-content: space-between; align-items: center; gap: 6px 8px; flex-wrap: wrap; }
-.unitsw[hidden] { display: none; }
-.unitsw button { min-width: 0; }
-.unitsw button[aria-disabled="true"] { opacity: .45; cursor: not-allowed; border-color: var(--border); }
+/* display unit picker ($, BTC, metals, rial, dinar): one choice converts every value on the page */
+.unitpick { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-2); flex-wrap: wrap; }
+.unitpick[hidden] { display: none; }
+.unitpick select { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; max-width: 220px; }
+.big.long { font-size: 24px; overflow-wrap: anywhere; }
 .big .u { font-size: .5em; font-weight: 600; color: var(--text-2); letter-spacing: 0; margin-left: .25em; }
 .nwunit { font-size: 12px; color: var(--text-2); margin: -3px 0 6px; }
 .nwunit:empty { display: none; }
 .cols2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.cols2 > * { min-width: 0; }  /* a wide table scrolls in its .tw instead of widening the column */
 .toggle { font-size: 12px; color: var(--text-2); display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
 /* budget vs actual */
 .seg { display: inline-flex; gap: 6px; }
@@ -183,6 +184,7 @@ footer code { font-size: 11.5px; }
   .alloc { grid-template-columns: 1fr; }
   .donut { margin: 0 auto; }
   .cols2 { grid-template-columns: 1fr; }
+  .chip { white-space: normal; }  /* long unit names (oz platinum, rial) would push chips off screen */
   .grid { gap: 10px; }
   .card { padding: 12px; border-radius: 12px; }
   .hide-sm { display: none; }
@@ -199,6 +201,7 @@ footer code { font-size: 11.5px; }
   <header class="top">
     <h1>Finances</h1>
     <div class="hdr-r">
+      <label class="unitpick" id="unitpick" hidden>Values in <select id="unitsel" aria-label="Show every value in"></select><span class="note num" id="unitprice"></span></label>
       <div class="status" id="status"><span class="pill">Loading…</span></div>
       <form method="post" action="/logout" class="logout"><button type="submit" title="Sign out of this device">Log out</button></form>
     </div>
@@ -207,8 +210,7 @@ footer code { font-size: 11.5px; }
   <div class="problems" id="problems"></div>
 
   <section class="hero" id="hero">
-    <div class="card"><div class="nwhd"><div class="label">Net worth</div>
-      <div class="seg rng unitsw" id="nwunitsw" role="group" aria-label="Show net worth in" hidden><button type="button" data-u="USD" aria-pressed="true">$</button><button type="button" data-u="BTC" aria-pressed="false">₿ BTC</button><button type="button" data-u="XAU" aria-pressed="false">Gold oz</button></div></div>
+    <div class="card"><div class="label">Net worth</div>
       <div class="big" id="nw">—</div><div class="nwunit num" id="nwunit"></div><div class="chips" id="chg"></div><div class="note" id="nwnote" style="margin-top:6px"></div></div>
     <div class="card"><div class="label">Assets</div><div class="mid num" id="assets">—</div><div class="note" id="assetsnote"></div></div>
     <div class="card"><div class="label">Liabilities</div><div class="mid num" id="liabs">—</div><div class="note" id="liabsnote"></div></div>
@@ -358,15 +360,52 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const usd0 = new Intl.NumberFormat("en-US", {style: "currency", currency: "USD", maximumFractionDigits: 0});
 const usd2 = new Intl.NumberFormat("en-US", {style: "currency", currency: "USD"});
-const f0 = v => v == null ? "—" : usd0.format(v);
-const f2 = v => v == null ? "—" : usd2.format(v);
-const compact = v => {
-  const a = Math.abs(v);
-  if (a >= 1e6) return (v < 0 ? "-" : "") + "$" + (a / 1e6).toFixed(2) + "M";
-  if (a >= 1e3) return (v < 0 ? "-" : "") + "$" + (a / 1e3).toFixed(a >= 1e5 ? 0 : 1) + "k";
-  return usd0.format(v);
+// Display unit: every money value on the page is shown in US dollars or in one of these, converted at the latest
+// price from /api/trend "spot" (the trend chart instead uses each day's own price). usd*/usdF0 always stay dollars.
+const UNITS = {
+  USD: {label: "US dollars ($)"},
+  BTC: {label: "Bitcoin (₿)", pre: "₿", per: "/BTC", long: "bitcoin", close: "BTC close"},
+  XAU: {label: "Gold (troy oz)", suf: "oz gold", per: "/oz", long: "ounces of gold", close: "gold close"},
+  XAG: {label: "Silver (troy oz)", suf: "oz silver", per: "/oz", long: "ounces of silver", close: "silver close"},
+  XPT: {label: "Platinum (troy oz)", suf: "oz platinum", per: "/oz", long: "ounces of platinum", close: "platinum close"},
+  HG: {label: "Copper (lb)", suf: "lb copper", per: "/lb", long: "pounds of copper", close: "copper close"},
+  // currencies: today's rate for every date, trend included (no price history kept; see insights/prices.py)
+  IRR: {label: "Iranian rial (huge numbers)", suf: "rial", per: "/rial", long: "Iranian rials", spotOnly: true},
+  KWD: {label: "Kuwaiti dinar (small numbers)", pre: "KD ", per: "/dinar", long: "Kuwaiti dinars", spotOnly: true},
 };
-const signed = v => (v > 0 ? "+" : v < 0 ? "−" : "") + usd0.format(Math.abs(v));
+const usdF0 = v => v == null ? "—" : usd0.format(v);
+const compactNum = new Intl.NumberFormat("en-US", {notation: "compact", maximumSignificantDigits: 3});
+let unitSpot = null;  // USD per unit of the display unit, set by syncUnit(); null = dollars
+const dispUnit = () => unitSpot ? curUnit() : "USD";
+const conv = v => v == null || !unitSpot ? v : v / unitSpot;
+// a plain number for a non-dollar unit: whole numbers from 1,000 up, then more decimals as it shrinks (3 significant)
+function unitNum(a) {
+  if (a === 0) return "0";
+  if (a >= 1000) return Math.round(a).toLocaleString("en-US");
+  if (a >= 1) { const d = a >= 100 ? 1 : a >= 10 ? 2 : 3; return a.toLocaleString("en-US", {minimumFractionDigits: d, maximumFractionDigits: d}); }
+  return a.toLocaleString("en-US", {maximumSignificantDigits: 3});
+}
+const withUnit = (sg, num, u) => sg + (UNITS[u].pre || "") + num + (UNITS[u].suf ? " " + UNITS[u].suf : "");
+// x is already in unit u (dollars when u is USD); cents only matter for dollars
+function fmtIn(x, u = dispUnit(), cents = false) {
+  if (x == null || !isFinite(x)) return "—";
+  if (u === "USD") return (cents ? usd2 : usd0).format(x);
+  return withUnit(x < 0 ? "−" : "", unitNum(Math.abs(x)), u);
+}
+function compactIn(x, u = dispUnit()) {
+  if (x == null || !isFinite(x)) return "—";
+  const a = Math.abs(x), sg = x < 0 ? "−" : "";
+  if (u === "USD") {
+    if (a >= 1e6) return sg + "$" + (a / 1e6).toFixed(2) + "M";
+    if (a >= 1e3) return sg + "$" + (a / 1e3).toFixed(a >= 1e5 ? 0 : 1) + "k";
+    return usd0.format(x);
+  }
+  return withUnit(sg, a >= 1e4 ? compactNum.format(a) : unitNum(a), u);
+}
+const f0 = v => fmtIn(conv(v));
+const f2 = v => fmtIn(conv(v), dispUnit(), true);
+const compact = v => compactIn(conv(v));
+const signed = v => v == null ? "—" : (v > 0 ? "+" : v < 0 ? "−" : "") + f0(Math.abs(v));
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const monthName = m => new Date(m + "-15").toLocaleString("en-US", {month: "short", year: "numeric"});
 const fmtTime = iso => { if (!iso) return "—"; const d = new Date(iso); return isNaN(d) ? iso : d.toLocaleString("en-US", {month: "short", day: "numeric", hour: "numeric", minute: "2-digit"}); };
@@ -464,63 +503,61 @@ function axisOpts() {
   return {grid: {color: css("--grid")}, border: {display: false}, ticks: {color: css("--muted"), font: {size: 11}}};
 }
 
-// Net worth unit: US dollars, bitcoin or troy ounces of gold. One shared choice (remembered per viewer) drives the
-// headline and the trend chart. BTC/gold need /api/trend "spot" (headline) and "prices" (per-date closes, chart);
-// a unit whose data is missing is disabled, and the switch is hidden when neither is available.
-const UNITS = {
-  USD: {title: "US dollars"},
-  BTC: {title: "Bitcoin", name: "BTC", per: "/BTC", close: "BTC close"},
-  XAU: {title: "Troy ounces of gold", name: "Gold", per: "/oz", close: "gold close"},
-};
+// The display unit is one shared choice (remembered per viewer) for the whole page. A unit needs /api/trend "spot"
+// (every value) and "prices" (per-date closes, trend chart); one whose data is missing is disabled, and the picker
+// is hidden when none is available.
 const UNIT_KEY = "wl.nwUnit";
 let nwUnit = "USD";
 try { const u = localStorage.getItem(UNIT_KEY); if (u && Object.hasOwn(UNITS, u)) nwUnit = u; } catch { /* storage blocked */ }
-const unitAvail = (u, t) => u === "USD" ||
-  !!(t && t.spot?.[u]?.usd > 0 && t.prices?.[u] && typeof t.prices[u] === "object" && Object.keys(t.prices[u]).length);
+const unitAvail = (u, t) => u === "USD" || !!(t && t.spot?.[u]?.usd > 0 &&
+  (UNITS[u]?.spotOnly || (t.prices?.[u] && typeof t.prices[u] === "object" && Object.keys(t.prices[u]).length)));
 const curUnit = () => unitAvail(nwUnit, data.trend) ? nwUnit : "USD";
-// ₿ with 2 decimals (3 under 10); gold ounces with 1 decimal under 1,000 oz, else whole ounces
-function fmtUnit(v, u) {
-  if (v == null || !isFinite(v)) return "—";
-  if (u === "USD") return f0(v);
-  const a = Math.abs(v), sg = v < 0 ? "−" : "";
-  if (u === "BTC") { const d = a < 10 ? 3 : 2; return sg + "₿" + a.toLocaleString("en-US", {minimumFractionDigits: d, maximumFractionDigits: d}); }
-  const d = a < 1000 ? 1 : 0;
-  return sg + a.toLocaleString("en-US", {minimumFractionDigits: d, maximumFractionDigits: d}) + " oz";
-}
-const signedUnit = (v, u) => u === "USD" ? signed(v) : (v > 0 ? "+" : "") + fmtUnit(v, u);
 const fmtShortDay = d => { const x = new Date(d + "T12:00"); if (isNaN(x)) return d;
   return x.toLocaleDateString("en-US", {month: "short", day: "numeric", ...(x.getFullYear() !== new Date().getFullYear() ? {year: "numeric"} : {})}); };
-const priceAt = (usd, u) => `${f0(usd)}${UNITS[u].per}`;
+// one unit's price: "$3,877/oz", "$6.50/lb", or for a unit worth under a dollar "$1 = 1,860,475 rial"
+const priceAt = (usd, u) => usd >= 1 ? `${(usd < 100 ? usd2 : usd0).format(usd)}${UNITS[u].per}` : `$1 = ${fmtIn(1 / usd, u)}`;
 
-function syncUnitSwitch() {
-  const t = data.trend, sw = $("nwunitsw"), cur = curUnit();
-  sw.hidden = !["BTC", "XAU"].some(u => unitAvail(u, t));
-  for (const b of sw.querySelectorAll("button")) {
-    const u = b.dataset.u, ok = unitAvail(u, t);
-    b.setAttribute("aria-pressed", String(u === cur));
-    if (ok) { b.removeAttribute("aria-disabled"); b.title = UNITS[u].title; }
-    else { b.setAttribute("aria-disabled", "true"); b.title = `${UNITS[u].name} prices unavailable right now`; }
+function syncUnit() {
+  const t = data.trend, sel = $("unitsel"), cur = curUnit();
+  unitSpot = cur === "USD" ? null : t.spot[cur].usd;
+  if (!sel.options.length) sel.innerHTML = Object.entries(UNITS).map(([k, x]) => `<option value="${k}">${esc(x.label)}</option>`).join("");
+  $("unitpick").hidden = !Object.keys(UNITS).some(u => u !== "USD" && unitAvail(u, t));
+  for (const o of sel.options) {
+    o.disabled = !unitAvail(o.value, t);
+    o.textContent = UNITS[o.value].label + (o.disabled ? " (no price)" : "");
   }
+  sel.value = cur;
+  const sp = cur === "USD" ? null : t.spot[cur];
+  $("unitprice").textContent = sp ? priceAt(sp.usd, cur) : "";
+  $("unitprice").title = sp ? `Every value is converted at this price${sp.date ? " (" + sp.date + ")" : ""}${sp.source ? ", source: " + sp.source : ""}` : "";
 }
-for (const b of document.querySelectorAll("#nwunitsw button")) b.onclick = () => {
-  if (b.getAttribute("aria-disabled") === "true") return;
-  nwUnit = b.dataset.u;
-  try { localStorage.setItem(UNIT_KEY, nwUnit); } catch { /* storage blocked */ }
-  renderNW();
+const RENDER = {summary: renderSummary, accounts: renderAccounts, holdings: renderHoldings, cards: renderCards, spending: renderSpending,
+  drafts: renderDrafts, budget: renderBudget, subscriptions: renderSubscriptions, rental: renderRental, inherited: renderInherited};
+function renderAll() {
   if (data.trend) renderTrend(data.trend);
+  for (const [k, fn] of Object.entries(RENDER)) if (data[k]) try { fn(data[k]); } catch (e) { console.error(k, e); }
+}
+$("unitsel").onchange = () => {
+  if (!unitAvail($("unitsel").value, data.trend)) return;
+  nwUnit = $("unitsel").value;
+  try { localStorage.setItem(UNIT_KEY, nwUnit); } catch { /* storage blocked */ }
+  renderAll();
 };
 
 // headline net worth in the chosen unit, priced at the latest spot; USD amount + price as a sub-line
 function renderNW(s = data.summary) {
-  syncUnitSwitch();
-  const el = $("nw"), sub = $("nwunit"), u = curUnit();
+  if (data.trend) syncUnit();
+  const el = $("nw"), sub = $("nwunit"), u = dispUnit();
   sub.textContent = ""; sub.removeAttribute("title");
   if (!s) return;
   if (s.net_worth == null) { el.textContent = "unavailable"; return; }
+  el.classList.remove("long");
   if (u === "USD") { el.textContent = f0(s.net_worth); return; }
-  const sp = data.trend.spot[u], v = s.net_worth / sp.usd;
-  el.innerHTML = u === "BTC" ? esc(fmtUnit(v, u)) : `${esc(fmtUnit(v, u).replace(/ oz$/, ""))}<span class="u">oz gold</span>`;
-  sub.textContent = `${f0(s.net_worth)} at ${priceAt(sp.usd, u)}${sp.date ? ", " + fmtShortDay(sp.date) : ""}`;
+  const sp = data.trend.spot[u], v = s.net_worth / sp.usd, x = UNITS[u];
+  const num = (v < 0 ? "−" : "") + (x.pre || "") + unitNum(Math.abs(v));
+  el.classList.toggle("long", num.length > 11);  // a rial net worth runs to 13 digits
+  el.innerHTML = esc(num) + (x.suf ? `<span class="u">${esc(x.suf)}</span>` : "");
+  sub.textContent = `${usdF0(s.net_worth)} at ${priceAt(sp.usd, u)}${sp.date ? ", " + fmtShortDay(sp.date) : ""}`;
   if (sp.source) sub.title = "Price source: " + sp.source;
 }
 
@@ -571,10 +608,12 @@ function renderTrend(t) {
   const range = trendRange || (sheet.length ? "All" : "1M");
   syncTrendButtons(range);
   renderNW();  // spot prices arrive with the trend; the headline follows the same unit choice
-  const u = curUnit(), P = u === "USD" ? null : t.prices[u];
+  const u = curUnit(), spotOnly = !!UNITS[u].spotOnly, P = u === "USD" ? null : spotOnly ? {} : t.prices[u];
+  const fmtUnit = (v, unit) => fmtIn(v, unit), signedUnit = (v, unit) => (v > 0 ? "+" : "") + fmtIn(v, unit);
   $("trendunitnote").hidden = !P;
-  $("trendunitnote").textContent = P ? `Priced at each day's ${UNITS[u].close} (nearest previous trading day).` : "";
-  $("trend")?.setAttribute("aria-label", "Net worth trend" + (P ? " in " + (u === "BTC" ? "bitcoin" : "ounces of gold") : ""));
+  $("trendunitnote").textContent = !P ? "" : spotOnly ? `Every date converted at today's rate (${priceAt(t.spot[u].usd, u)}).`
+    : `Priced at each day's ${UNITS[u].close} (nearest previous trading day).`;
+  $("trend")?.setAttribute("aria-label", "Net worth trend" + (P ? " in " + UNITS[u].long : ""));
   $("trendnote").textContent = t.sheet_only_total != null
     ? `Sheet-only items (${f0(t.sheet_only_total)}: home, self-custody crypto, metals, vehicles, cash…) are added to the daily points as a constant at today's sheet values, so daily moves are synced accounts only.` +
       (!sheet.length && s.length < 14 ? " History is short; it grows by one point per daily sync." : "")
@@ -585,14 +624,14 @@ function renderTrend(t) {
   ].filter(p => p.y != null && isFinite(p.x)).sort((a, b) => a.x - b.x);
   if (P) {  // y = USD / that date's close; dates without a price are skipped in this unit
     for (let i = pts.length - 1; i >= 0; i--) {
-      const p = pts[i], px = Number(P[p.date]);
+      const p = pts[i], px = spotOnly ? t.spot[u].usd : Number(P[p.date]);
       if (px > 0) { p.usd = p.y; p.price = px; p.y = p.usd / px; } else pts.splice(i, 1);
     }
   }
   const inR = pts.length ? pts.filter(p => p.x >= trendStart(range, pts.at(-1).x)) : [];
   const first = inR[0], last = inR.at(-1);
   const nS = inR.filter(p => p.kind === "sheet").length, nD = inR.length - nS;
-  if (!inR.length) { $("trendsub").textContent = P && (sheet.length || s.length) ? `No ${UNITS[u].name} prices for these dates` : "No snapshots yet"; $("trendchg").innerHTML = ""; }
+  if (!inR.length) { $("trendsub").textContent = P && (sheet.length || s.length) ? `No ${UNITS[u].long} prices for these dates` : "No snapshots yet"; $("trendchg").innerHTML = ""; }
   else {
     const desc = nS && nD ? `${nS} sheet + ${nD} daily snapshots`
       : `${nS || nD} ${nS ? "sheet" : "daily"} snapshot${inR.length > 1 ? "s" : ""}`;
@@ -631,20 +670,22 @@ function renderTrend(t) {
                    afterBuildTicks: sc => { sc.ticks = timeTicks(sc.min, sc.max, w < 420 ? 5 : 7).map(value => ({value})); },
                    ticks: {...ax.ticks, maxRotation: 0, autoSkip: false, callback: tickFmt}},
                y: {...ax, grace: "5%", ticks: {...ax.ticks, maxTicksLimit: 5, callback(v, i, t) { const step = t.length > 1 ? Math.abs(t[1].value - t[0].value) : 1e3;
-                 if (u === "XAU") { const a = Math.abs(v), d = step < 1 ? 1 : 0; return (v < 0 ? "−" : "") + a.toLocaleString("en-US", {minimumFractionDigits: d, maximumFractionDigits: d}) + " oz"; }
-                 if (u === "BTC") { const d = Math.max(...t.map(x => Math.abs(x.value))) < 10 ? 3 : 2;  // same decimals on every tick
-                   return (v < 0 ? "−" : "") + "₿" + Math.abs(v).toLocaleString("en-US", {minimumFractionDigits: d, maximumFractionDigits: d}); }
+                 if (u !== "USD") { const top = Math.max(...t.map(x => Math.abs(x.value)));  // same decimals on every tick
+                   if (top >= 1e4) return compactIn(v, u);
+                   const d = Math.max(0, Math.min(6, Math.ceil(-Math.log10(step || 1))));
+                   return withUnit(v < 0 ? "−" : "", Math.abs(v).toLocaleString("en-US", {minimumFractionDigits: d, maximumFractionDigits: d}), u); }
                  return step >= 1000 ? "$" + Math.round(v / 1e3).toLocaleString("en-US") + "k"
                       : step >= 100 ? "$" + (v / 1e3).toLocaleString("en-US", {minimumFractionDigits: 1, maximumFractionDigits: 1}) + "k" : f0(v); }}}},
       plugins: {legend: {display: false}, tooltip: {callbacks: {
         title: items => items.length ? fmtDay(items[0].raw.date) : "",
         label: ctx => ` ${fmtUnit(ctx.raw.y, u)}`,
         afterLabel: ctx => { const p = ctx.raw, out = [];
-          if (P) out.push(`  ${f0(p.usd)} at ${priceAt(p.price, u)}`);
+          if (P) out.push(`  ${usdF0(p.usd)} at ${priceAt(p.price, u)}`);
           if (p.kind === "sheet") out.push(`  sheet snapshot${p.source ? " · " + p.source : ""}`);
-          else if (p.total != null) out.push(`  synced ${f0(p.synced)} + sheet ${f0(t.sheet_only_total)}`);
+          else if (p.total != null) out.push(`  synced ${usdF0(p.synced)} + sheet ${usdF0(t.sheet_only_total)}`);
           return out; }}}}}
   });
+  if (u !== "USD" && !spotOnly) $("trendunitnote").textContent += " Everything else on the page uses the latest price.";
 }
 
 // "MM-DD" (+ time on wide screens), with a stale pill when the bank hasn't updated the balance in a while
@@ -860,12 +901,12 @@ function renderRental(r) {
   const ax = axisOpts();
   charts.rental = new Chart($("rentalchart"), {
     data: {labels: cols.slice(0, -2).map(c => c.label), datasets: [
-      {type: "line", label: "Net cash flow", data: r.months.map(m => m.net), borderColor: css("--text-2"), backgroundColor: css("--text-2"), borderWidth: 2, pointRadius: 3, tension: 0, order: 0},
-      {type: "bar", label: "Income", data: r.months.map(m => m.income_total), backgroundColor: css("--s3"), borderRadius: 3, maxBarThickness: 32, order: 1},
-      {type: "bar", label: "Expenses", data: r.months.map(m => m.expense_total), backgroundColor: css("--s2"), borderRadius: 3, maxBarThickness: 32, order: 1}]},
+      {type: "line", label: "Net cash flow", data: r.months.map(m => conv(m.net)), borderColor: css("--text-2"), backgroundColor: css("--text-2"), borderWidth: 2, pointRadius: 3, tension: 0, order: 0},
+      {type: "bar", label: "Income", data: r.months.map(m => conv(m.income_total)), backgroundColor: css("--s3"), borderRadius: 3, maxBarThickness: 32, order: 1},
+      {type: "bar", label: "Expenses", data: r.months.map(m => conv(m.expense_total)), backgroundColor: css("--s2"), borderRadius: 3, maxBarThickness: 32, order: 1}]},
     options: {responsive: true, maintainAspectRatio: false, animation: false, interaction: {mode: "index", intersect: false},
-      scales: {x: {...ax, grid: {display: false}}, y: {...ax, ticks: {...ax.ticks, maxTicksLimit: 5, callback: v => compact(v)}}},
-      plugins: {legend: {display: false}, tooltip: {callbacks: {label: ctx => ` ${ctx.dataset.label}: ${f0(ctx.raw)}`}}}}
+      scales: {x: {...ax, grid: {display: false}}, y: {...ax, ticks: {...ax.ticks, maxTicksLimit: 5, callback: v => compactIn(v)}}},
+      plugins: {legend: {display: false}, tooltip: {callbacks: {label: ctx => ` ${ctx.dataset.label}: ${fmtIn(ctx.raw)}`}}}}
   });
 }
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => data.rental && renderRental(data.rental));
@@ -907,13 +948,13 @@ function renderInherited(r) {
     const ax = axisOpts();
     charts.ira = new Chart($("iratrend"), {
       type: "line",
-      data: {labels: ser.map(x => x.date), datasets: [{data: ser.map(x => x.balance), borderColor: css("--s2"), borderWidth: 2, backgroundColor: "transparent",
+      data: {labels: ser.map(x => x.date), datasets: [{data: ser.map(x => conv(x.balance)), borderColor: css("--s2"), borderWidth: 2, backgroundColor: "transparent",
         pointRadius: ser.length <= 31 ? 3 : 0, pointBackgroundColor: css("--s2"), pointBorderColor: css("--surface"), pointBorderWidth: 2, tension: 0}]},
       options: {responsive: true, maintainAspectRatio: false, animation: false, interaction: {mode: "index", intersect: false},
         scales: {x: {...ax, grid: {display: false}, ticks: {...ax.ticks, maxRotation: 0, autoSkip: true, maxTicksLimit: 5,
                    callback(v) { return new Date(this.getLabelForValue(v) + "T12:00").toLocaleDateString("en-US", {month: "short", day: "numeric"}); }}},
-                 y: {...ax, grace: "5%", ticks: {...ax.ticks, maxTicksLimit: 4, callback: v => compact(v)}}},
-        plugins: {legend: {display: false}, tooltip: {callbacks: {label: ctx => ` ${f0(ctx.raw)}`}}}}
+                 y: {...ax, grace: "5%", ticks: {...ax.ticks, maxTicksLimit: 4, callback: v => compactIn(v)}}},
+        plugins: {legend: {display: false}, tooltip: {callbacks: {label: ctx => ` ${fmtIn(ctx.raw)}`}}}}
     });
   } else if (!window.Chart) $("iratrend").parentElement.innerHTML = '<p class="note">Chart library failed to load (offline?).</p>';
 
@@ -957,11 +998,11 @@ function renderSpending(sp) {
     const ax = axisOpts();
     charts.spend = new Chart($("spend"), {
       type: "bar",
-      data: {labels, datasets: [{data: sp.monthly.map(m => m.spent), backgroundColor: sp.monthly.map(m => m.month === sp.this_month ? css("--s1") + "99" : css("--s1")),
+      data: {labels, datasets: [{data: sp.monthly.map(m => conv(m.spent)), backgroundColor: sp.monthly.map(m => m.month === sp.this_month ? css("--s1") + "99" : css("--s1")),
         borderRadius: {topLeft: 4, topRight: 4}, borderSkipped: "bottom", maxBarThickness: 44}]},
       options: {responsive: true, maintainAspectRatio: false, animation: false,
-        scales: {x: {...ax, grid: {display: false}}, y: {...ax, beginAtZero: true, ticks: {...ax.ticks, maxTicksLimit: 5, callback: v => compact(v)}}},
-        plugins: {legend: {display: false}, tooltip: {callbacks: {label: ctx => ` ${f0(ctx.raw)} · ${sp.monthly[ctx.dataIndex].n} txns`}}}}
+        scales: {x: {...ax, grid: {display: false}}, y: {...ax, beginAtZero: true, ticks: {...ax.ticks, maxTicksLimit: 5, callback: v => compactIn(v)}}},
+        plugins: {legend: {display: false}, tooltip: {callbacks: {label: ctx => ` ${fmtIn(ctx.raw)} · ${sp.monthly[ctx.dataIndex].n} txns`}}}}
     });
   }
   renderRecent(sp.recent);
@@ -1073,7 +1114,7 @@ async function load(refresh = false) {
   // summary first when refreshing, so the trend uses the new sheet total
   if (refresh) await get("/api/refresh", {method: "POST"}).then(d => { data.summary = d; renderSummary(d); }).catch(e => $("problems").textContent = e.message);
   await Promise.all(Object.entries(parts).filter(([k]) => !(refresh && k === "summary")).map(([k, [url, fn]]) =>
-    get(url).then(d => { data[k] = d; fn(d); }).catch(e => { console.error(e); $("problems").insertAdjacentHTML("beforeend", `<div class="err">${esc(k)}: ${esc(e.message)}</div>`); })));
+    get(url).then(d => { data[k] = d; fn(d); if (k === "trend" && curUnit() !== "USD") renderAll(); }).catch(e => { console.error(e); $("problems").insertAdjacentHTML("beforeend", `<div class="err">${esc(k)}: ${esc(e.message)}</div>`); })));
   document.body.dataset.ready = "1";
 }
 $("showzero").onchange = () => data.accounts && renderAccounts(data.accounts);

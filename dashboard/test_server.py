@@ -5,6 +5,7 @@ from datetime import date
 import pytest
 
 import ctdb
+from insights import prices
 from dashboard import server
 
 TODAY = date.today().isoformat()
@@ -196,4 +197,23 @@ def test_trend_prices_without_prices_table(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "DB", str(path))
     monkeypatch.setattr(server, "networth", lambda refresh=False: {"data": None, "error": "x"})
     out = server.api_trend({})
-    assert out["prices"] == {"BTC": {}, "XAU": {}} and out["spot"] == {"BTC": None, "XAU": None}
+    assert out["prices"] == {sym: {} for sym in prices.SYMBOLS} and out["spot"] == {sym: None for sym in prices.SYMBOLS}
+
+
+def test_trend_prices_for_units_without_a_live_spot(dbfile, monkeypatch):
+    """Rial: stored as USD per rial with enough digits to survive; silver falls back to the metals provider's spot;
+    copper has no live spot, so its latest close is used even when it is days old."""
+    monkeypatch.setattr(server, "networth", lambda refresh=False: {"data": None, "error": "x"})
+    con = ctdb.connect(dbfile)
+    con.executemany("INSERT INTO prices VALUES (?,?,?,?)", [
+        ("2026-10-28", "IRR", 5.3750e-07, "yahoo IRR=X"), ("2026-10-28", "HG", 6.5, "yahoo HG=F"),
+        ("2026-10-28", "XAG", 48.0, "yahoo SI=F")])
+    con.execute("INSERT INTO valuations VALUES (?,?,?,?,?,?)", (
+        TODAY, "Total metals value", 1.0, "spot: swissquote",
+        json.dumps({"metals": {"silver": {"oz": 1, "spot": 49.12, "source": "swissquote"}}}), TODAY))
+    con.commit()
+    con.close()
+    out = server.api_trend({})
+    assert out["spot"]["IRR"]["usd"] == 5.375e-07 and out["spot"]["HG"] == {"usd": 6.5, "date": "2026-10-28",
+                                                                             "source": "yahoo HG=F"}
+    assert out["spot"]["XAG"] == {"usd": 49.12, "date": TODAY, "source": "valuations (swissquote)"}

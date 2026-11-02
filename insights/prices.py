@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
-"""Daily closing prices of Bitcoin and gold in USD, so the dashboard can show net worth in BTC and in gold ounces.
+"""Daily USD prices of the units the dashboard can show every value in: bitcoin, metals and two currencies.
 
-Table `prices(date, symbol, usd, source)`: one row per day per symbol. BTC is USD per bitcoin, XAU is USD per troy
-ounce of gold. Free, keyless sources only:
+Table `prices(date, symbol, usd, source)`: one row per day per symbol, always USD per one unit:
+  BTC one bitcoin; XAU, XAG, XPT one troy ounce of gold, silver, platinum; HG one pound of copper;
+  IRR one Iranian rial (about 1.9 million to the dollar, so values become enormous);
+  KWD one Kuwaiti dinar (the most valuable currency unit, about $3.25, so values shrink).
+Free, keyless sources only:
   BTC  Coinbase Exchange daily candles (UTC days, 300 per request, paged), falling back to Kraken's public OHLC
        (only its last 720 days, so it can top up but not backfill).
   XAU  Yahoo Finance COMEX gold front-month futures (GC=F) daily closes, close to spot (Stooq's CSV now sits behind
        a JavaScript bot check and LBMA's JSON returns 403), falling back to Coinbase PAX Gold (PAXG-USD, a token
        backed by one fine troy ounce; recent years only).
        Gold only trades on weekdays: weekends and holidays have no row, and lookups take the nearest earlier date.
+  XAG, XPT, HG  Yahoo COMEX/NYMEX front-month futures (SI=F, PL=F, HG=F; copper is quoted in USD per pound).
+  IRR, KWD      Yahoo exchange rates (IRR=X, KWD=X are units per dollar; stored inverted as USD per unit). Only
+                the latest rate is kept (LATEST_ONLY): the dashboard converts every date at today's rate, since
+                Yahoo's rial history is the official 42,000 until Jan 2026 and the market rate after it.
 
 The first run backfills from a few days before the earliest date the trend needs (the first networth_history point
 or the first daily balance snapshot). Later runs only re-fetch the last few days (today's candle is still moving),
@@ -37,13 +44,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import ctdb  # noqa: E402
 
 DEFAULT_DB = Path(os.environ.get("WEALTH_LEDGER_DB") or "~/.local/share/wealth-ledger/txns.db").expanduser()
-SYMBOLS = ("BTC", "XAU")
+SYMBOLS = ("BTC", "XAU", "XAG", "XPT", "HG", "IRR", "KWD")
 UA = {"User-Agent": "Mozilla/5.0 (wealth-ledger prices)"}
 LEAD_DAYS = 7       # fetch this many days before the earliest needed date, so a weekend/holiday start has a price
 REFETCH_DAYS = 3    # re-fetch the last few stored days each run: the latest candle is still in progress
 PAGE = 300          # Coinbase returns at most 300 candles per request
 PAUSE = 0.5         # seconds between paged requests
-PLAUSIBLE = {"BTC": (100, 10_000_000), "XAU": (200, 50_000)}  # USD; anything outside is a bad row
+PLAUSIBLE = {"BTC": (100, 10_000_000), "XAU": (200, 50_000), "XAG": (3, 2_000), "XPT": (100, 50_000),
+             "HG": (0.5, 100), "IRR": (1e-8, 5e-6), "KWD": (1, 20)}  # USD per unit; anything outside is a bad row
+LATEST_ONLY = {"IRR", "KWD"}  # no backfill: these convert at today's rate everywhere
+SIG_DIGITS = 8  # stored precision: significant digits, since a rial is a fraction of a millionth of a dollar
 
 
 def _get(url: str, timeout: int = 30):
@@ -116,6 +126,11 @@ def yahoo_daily(symbol: str, start: date, end: date) -> dict[str, float]:
     return out
 
 
+def per_unit(px: dict[str, float]) -> dict[str, float]:
+    """Exchange rates quoted as units per dollar -> USD per unit."""
+    return {d: 1 / v for d, v in px.items() if v > 0}
+
+
 def _weekdays(px: dict[str, float]) -> dict[str, float]:
     return {d: v for d, v in px.items() if date.fromisoformat(d).weekday() < 5}
 
@@ -125,6 +140,11 @@ SOURCES = {  # symbol -> [(source name, fetch(start, end) -> {date: usd})], best
             ("kraken", kraken_ohlc)],
     "XAU": [("yahoo GC=F", lambda s, e: yahoo_daily("GC=F", s, e)),
             ("coinbase PAXG", lambda s, e: _weekdays(coinbase_candles("PAXG-USD", s, e)))],
+    "XAG": [("yahoo SI=F", lambda s, e: yahoo_daily("SI=F", s, e))],
+    "XPT": [("yahoo PL=F", lambda s, e: yahoo_daily("PL=F", s, e))],
+    "HG": [("yahoo HG=F", lambda s, e: yahoo_daily("HG=F", s, e))],
+    "IRR": [("yahoo IRR=X", lambda s, e: per_unit(yahoo_daily("IRR=X", s, e)))],
+    "KWD": [("yahoo KWD=X", lambda s, e: per_unit(yahoo_daily("KWD=X", s, e)))],
 }
 
 
@@ -162,7 +182,7 @@ def needed_start(db: sqlite3.Connection) -> date | None:
 
 def plan(db: sqlite3.Connection, symbol: str, today: date) -> list[tuple[date, date]]:
     """Date ranges to fetch: a backfill if stored history doesn't reach the earliest needed date, plus the recent tail."""
-    earliest = needed_start(db) or today
+    earliest = today if symbol in LATEST_ONLY else (needed_start(db) or today)
     lo, hi = db.execute("SELECT MIN(date), MAX(date) FROM prices WHERE symbol = ?", (symbol,)).fetchone()
     if lo is None:
         return [(earliest - timedelta(days=LEAD_DAYS), today)]
@@ -178,7 +198,7 @@ def update(db: sqlite3.Connection, today: date | None = None, dry_run: bool = Fa
     Raises RuntimeError naming every symbol that failed (after storing the ones that worked)."""
     today = today or datetime.now(timezone.utc).date()
     report, errors = {}, []
-    for sym in SYMBOLS:
+    for sym in SOURCES:
         ranges = plan(db, sym, today)
         got: dict[str, float] = {}
         srcs = set()
@@ -194,7 +214,7 @@ def update(db: sqlite3.Connection, today: date | None = None, dry_run: bool = Fa
                        "ranges": [(s.isoformat(), e.isoformat()) for s, e in ranges]}
         if not dry_run and got:
             db.executemany("INSERT OR REPLACE INTO prices (date, symbol, usd, source) VALUES (?,?,?,?)",
-                           [(d, sym, round(v, 2), src) for d, v in sorted(got.items())])
+                           [(d, sym, float(f"{v:.{SIG_DIGITS}g}"), src) for d, v in sorted(got.items())])
             db.commit()
     if errors:
         raise RuntimeError("; ".join(errors))
