@@ -8,7 +8,7 @@ as the balance owed at the statement close minus payments made since. The close-
 from which day's balance its past autopays matched (STATEMENT_LAG when none match). The draft is charged to the
 checking account that paid that card before.
 Rough by design: bills use their largest recent amount, pay its smallest; pay needs 3 occurrences and is dropped
-once it misses its date.
+once it misses its date; a bill is dropped once it misses a whole cycle (paid some other way, or cancelled).
 
   python -m insights.overdraft            forecast for every checking account
   python -m insights.overdraft --status   warning lines only (wealth-ledger-sync puts them in the status file)
@@ -83,8 +83,8 @@ def upcoming(chain, today: date, end: date, income: bool) -> list[date]:
     """Expected dates in [today, end]. A draft that is a few days late counts as due today."""
     interval = max(MIN_GAP, round(statistics.median(_gaps(chain))))
     last = chain[-1][0]
-    if (today - last).days > 2 * interval + GRACE:
-        return []  # stopped
+    if (today - last).days > max(interval, MAX_GAP) + GRACE:
+        return []  # stopped, or skipped a whole cycle (e.g. rent paid by cashier's check instead of the auto-debit)
     nxt = last + timedelta(interval)
     if income and nxt < today - timedelta(GRACE):
         return []  # pay that already missed its date isn't counted on

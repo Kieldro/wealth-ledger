@@ -73,6 +73,15 @@ def test_late_draft_counts_as_due_today_and_stopped_series_drops(led):
     assert not any("OLD SUB" in e["label"] for e in ev)
 
 
+def test_bill_that_skipped_a_whole_cycle_drops(led):
+    led.account(CHK, "Checking", "checking", 1000)
+    led.monthly(CHK, date(2026, 7, 12), 3, -2100, "DIRECT DEBIT LANDLORD RENT")  # 9/12, then no 10/12 debit
+    led.monthly(CHK, date(2026, 7, 20), 3, -60, "DIRECT DEBIT POWER CO")       # 9/20 + 31 days: 10/21, late but still due
+    ev = led.forecast()[CHK]["events"]
+    assert not any("LANDLORD" in e["label"] for e in ev)
+    assert [e["date"] for e in ev if "POWER" in e["label"]] == ["2026-11-21"]
+
+
 def test_sweeps_and_idle_accounts_ignored(led):
     led.account(CHK, "Checking", "checking", 800)
     led.account(IDLE, "Biz checking", "checking", 10)
