@@ -266,3 +266,84 @@ def test_budget_without_amazon_tables(tmp_path):
     ro = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
     res = budget.compute(ro, LINES, "2026-10", today=date(2026, 10, 15), rule_list=[], amazon_rules=[])
     assert res["unmapped"] == 5.0
+
+
+def test_points_match_below_total_and_budget_uses_actual_charge(tmp_path, led):
+    amazon.import_export(led.db, make_export(tmp_path / "ex", [
+        order_row("O1", "A", "2026-10-02", "2026-10-03", "Example Oat Cereal", 30.00, dept="Grocery"),
+        order_row("O1", "B", "2026-10-02", "2026-10-03", "Cordless Drill Kit", 70.00, dept="Tools & Hardware"),
+    ]))
+    t = led.txn("2026-10-04", -92.00, "AMAZON MKTPL*P1")              # $8.00 (8%) paid with rewards points
+    res = amazon.match(led.db)
+    assert led.matches()[t][:2] == ("O1", "points")
+    assert led.db.execute("SELECT discount FROM amazon_matches WHERE txn_id=?", (t,)).fetchone()[0] == 8.00
+    assert res["matched"] == {"points": 1} and res["points_discount_usd"] == 8.00
+    b = budget.compute(led.db, LINES, "2026-10", today=date(2026, 10, 15), rule_list=[],
+                       amazon_rules=amazon.ITEM_RULES)
+    assert b["actual"] == pytest.approx(92.00)                       # the card charge, not the order total
+    food = next(c for c in b["categories"] if c["category"] == "Food")
+    home = next(c for c in b["categories"] if c["category"] == "Home")
+    assert food["actual"] == pytest.approx(27.60) and home["actual"] == pytest.approx(64.40)  # discount pro rata
+    rep = amazon.report(led.db, "2026-01-01", None, None)
+    assert rep["points_matched"] == 1 and rep["points_discount_usd"] == 8.00 and rep["unmatched"] == 0
+
+
+def test_points_pass_leaves_ambiguous_pairs_alone(tmp_path, led):
+    amazon.import_export(led.db, make_export(tmp_path / "ex", [
+        order_row("O1", "A", "2026-05-01", "2026-05-02", "Item A", 50.00),
+        order_row("O2", "B", "2026-05-01", "2026-05-02", "Item B", 52.00),
+        order_row("O3", "C", "2026-08-01", "2026-08-02", "Item C", 40.00),
+    ]))
+    two_groups = led.txn("2026-05-03", -47.00, "AMAZON MKTPL*Q1")     # fits O1 and O2 -> neither
+    c1 = led.txn("2026-08-03", -37.00, "AMAZON MKTPL*Q2")             # two charges fit O3 -> neither
+    c2 = led.txn("2026-08-04", -38.00, "AMAZON MKTPL*Q3")
+    amazon.match(led.db)
+    m = led.matches()
+    assert two_groups not in m and c1 not in m and c2 not in m
+
+
+def test_exact_match_preferred_and_points_only_use_open_items(tmp_path, led):
+    amazon.import_export(led.db, make_export(tmp_path / "ex", [
+        order_row("O1", "A", "2026-06-01", "2026-06-02", "Item A", 30.00),
+        order_row("O2", "B", "2026-06-01", "2026-06-02", "Item B", 32.00),
+    ]))
+    exact = led.txn("2026-06-03", -30.00, "AMAZON MKTPL*E1")          # exact for O1, also within the band of O2
+    pts = led.txn("2026-06-04", -28.00, "AMAZON MKTPL*E2")            # O1 is taken, so only O2 is open
+    amazon.match(led.db)
+    m = led.matches()
+    assert m[exact][:2] == ("O1", "shipment")
+    assert m[pts][:2] == ("O2", "points")
+
+
+def test_points_pass_never_matches_above_total_or_outside_band(tmp_path, led):
+    amazon.import_export(led.db, make_export(tmp_path / "ex", [
+        order_row("O1", "A", "2026-07-01", "2026-07-02", "Item A", 20.00),
+        order_row("O2", "B", "2026-09-01", "2026-09-02", "Item B", 100.00),
+        order_row("O3", "C", "2026-09-20", "2026-09-21", "Item C", 10.00),
+    ]))
+    above = led.txn("2026-07-03", -21.00, "AMAZON MKTPL*U1")          # more than the order: never a points match
+    deep = led.txn("2026-09-03", -80.00, "AMAZON MKTPL*U2")           # 20% below: outside the default band
+    late = led.txn("2026-10-15", -9.50, "AMAZON MKTPL*U3")            # in the band but outside the date window
+    amazon.match(led.db)
+    m = led.matches()
+    assert above not in m and deep not in m and late not in m
+
+
+def test_points_band_config_and_discount_column_migration(tmp_path, monkeypatch):
+    monkeypatch.setattr(amazon.personal, "section", lambda n: {"points_band": [0.0, 0.25]})
+    assert amazon.points_band() == (0.0, 0.25)
+    monkeypatch.setattr(amazon.personal, "section", lambda n: {"points_band": [0.3, 0.1]})
+    with pytest.raises(amazon.personal.PersonalConfigError):
+        amazon.points_band()
+    monkeypatch.setattr(amazon.personal, "section", lambda n: {})
+    assert amazon.points_band() == amazon.POINTS_BAND
+    import sqlite3
+    p = tmp_path / "old.db"
+    con = sqlite3.connect(p)
+    con.execute("CREATE TABLE amazon_matches (txn_id TEXT PRIMARY KEY, order_id TEXT, method TEXT NOT NULL, "
+                "confidence REAL, items TEXT)")
+    con.execute("INSERT INTO amazon_matches VALUES ('t1','O1','shipment',0.9,'[]')")
+    con.commit()
+    con.close()
+    db = ctdb.connect(p)
+    assert db.execute("SELECT txn_id, discount FROM amazon_matches").fetchall() == [("t1", None)]

@@ -18,7 +18,8 @@ prices        daily USD closes of BTC (per coin) and XAU (per troy oz of gold), 
               dashboard trend uses them to price net worth in bitcoin and in gold.
 amazon_items / amazon_refunds  items and refunds from an Amazon "Your Orders" data export (insights/amazon.py;
               no addresses, gift details or tracking). amazon_matches links an Amazon card charge (txn_id) to the
-              order items it paid for (items = JSON [[asin, line], ...]); insights/budget.py splits it by item.
+              order items it paid for (items = JSON [[asin, line], ...]; discount = rewards points that paid the
+              rest, for method 'points'); insights/budget.py splits it by item.
 superseded    accounts whose feed was replaced by another source (e.g. a SimpleFIN account later fed by Plaid);
               hidden from every view and no longer written by that feed. History rows are kept.
 Views: v_ledger (txns + real date/amount + kind + class), v_balances_latest, v_holdings_latest, v_accounts.
@@ -87,7 +88,7 @@ CREATE TABLE IF NOT EXISTS amazon_refunds (
   PRIMARY KEY (order_id, line)
 );
 CREATE TABLE IF NOT EXISTS amazon_matches (
-  txn_id TEXT PRIMARY KEY, order_id TEXT, method TEXT NOT NULL, confidence REAL, items TEXT
+  txn_id TEXT PRIMARY KEY, order_id TEXT, method TEXT NOT NULL, confidence REAL, items TEXT, discount REAL
 );
 DROP VIEW IF EXISTS v_valuations_latest;
 CREATE VIEW v_valuations_latest AS
@@ -227,6 +228,8 @@ def connect(path) -> sqlite3.Connection:
     if cols and "source" not in cols:
         db.execute("ALTER TABLE txns ADD COLUMN source TEXT NOT NULL DEFAULT 'simplefin'")
     db.executescript(SCHEMA)
+    if "discount" not in {r[1] for r in db.execute("PRAGMA table_info(amazon_matches)")}:
+        db.execute("ALTER TABLE amazon_matches ADD COLUMN discount REAL")
     # UNIQUE treats NULLs as distinct, so match with IS to avoid re-adding rules that have no kind/direction
     db.execute("DELETE FROM txn_rules WHERE rowid NOT IN "
                "(SELECT MIN(rowid) FROM txn_rules GROUP BY pattern, kind, direction)")

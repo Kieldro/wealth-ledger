@@ -10,9 +10,15 @@ serial numbers and the like are never read into the database.
 Matching: Amazon bills per shipment, so one order can be several card charges. Items are grouped by order + ship
 date; a charge matches a shipment group (or the whole order, or failing that a subset of the order's items) when
 the amount agrees to the cent and the charge posts -2..+10 days from the ship date (order date if unshipped), on
-a card whose last 4 agree with the order's payment method when both are known. Positive Amazon credits are
-matched to refunds the same way. Prime membership, Prime Video, AWS and Kindle/digital charges are classified
-but not item-matched (the budget's merchant rules already place them).
+a card whose last 4 agree with the order's payment method when both are known. Then a looser "points" pass: card
+rewards points (usually the previous order's) paid part of many orders, so the card was charged less than the order
+total. A still-unmatched charge matches a still-unmatched shipment group (or whole order) when it is below the total
+by more than a cent and at most POINTS_BAND (default 15%; personal.json amazon.points_band = [lo, hi] overrides) of
+it, same date window and card rule, and only when unambiguous: that group is the charge's only candidate and no other
+charge is a candidate for any of its items. Such matches are method "points" with the discount stored; the budget
+splits the actual charge pro rata across the items. Positive Amazon credits are matched to refunds like exact
+charges. Prime membership, Prime Video, AWS and Kindle/digital charges are classified but not item-matched (the
+budget's merchant rules already place them).
 
 Categories: each item gets a budget line of the "income sheet" via [item regex, budget-line regex] rules over
 "department | product name": personal.json "amazon.rules" first, then the generic ITEM_RULES below. The first
@@ -46,6 +52,7 @@ WINDOW = (-2, 10)          # charge date minus ship (or order) date, in days
 SUBSET_MAX_ITEMS = 14      # orders with more open items than this skip the subset-sum search
 SUBSET_MAX_STEPS = 20000   # search budget per (charge, order)
 TOL = 1                    # cents: Amazon rounds tax per shipment, the export per item
+POINTS_BAND = (0.0, 0.15)  # rewards-points discount as a fraction of the group total: charge = total - discount
 
 # ---------- which ledger rows are Amazon ----------
 AMAZON_RE = re.compile(r"\bAMAZON|\bAMZN\b|\bAMZN ?MKTP|PRIME ?VIDEO|\bKINDLE\b|\bAWS\b", re.I)
@@ -377,6 +384,34 @@ def _subsets(items: list[dict], target: int, ok) -> list[list[dict]]:
     return found
 
 
+def points_band() -> tuple[float, float]:
+    """(lo, hi) discount fractions for the points pass: personal.json amazon.points_band, else POINTS_BAND."""
+    band = personal.section("amazon").get("points_band")
+    if band is None:
+        return POINTS_BAND
+    if not (isinstance(band, list) and len(band) == 2 and 0 <= band[0] <= band[1] < 1):
+        raise personal.PersonalConfigError(f"personal.json amazon.points_band must be [lo, hi] with 0 <= lo <= hi < 1, "
+                                           f"got {band!r}")
+    return float(band[0]), float(band[1])
+
+
+def _groups(its: list[dict], oday: date, cd: date) -> list[tuple]:
+    """(rank, days off, items, method) per shipment group in the date window, plus the whole order when it shipped
+    in parts and any of its dates is in the window."""
+    groups: dict = defaultdict(list)
+    for i in its:
+        groups[i["ship_date"]].append(i)
+    out = []
+    for sd, g in groups.items():
+        ref = _d(sd) if sd else oday
+        if _in_window(cd, ref):
+            out.append((0, abs((cd - ref).days), g, "shipment"))
+    refs = {_ref(i) for i in its} | {oday}
+    if len(groups) > 1 and any(_in_window(cd, r) for r in refs):
+        out.append((1, min(abs((cd - r).days) for r in refs), its, "order"))
+    return out
+
+
 def _charges(con, kinds=("items",)) -> list[dict]:
     con.row_factory = sqlite3.Row
     out = []
@@ -408,28 +443,23 @@ def match(con: sqlite3.Connection) -> dict:
     for o, d in order_day.items():
         by_day[d].append(o)
 
+    def near(ch):
+        """(order id, its items, last4 known on both sides) for orders this charge could pay for."""
+        cd = _d(ch["date"])
+        for k in range(-WINDOW[1] - 45, -WINDOW[0] + 1):
+            for o in by_day.get(cd + timedelta(days=k), ()):
+                its = orders[o]
+                l4 = {i["pay_last4"] for i in its if i["pay_last4"]}
+                if ch["last4"] and l4 and ch["last4"] not in l4:
+                    continue  # paid with another card
+                yield o, its, bool(ch["last4"] and l4)
+
     cands = []  # (rank, dist, charge txn_id, order_id, item keys, method, last4_known)
     n_cands: dict[str, int] = defaultdict(int)
     for ch in (c for c in charges if c["amt"] < 0):
         cd, target = _d(ch["date"]), _cents(-ch["amt"])
-        near = [o for k in range(-WINDOW[1] - 45, -WINDOW[0] + 1) for o in by_day.get(cd + timedelta(days=k), ())]
-        for o in near:
-            its = orders[o]
-            l4 = {i["pay_last4"] for i in its if i["pay_last4"]}
-            if ch["last4"] and l4 and ch["last4"] not in l4:
-                continue  # paid with another card
-            known = bool(ch["last4"] and l4)
-            groups: dict = defaultdict(list)
-            for i in its:
-                groups[i["ship_date"]].append(i)
-            exact = []
-            for sd, g in groups.items():
-                ref = _d(sd) if sd else order_day[o]
-                if abs(sum(i["c"] for i in g) - target) <= TOL and _in_window(cd, ref):
-                    exact.append((0, abs((cd - ref).days), g, "shipment"))
-            refs = {_ref(i) for i in its} | {order_day[o]}
-            if len(groups) > 1 and abs(sum(i["c"] for i in its) - target) <= TOL and any(_in_window(cd, r) for r in refs):
-                exact.append((1, min(abs((cd - r).days) for r in refs), its, "order"))
+        for o, its, known in near(ch):
+            exact = [g for g in _groups(its, order_day[o], cd) if abs(sum(i["c"] for i in g[2]) - target) <= TOL]
             if not exact and len(its) <= SUBSET_MAX_ITEMS and sum(i["c"] for i in its) > target + TOL:
                 def ok(sub):
                     rs = [_ref(i) for i in sub]
@@ -451,8 +481,33 @@ def match(con: sqlite3.Connection) -> dict:
         conf -= 0.2 if n_cands[tid] > 1 else 0
         conf -= 0.1 if not known else 0
         conf -= 0.02 * dist
-        matched[tid] = (o, method, round(max(conf, 0.1), 2), json.dumps([[k[1], k[2]] for k in keys]))
+        matched[tid] = (o, method, round(max(conf, 0.1), 2), json.dumps([[k[1], k[2]] for k in keys]), None)
         used_items.update(keys)
+
+    # points pass: charge below a still-open group's total by a rewards-points discount; unambiguous pairs only
+    lo, hi = points_band()
+    pairs = []  # (charge txn_id, order_id, item keys, days off, last4_known, discount cents)
+    for ch in (c for c in charges if c["amt"] < 0 and c["txn_id"] not in matched):
+        cd, target = _d(ch["date"]), _cents(-ch["amt"])
+        for o, its, known in near(ch):
+            for _rank, dist, g, _method in _groups(its, order_day[o], cd):
+                keys = tuple(sorted(i["key"] for i in g))
+                total = sum(i["c"] for i in g)
+                disc = total - target
+                if not used_items.intersection(keys) and disc > TOL and lo * total <= disc <= hi * total:
+                    pairs.append((ch["txn_id"], o, keys, dist, known, disc))
+    per_charge = defaultdict(int)
+    claims: dict = defaultdict(set)  # item key -> charges with a candidate group containing it
+    for tid, o, keys, *_ in pairs:
+        per_charge[tid] += 1
+        for k in keys:
+            claims[k].add(tid)
+    for tid, o, keys, dist, known, disc in pairs:
+        if per_charge[tid] == 1 and all(claims[k] == {tid} for k in keys):
+            conf = 0.6 - (0.1 if not known else 0) - 0.02 * dist
+            matched[tid] = (o, "points", round(max(conf, 0.1), 2), json.dumps([[k[1], k[2]] for k in keys]),
+                            round(disc / 100, 2))
+            used_items.update(keys)
 
     # refunds: a credit = one refund, or the refunds of one order on one day
     rgroups: dict = defaultdict(list)
@@ -475,18 +530,21 @@ def match(con: sqlite3.Connection) -> dict:
     for dist, tid, o, lines in sorted(rcands, key=lambda c: (rn[c[1]] > 1, c[0])):
         if tid in matched or any((o, ln) in used_ref for ln in lines):
             continue
-        matched[tid] = (o, "refund", round(0.9 - (0.2 if rn[tid] > 1 else 0) - 0.02 * dist, 2), json.dumps(lines))
+        matched[tid] = (o, "refund", round(0.9 - (0.2 if rn[tid] > 1 else 0) - 0.02 * dist, 2), json.dumps(lines),
+                        None)
         used_ref.update((o, ln) for ln in lines)
 
     con.execute("DELETE FROM amazon_matches")
-    con.executemany("INSERT INTO amazon_matches (txn_id, order_id, method, confidence, items) VALUES (?,?,?,?,?)",
+    con.executemany("INSERT INTO amazon_matches (txn_id, order_id, method, confidence, items, discount) "
+                    "VALUES (?,?,?,?,?,?)",
                     [(t, *v) for t, v in matched.items()])
     con.commit()
     methods = defaultdict(int)
     for v in matched.values():
         methods[v[1]] += 1
     return {"charges": sum(1 for c in charges if c["amt"] < 0), "credits": sum(1 for c in charges if c["amt"] > 0),
-            "matched": dict(methods)}
+            "matched": dict(methods),
+            "points_discount_usd": round(sum(v[4] or 0 for v in matched.values()), 2)}
 
 
 # ---------- splitting a matched charge across its items (used by insights/budget.py) ----------
@@ -530,7 +588,7 @@ def short_name(name: str | None, n: int = 48) -> str:
 def report(con: sqlite3.Connection, since: str, month: str | None, lines: list[dict] | None) -> dict:
     charges = [c for c in _charges(con, kinds=("items", "prime", "prime_video", "aws", "digital"))
                if c["date"] >= since]
-    m = dict(con.execute("SELECT txn_id, method FROM amazon_matches").fetchall())
+    m = {r[0]: (r[1], r[2] or 0.0) for r in con.execute("SELECT txn_id, method, discount FROM amazon_matches")}
     spend = [c for c in charges if c["amt"] < 0 and c["kind"] == "items"]
     hit = [c for c in spend if c["txn_id"] in m]
     kinds = defaultdict(lambda: [0, 0.0])
@@ -542,7 +600,10 @@ def report(con: sqlite3.Connection, since: str, month: str | None, lines: list[d
     res = {"since": since, "item_charges": len(spend), "matched": len(hit),
            "match_rate": round(100 * len(hit) / len(spend), 1) if spend else None,
            "matched_usd": round(-sum(c["amt"] for c in hit), 2), "charged_usd": round(-sum(c["amt"] for c in spend), 2),
-           "unmatched": len(spend) - len(hit), "credits": len(credits),
+           "unmatched": len(spend) - len(hit),
+           "unmatched_usd": round(-sum(c["amt"] for c in spend if c["txn_id"] not in m), 2),
+           "points_matched": sum(1 for c in hit if m[c["txn_id"]][0] == "points"),
+           "points_discount_usd": round(sum(m[c["txn_id"]][1] for c in hit), 2), "credits": len(credits),
            "credits_matched": sum(1 for c in credits if c["txn_id"] in m),
            "kinds": {k: {"n": v[0], "usd": round(v[1], 2)} for k, v in kinds.items()}}
     if month and lines is not None:
@@ -594,7 +655,10 @@ def main(argv=None) -> int:
         else:
             print(f"Amazon item charges since {r['since']}: {r['matched']}/{r['item_charges']} matched "
                   f"({r['match_rate']}%), ${r['matched_usd']:,.2f} of ${r['charged_usd']:,.2f}; "
-                  f"{r['unmatched']} unmatched; credits {r['credits_matched']}/{r['credits']} matched to refunds")
+                  f"{r['unmatched']} unmatched (${r['unmatched_usd']:,.2f}); credits {r['credits_matched']}/"
+                  f"{r['credits']} matched to refunds")
+            print(f"  {r['points_matched']} matched below the order total, paid partly with rewards points "
+                  f"(${r['points_discount_usd']:,.2f} in points)")
             for k, v in r["kinds"].items():
                 print(f"  {k:12} {v['n']:4} charges  ${v['usd']:,.2f}")
             if "month" in r:
