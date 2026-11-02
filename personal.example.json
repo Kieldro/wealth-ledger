@@ -16,6 +16,10 @@
   "liab_rows": ["Mortgage", "Credit card"],
   "sheet_excluded": []
  },
+ "credit_limits": {
+  "_help": "Card credit limits for cards whose feed reports none (Plaid sends its own; SimpleFIN never does): account_name LIKE pattern (as shown in v_accounts) -> limit in dollars. Takes effect on the next sync.",
+  "Example Rewards Card%": 5000
+ },
  "rules": [
   [10, "%EXAMPLE CARD PYMT%", "checking", "out", "card_payment", "checking-side payment to your card"],
   [20, "%EXAMPLE BANK XFER%", null, null, "transfer", "transfer between your own accounts"],

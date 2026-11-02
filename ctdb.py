@@ -5,7 +5,10 @@ txns          the real ledger: one row per transaction, `source` says which feed
 txns_compare  Plaid copies of accounts SimpleFIN already owns (comparison / backfill only);
               holdings_compare is the same for positions. Neither feeds any view.
 holdings      daily position snapshots per source (Plaid has cost basis; SimpleFIN reports 0).
-balances      daily balance snapshots per account (credit cards/loans are negative = owed).
+balances      daily balance snapshots per account (credit cards/loans are negative = owed). credit_limit is the
+              card's limit when the feed reports one (Plaid balances.limit; SimpleFIN has no such field).
+credit_limits manual card limits from personal.json "credit_limits" (account_name LIKE pattern -> limit), rebuilt on
+              every connect(); v_accounts.credit_limit falls back to them when the feed has no limit.
 account_kind  hand-maintained account type (credit/checking/savings/investment/retirement/hsa/loan/crypto);
               new accounts appear in v_accounts with kind NULL until classified.
 txn_rules     description LIKE-patterns -> class (first match by priority wins; add rows to teach it).
@@ -22,7 +25,8 @@ amazon_items / amazon_refunds  items and refunds from an Amazon "Your Orders" da
               rest, for method 'points'); insights/budget.py splits it by item.
 superseded    accounts whose feed was replaced by another source (e.g. a SimpleFIN account later fed by Plaid);
               hidden from every view and no longer written by that feed. History rows are kept.
-Views: v_ledger (txns + real date/amount + kind + class), v_balances_latest, v_holdings_latest, v_accounts.
+Views: v_ledger (txns + real date/amount + kind + class), v_balances_latest, v_holdings_latest,
+v_accounts (latest balance per account + credit_limit, from the feed or else personal.json, and credit_limit_source).
 
 class: spend | income | refund | transfer (between the owner's own accounts) | card_payment | investment.
 Spending = class 'spend'; card payments and transfers show up on both sides, so they're never spend.
@@ -58,9 +62,10 @@ CREATE TABLE IF NOT EXISTS holdings_compare (
 );
 CREATE TABLE IF NOT EXISTS balances (
   snapshot_date TEXT NOT NULL, source TEXT NOT NULL, account_id TEXT NOT NULL, account_name TEXT,
-  institution TEXT, balance TEXT, available TEXT, currency TEXT, as_of TEXT,
+  institution TEXT, balance TEXT, available TEXT, currency TEXT, as_of TEXT, credit_limit TEXT,
   PRIMARY KEY (snapshot_date, source, account_id)
 );
+CREATE TABLE IF NOT EXISTS credit_limits (pattern TEXT PRIMARY KEY, credit_limit REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS account_kind (account_id TEXT PRIMARY KEY, kind TEXT NOT NULL, note TEXT);
 CREATE TABLE IF NOT EXISTS txn_rules (
   priority INTEGER NOT NULL, pattern TEXT NOT NULL, kind TEXT, direction TEXT, class TEXT NOT NULL, note TEXT,
@@ -122,8 +127,14 @@ CREATE VIEW v_holdings_latest AS
     AND h.account_id NOT IN (SELECT account_id FROM superseded);
 DROP VIEW IF EXISTS v_accounts;
 CREATE VIEW v_accounts AS
-  SELECT account_id, account_name, institution, source, bal AS balance, as_of, snapshot_date, kind
-  FROM v_balances_latest;
+  SELECT account_id, account_name, institution, source, balance, as_of, snapshot_date, kind,
+         COALESCE(feed_limit, manual_limit) AS credit_limit,
+         CASE WHEN feed_limit IS NOT NULL THEN source WHEN manual_limit IS NOT NULL THEN 'manual' END AS credit_limit_source
+  FROM (SELECT b.account_id, b.account_name, b.institution, b.source, b.bal AS balance, b.as_of, b.snapshot_date, b.kind,
+               CASE WHEN CAST(b.credit_limit AS REAL) > 0 THEN CAST(b.credit_limit AS REAL) END AS feed_limit,
+               (SELECT m.credit_limit FROM credit_limits m WHERE b.account_name LIKE m.pattern
+                ORDER BY length(m.pattern) DESC LIMIT 1) AS manual_limit
+        FROM v_balances_latest b);
 """
 
 
@@ -144,6 +155,13 @@ UPSERT_BALANCE = """
 INSERT OR REPLACE INTO balances (snapshot_date,source,account_id,account_name,institution,balance,available,
                                  currency,as_of)
 VALUES (?,?,?,?,?,?,?,?,?)
+"""
+
+# Same as UPSERT_BALANCE plus the card's credit limit (10th value; None when the feed has none).
+UPSERT_BALANCE_LIMIT = """
+INSERT OR REPLACE INTO balances (snapshot_date,source,account_id,account_name,institution,balance,available,
+                                 currency,as_of,credit_limit)
+VALUES (?,?,?,?,?,?,?,?,?,?)
 """
 
 UPSERT_HOLDING = """
@@ -221,13 +239,31 @@ def personal_rules() -> list[tuple]:
     return out
 
 
+def personal_credit_limits() -> list[tuple[str, float]]:
+    """Manual card limits from personal.json ("credit_limits": {"<account_name LIKE pattern>": limit}), for cards
+    whose feed reports none. Keys starting with _ are comments."""
+    out = []
+    for pat, lim in (personal.load().get("credit_limits") or {}).items():
+        if pat.startswith("_"):
+            continue
+        if isinstance(lim, bool) or not isinstance(lim, (int, float)) or lim <= 0:
+            raise personal.PersonalConfigError(f"personal.json credit_limits[{pat!r}] must be a positive number")
+        out.append((pat, float(lim)))
+    return out
+
+
 def connect(path) -> sqlite3.Connection:
     """Open the DB, creating tables and migrating pre-`source` databases in place."""
     db = sqlite3.connect(path)
     cols = {r[1] for r in db.execute("PRAGMA table_info(txns)")}
     if cols and "source" not in cols:
         db.execute("ALTER TABLE txns ADD COLUMN source TEXT NOT NULL DEFAULT 'simplefin'")
+    bcols = {r[1] for r in db.execute("PRAGMA table_info(balances)")}
+    if bcols and "credit_limit" not in bcols:
+        db.execute("ALTER TABLE balances ADD COLUMN credit_limit TEXT")
     db.executescript(SCHEMA)
+    db.execute("DELETE FROM credit_limits")  # personal.json is the source of truth
+    db.executemany("INSERT INTO credit_limits VALUES (?,?)", personal_credit_limits())
     if "discount" not in {r[1] for r in db.execute("PRAGMA table_info(amazon_matches)")}:
         db.execute("ALTER TABLE amazon_matches ADD COLUMN discount REAL")
     # UNIQUE treats NULLs as distinct, so match with IS to avoid re-adding rules that have no kind/direction

@@ -241,8 +241,10 @@ footer code { font-size: 11.5px; }
         <div class="seg rng" id="trendrng" role="group" aria-label="Trend date range"><button type="button" data-r="1M" aria-pressed="false" title="Last month">1M</button><button type="button" data-r="3M" aria-pressed="false" title="Last 3 months">3M</button><button type="button" data-r="6M" aria-pressed="false" title="Last 6 months">6M</button><button type="button" data-r="YTD" aria-pressed="false" title="Year to date">YTD</button><button type="button" data-r="1Y" aria-pressed="false" title="Last year">1Y</button><button type="button" data-r="3Y" aria-pressed="false" title="Last 3 years">3Y</button><button type="button" data-r="All" aria-pressed="false" title="All history">All</button></div></div>
       <div class="trendchg num" id="trendchg"></div>
       <p class="sub" id="trendsub">Daily snapshots</p>
+      <div class="bench" id="trendbench" role="group" aria-label="Compare with a benchmark">Compare<button type="button" data-b="SPX" aria-pressed="false" title="S&amp;P 500 index"><i></i>S&amp;P 500</button><button type="button" data-b="IXIC" aria-pressed="false" title="Nasdaq Composite index"><i></i>Nasdaq</button><button type="button" data-b="XAU" aria-pressed="false" title="Gold (COMEX close)"><i></i>Gold</button><button type="button" data-b="BTC" aria-pressed="false" title="Bitcoin"><i></i>Bitcoin</button></div>
       <div class="chartbox"><canvas id="trend" aria-label="Net worth trend" role="img"></canvas></div>
       <div class="legend" id="trendlegend"><span><i></i>Net worth (synced accounts daily + sheet-only items held constant)</span></div>
+      <p class="note" id="trendbenchnote" style="margin:6px 0 0" hidden></p>
       <p class="note" id="trendunitnote" style="margin:6px 0 0" hidden></p>
       <p class="note" id="trendnote"></p>
     </section>
@@ -749,9 +751,11 @@ function renderTrend(t) {
                       : step >= 100 ? "$" + (v / 1e3).toLocaleString("en-US", {minimumFractionDigits: 1, maximumFractionDigits: 1}) + "k" : f0(v); }}}},
       plugins: {legend: {display: false}, tooltip: {callbacks: {
         title: items => items.length ? fmtDay(items[0].raw.date) : "",
-        label: ctx => ` ${fmtUnit(ctx.raw.y, u)}`,
+        label: ctx => ` ${fmtUnit(ctx.raw.y, u)}` + (paths.length && first.y ? ` (${pctStr(100 * (ctx.raw.y / first.y - 1))})` : ""),
         afterLabel: ctx => { const p = ctx.raw, out = [];
           if (P) out.push(`  ${usdF0(p.usd)} at ${priceAt(p.price, u)}`);
+          for (const b of paths) { const q = b.at.get(p.date);
+            if (q) out.push(`  ${BENCH[b.key].label}: ${fmtUnit(q.y, u)} (${pctStr(100 * (q.y / first.y - 1))})`); }
           if (p.kind === "sheet") out.push(`  sheet snapshot${p.source ? " · " + p.source : ""}`);
           else if (p.total != null) out.push(`  synced ${usdF0(p.synced)} + sheet ${usdF0(t.sheet_only_total)}`);
           return out; }}}}}
@@ -828,8 +832,10 @@ function renderHoldings(hd) {
 }
 
 const owedCell = v => v < 0 ? `<span class="amt-pos" title="credit balance">${f2(-v)} cr</span>` : f2(v);
+const limitNote = r => r.limit == null ? "" : `<div class="note">/ ${f0(r.limit)} limit${r.limit_basis === "estimate"
+  ? ' <span title="No limit from the feed: estimated as balance owed + available credit">est.</span>' : ""}</div>`;
 function utilCell(pct) {
-  if (pct == null) return '<span class="note" title="The feed does not report available credit for this card">—</span>';
+  if (pct == null) return '<span class="note" title="No credit limit or available credit is known for this card">—</span>';
   const lvl = pct >= 50 ? " vhi" : pct >= 30 ? " hi" : "";
   return `${pct.toFixed(0)}%<div class="util${lvl}" aria-hidden="true"><div style="width:${Math.min(100, pct).toFixed(1)}%"></div></div>`;
 }
@@ -842,17 +848,19 @@ function renderCards(c) {
     const k = e.label.slice(0, -" autopay".length);
     if (!nextPay[k] || e.date < nextPay[k].date) nextPay[k] = e;
   }
-  let h = `<thead><tr><th>Card</th><th class="r">Balance owed</th><th class="r" title="Utilization: balance owed / (owed + available credit)">Used</th></tr></thead><tbody>`;
+  let h = `<thead><tr><th>Card</th><th class="r">Owed / limit</th><th class="r" title="Utilization: balance owed / credit limit">Used</th></tr></thead><tbody>`;
   for (const r of c.cards) {
     const p = nextPay[r.account_name];
     h += `<tr><td class="name" title="${esc(r.account_name)}">${esc(stripNum(r.account_name).replace(/ Card \d{4}$/, ""))}
-      <div class="note">${esc(r.institution)} · ${esc((r.account_name.match(/\((\d{4})\)$/) || [, ""])[1])} · ${asOf(r)}</div>
+      <div class="note">${esc(r.institution)} · ${esc((r.account_name.match(/\((\d{4})\)$/) || [, ""])[1])} · ${asOf(r)}${r.limit_basis === "manual"
+        ? ' <span class="badge b-sheet" title="Credit limit entered by hand in personal.json (credit_limits)">manual limit</span>' : ""}</div>
       ${p ? `<div class="note" title="Projected from history; amount is the statement estimate">Autopay ${esc(p.date.slice(5))} · ${f0(-p.amount)} est.</div>` : ""}</td>
-      <td class="r">${owedCell(r.owed)}${r.available != null ? `<div class="note">${f0(r.available)} avail.</div>` : ""}</td>
+      <td class="r">${owedCell(r.owed)}${limitNote(r)}${r.available != null ? `<div class="note">${f0(r.available)} avail.</div>` : ""}</td>
       <td class="r">${utilCell(r.util_pct)}</td></tr>`;
   }
-  h += `<tr class="total"><td>Total</td><td class="r">${owedCell(c.total)}${c.available != null ? `<div class="note">${f0(c.available)} avail.</div>` : ""}</td>
-    <td class="r">${c.util_pct != null ? `<span title="Across cards that report available credit">${c.util_pct.toFixed(0)}%</span>` : ""}</td></tr>`;
+  const partial = c.limit_cards < c.cards.length ? ` (${c.limit_cards} of ${c.cards.length} cards have a known limit)` : "";
+  h += `<tr class="total"><td>Total</td><td class="r">${owedCell(c.total)}${c.limit != null ? `<div class="note" title="Sum of known limits${esc(partial)}">/ ${f0(c.limit)} limit</div>` : ""}${c.available != null ? `<div class="note">${f0(c.available)} avail.</div>` : ""}</td>
+    <td class="r">${c.util_pct != null ? `<span title="Overall utilization: owed / total limit across cards with a known limit${esc(partial)}">${c.util_pct.toFixed(0)}%</span>` : ""}</td></tr>`;
   $("cards").innerHTML = h + "</tbody>";
 }
 

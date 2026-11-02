@@ -51,7 +51,27 @@ def test_cards_owed_available_and_utilization(dbfile):
     assert c3["owed"] == -40.0 and c3["util_pct"] == 0.0
     assert out["total"] == 310.0
     # totals only over cards that report available credit: owed 250 of limit 1000 + 500
+    assert c1["limit_basis"] == "estimate" and c2["limit_basis"] is None  # estimate = owed + available
     assert out["available"] == 1250.0 and out["util_pct"] == pytest.approx(16.7)
+
+
+def test_cards_use_feed_and_manual_credit_limits(dbfile):
+    con = ctdb.connect(dbfile)
+    # c4: the feed reports a limit (no available); c5: no feed figure, limit from personal.example.json credit_limits
+    con.execute("INSERT INTO account_kind VALUES ('c4','credit',NULL), ('c5','credit',NULL)")
+    con.execute(ctdb.UPSERT_BALANCE_LIMIT, (TODAY, "plaid", "c4", "Test c4 (1234)", "Bank", "-500.00", None, "USD",
+                                            None, "2000.00"))
+    con.execute(ctdb.UPSERT_BALANCE, (TODAY, "simplefin", "c5", "Example Rewards Card (0000)", "Bank", "-100.00",
+                                      "0", "USD", None))
+    con.commit(); con.close()
+    out = server.api_cards({})
+    cards = {c["account_name"][:7]: c for c in out["cards"]}
+    c4, c5 = cards["Test c4"], cards["Example"]
+    assert (c4["limit"], c4["available"], c4["util_pct"], c4["limit_basis"]) == (2000.0, 1500.0, 25.0, "plaid")
+    assert (c5["limit"], c5["available"], c5["util_pct"], c5["limit_basis"]) == (5000.0, 4900.0, 2.0, "manual")
+    assert out["total"] == 910.0
+    # overall utilization over cards with a known limit: owed 250+0+500+100 of 1000+500+2000+5000
+    assert (out["limit"], out["limit_cards"], out["available"], out["util_pct"]) == (8500.0, 4, 7650.0, 10.0)
 
 
 def test_accounts_flag_stale_feeds(dbfile):

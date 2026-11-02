@@ -351,11 +351,15 @@ def api_holdings(params) -> dict:
 
 
 def api_cards(params) -> dict:
-    """Owed is positive dollars owed (negative = a credit balance). Available credit comes from the feed's
-    'available' field; SimpleFIN reports 0 for cards it has no figure for, so 0 counts as unknown. The limit is
-    approximated as owed + available (pending charges can make it a little off)."""
-    rows = q("""SELECT account_name, institution, source, ROUND(-bal,2) owed, available, as_of, snapshot_date
-                FROM v_balances_latest WHERE kind='credit' ORDER BY bal""")
+    """Owed is positive dollars owed (negative = a credit balance). The limit is the card's credit limit from the
+    feed (Plaid balances.limit) or personal.json "credit_limits" (v_accounts.credit_limit); without one it is
+    approximated as owed + the feed's available credit (SimpleFIN reports 0 for cards it has no figure for, so 0
+    counts as unknown; pending charges can make the estimate a little off). limit_basis says which:
+    plaid/simplefin (feed), manual, or estimate."""
+    rows = q("""SELECT b.account_name, b.institution, b.source, ROUND(-b.bal,2) owed, b.available, b.as_of,
+                       b.snapshot_date, a.credit_limit, a.credit_limit_source
+                FROM v_balances_latest b JOIN v_accounts a USING (account_id, source)
+                WHERE b.kind='credit' ORDER BY b.bal""")
     known_owed = known_limit = 0.0
     for r in rows:
         freshness(r)
@@ -363,14 +367,22 @@ def api_cards(params) -> dict:
             avail = float(r["available"]) if r["available"] not in (None, "") else None
         except ValueError:
             avail = None
-        r["available"] = round(avail, 2) if avail and avail > 0 else None
-        limit = (max(r["owed"], 0) + r["available"]) if r["available"] is not None else None
+        avail = avail if avail and avail > 0 else None
+        limit, basis = r.pop("credit_limit"), r.pop("credit_limit_source")
+        if limit is None and avail is not None:
+            limit, basis = max(r["owed"], 0) + avail, "estimate"
+        if limit is not None and avail is None:
+            avail = max(limit - max(r["owed"], 0), 0)
+        r["available"] = round(avail, 2) if avail is not None else None
         r["limit"] = round(limit, 2) if limit else None
+        r["limit_basis"] = basis if limit else None
         r["util_pct"] = round(100 * max(r["owed"], 0) / limit, 1) if limit else None
         if limit:
             known_owed += max(r["owed"], 0)
             known_limit += limit
     return {"cards": rows, "total": round(sum(r["owed"] for r in rows), 2),
+            "limit": round(known_limit, 2) if known_limit else None,
+            "limit_cards": sum(1 for r in rows if r["limit"]),
             "available": round(known_limit - known_owed, 2) if known_limit else None,
             "util_pct": round(100 * known_owed / known_limit, 1) if known_limit else None}
 

@@ -13,11 +13,11 @@ details all live in `~/.config/wealth-ledger/personal.json`, outside the repo.
 
 | Path | What it does |
 |---|---|
-| `ctdb.py` | Shared SQLite schema and views (`v_ledger`, `v_accounts`, ...) and the generic classification rules |
+| `ctdb.py` | Shared SQLite schema and views (`v_ledger`, `v_accounts`, ...) and the generic classification rules. `v_accounts.credit_limit` is the card limit from the feed, else from `credit_limits` in `personal.json` (SimpleFIN reports none); `credit_limit_source` says which |
 | `personal.py` | Loads `~/.config/wealth-ledger/personal.json` (or `$WEALTH_LEDGER_PERSONAL`) |
 | `personal.example.json` | Template for `personal.json`, with placeholder values |
 | `simplefin/simplefin_sync.py` | SimpleFIN Bridge -> SQLite (transactions, balances, holdings) |
-| `plaid/plaid_sync.py` | Plaid -> SQLite, for accounts SimpleFIN can't reach (link / relink / sync) |
+| `plaid/plaid_sync.py` | Plaid -> SQLite, for accounts SimpleFIN can't reach (link / relink / sync); also stores card credit limits (`balances.limit`) |
 | `networth.py` | Net worth = live synced balances + the sheet's manual rows + valuations |
 | `sheet_marks.py` | Marks balance-sheet rows nothing keeps current (yellow label + note); unmarks them once they're live. Formatting only |
 | `valuations/` | Daily/monthly estimates: `metals`, `crypto`, `home`, `cars`; `run.py` runs whichever are due |

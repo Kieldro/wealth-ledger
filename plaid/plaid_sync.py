@@ -168,8 +168,8 @@ def link(cfg: dict, update_item: dict | None = None, products=("transactions",),
 
 # ---------- sync ----------
 def account_names(cfg: dict, item: dict, db: sqlite3.Connection | None = None) -> dict[str, str]:
-    """Account display names; for primary items also snapshot balances (free /accounts/get, cached data).
-    Compare items are skipped: SimpleFIN already owns those balances."""
+    """Account display names; for primary items also snapshot balances and card credit limits (free /accounts/get,
+    cached data). Compare items are skipped: SimpleFIN already owns those balances."""
     accts = call(cfg, "/accounts/get", {"access_token": item["access_token"]})["accounts"]
     names = {a["account_id"]: f"{a.get('official_name') or a['name']} ({a.get('mask') or '?'})" for a in accts}
     if db is not None and item.get("mode", "primary") == "primary":
@@ -182,9 +182,14 @@ def account_names(cfg: dict, item: dict, db: sqlite3.Connection | None = None) -
             rows.append((today, "plaid", a["account_id"], names[a["account_id"]], item.get("institution") or "",
                          None if cur is None else f"{cur:.2f}",
                          None if b.get("available") is None else f"{b['available']:.2f}",
-                         b.get("iso_currency_code") or "USD", b.get("last_updated_datetime")))
-        db.executemany(ctdb.UPSERT_BALANCE, rows)
+                         b.get("iso_currency_code") or "USD", b.get("last_updated_datetime"), limit_str(b)))
+        db.executemany(ctdb.UPSERT_BALANCE_LIMIT, rows)
     return names
+
+
+def limit_str(b: dict) -> str | None:
+    """balances.limit (credit cards; null when the institution doesn't report it) as a stored amount."""
+    return None if b.get("limit") is None else f"{b['limit']:.2f}"
 
 
 def to_row(t: dict, names: dict, institution: str, now: str) -> tuple:  # matches ctdb.upsert_sql
@@ -245,11 +250,12 @@ def sync_holdings(cfg: dict, item: dict, db: sqlite3.Connection) -> int:
         hold_sql = hold_sql.replace("INTO holdings ", "INTO holdings_compare ")
     db.executemany(hold_sql, rows)
     if item.get("mode", "primary") == "primary":  # Plaid owns this institution: keep its balances too
-        db.executemany(ctdb.UPSERT_BALANCE, [
+        db.executemany(ctdb.UPSERT_BALANCE_LIMIT, [
             (today, "plaid", a["account_id"], names[a["account_id"]], item.get("institution") or "",
              None if a["balances"].get("current") is None else f"{a['balances']['current']:.2f}",
              None if a["balances"].get("available") is None else f"{a['balances']['available']:.2f}",
-             a["balances"].get("iso_currency_code") or "USD", a["balances"].get("last_updated_datetime"))
+             a["balances"].get("iso_currency_code") or "USD", a["balances"].get("last_updated_datetime"),
+             limit_str(a["balances"]))
             for a in r["accounts"]])
     db.commit()
     return len(rows)
