@@ -698,15 +698,29 @@ function renderTrend(t) {
       if (px > 0) { p.usd = p.y; p.price = px; p.y = p.usd / px; } else pts.splice(i, 1);
     }
   }
-  const inR = pts.length ? pts.filter(p => p.x >= trendStart(range, pts.at(-1).x)) : [];
+  const start = pts.length ? trendStart(range, pts.at(-1).x) : -Infinity;
+  const inR = pts.filter(p => p.x >= start);
+  // when the real points cover less than half the range (1Y after a long gap between snapshots), the line starts at
+  // an estimate on the range's first day: a straight line between the snapshots either side, as the dashed segments
+  // already show. Otherwise the range just starts where its data does.
+  const prev = pts.filter(p => p.x < start).at(-1), next = inR[0];
+  const sparse = next && inR.at(-1).x - next.x < (inR.at(-1).x - start) / 2;
+  const carry = prev && next && sparse ? (() => {
+    const f = (start - prev.x) / (next.x - prev.x), lerp = (a, b) => a == null || b == null ? null : a + f * (b - a);
+    const usd = lerp(prev.usd, next.usd);
+    return {x: start, y: lerp(prev.y, next.y), date: new Date(start).toISOString().slice(0, 10), kind: "sheet", est: true,
+            between: [prev.date, next.date], ...(usd != null && {usd, price: usd / lerp(prev.y, next.y)})};
+  })() : null;
+  if (carry) inR.unshift(carry);
   const first = inR[0], last = inR.at(-1);
-  const nS = inR.filter(p => p.kind === "sheet").length, nD = inR.length - nS;
+  const nS = inR.filter(p => p.kind === "sheet" && !p.est).length, nD = inR.filter(p => p.kind === "daily").length;
   if (!inR.length) { $("trendsub").textContent = P && (sheet.length || s.length) ? `No ${UNITS[u].long} prices for these dates` : "No snapshots yet"; $("trendchg").innerHTML = ""; }
   else {
     const desc = nS && nD ? `${nS} sheet + ${nD} daily snapshots`
       : `${nS || nD} ${nS ? "sheet" : "daily"} snapshot${inR.length > 1 ? "s" : ""}`;
     const late = range !== "All" && first.x - trendStart(range, last.x) > 2 * DAY_MS;  // range reaches back past the data
-    $("trendsub").textContent = late ? `${desc} · data starts ${fmtDay(first.date)}` : `${desc} since ${fmtDay(first.date)}`;
+    $("trendsub").textContent = late ? `${desc} · data starts ${fmtDay(first.date)}`
+      : `${desc} since ${fmtDay(first.date)}` + (carry ? ` (estimated between the ${fmtDay(carry.between[0])} and ${fmtDay(carry.between[1])} snapshots)` : "");
     if (inR.length > 1) {
       const delta = last.y - first.y, pct = first.y ? 100 * delta / Math.abs(first.y) : null;
       const cls = delta > 0 ? "up" : delta < 0 ? "down" : "";
@@ -747,7 +761,7 @@ function renderTrend(t) {
   charts.trend = new Chart($("trend"), {
     type: "line",
     data: {datasets: [{label: "Net worth", data: inR, borderColor: s1, borderWidth: 2, backgroundColor: "transparent", tension: 0,
-      pointRadius: c => isSheet(c) ? 3.5 : dailyR, pointHoverRadius: 5,
+      pointRadius: c => c.raw?.est ? 0 : isSheet(c) ? 3.5 : dailyR, pointHoverRadius: 5,
       pointBackgroundColor: c => isSheet(c) ? surf : s1, pointHoverBackgroundColor: c => isSheet(c) ? surf : s1,
       pointBorderColor: c => isSheet(c) ? s1 : surf, pointHoverBorderColor: c => isSheet(c) ? s1 : surf,
       pointBorderWidth: c => isSheet(c) ? 1.75 : 2,
@@ -772,7 +786,8 @@ function renderTrend(t) {
           if (P) out.push(`  ${usdF0(p.usd)} at ${priceAt(p.price, u)}`);
           for (const b of paths) { const q = b.at.get(p.date);
             if (q) out.push(`  ${BENCH[b.key].label}: ${fmtUnit(q.y, u)} (${pctStr(100 * (q.y / first.y - 1))})`); }
-          if (p.kind === "sheet") out.push(`  sheet snapshot${p.source ? " · " + p.source : ""}`);
+          if (p.est) out.push(`  estimate: straight line between the ${fmtDay(p.between[0])} and ${fmtDay(p.between[1])} snapshots`);
+          else if (p.kind === "sheet") out.push(`  sheet snapshot${p.source ? " · " + p.source : ""}`);
           else if (p.total != null) out.push(`  synced ${usdF0(p.synced)} + sheet ${usdF0(t.sheet_only_total)}`);
           return out; }}}}}
   });
