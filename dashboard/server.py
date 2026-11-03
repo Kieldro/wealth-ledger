@@ -361,7 +361,7 @@ def api_crypto(params) -> dict:
     rows = q("SELECT snapshot_date, value, detail, fetched_at FROM v_valuations_latest "
              "WHERE asset = 'Total cryptocurrency (USD)'")
     if not rows:
-        return {"total": None, "wallets": [], "coins": []}
+        return {"total": None, "wallets": [], "coins": [], "transfers": crypto_transfers()}
     r = rows[0]
     d = json.loads(r["detail"] or "{}")
     wallets: dict[str, dict] = {}
@@ -385,7 +385,17 @@ def api_crypto(params) -> dict:
                     for c, v in (d.get("by_coin") or {}).items() if abs(v.get("value") or 0) >= 0.01),
                    key=lambda c: -c["value"])
     return {"total": round(total, 2), "as_of": r["snapshot_date"], "fetched_at": r["fetched_at"],
-            "sheet_total": d.get("sheet_total"), "wallets": out, "coins": coins, "warnings": d.get("warnings") or []}
+            "sheet_total": d.get("sheet_total"), "wallets": out, "coins": coins, "warnings": d.get("warnings") or [],
+            "transfers": crypto_transfers()}
+
+
+def crypto_transfers() -> list[dict]:
+    """Every crypto send/receive with its memo and USD value on the day (insights/crypto_transfers.py)."""
+    try:
+        return q("""SELECT date, wallet, coin, direction, amount, fee, address, counterparty, memo, txid, usd_value,
+                           fee_usd, source FROM v_crypto_transfers ORDER BY date DESC""")
+    except sqlite3.OperationalError:  # database from before the table existed
+        return []
 
 
 def api_cards(params) -> dict:

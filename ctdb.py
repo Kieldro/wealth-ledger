@@ -83,6 +83,11 @@ CREATE TABLE IF NOT EXISTS networth_history (
 CREATE TABLE IF NOT EXISTS prices (
   date TEXT NOT NULL, symbol TEXT NOT NULL, usd REAL NOT NULL, source TEXT, PRIMARY KEY (date, symbol)
 );
+CREATE TABLE IF NOT EXISTS crypto_transfers (
+  wallet TEXT NOT NULL, coin TEXT NOT NULL, txid TEXT NOT NULL, direction TEXT NOT NULL, date TEXT NOT NULL,
+  amount REAL NOT NULL, fee REAL, address TEXT, counterparty TEXT, memo TEXT, source TEXT NOT NULL,
+  PRIMARY KEY (wallet, coin, txid, direction)
+);
 CREATE TABLE IF NOT EXISTS amazon_items (
   order_id TEXT NOT NULL, asin TEXT NOT NULL, line INTEGER NOT NULL, order_date TEXT, ship_date TEXT, name TEXT,
   department TEXT, qty REAL, amount REAL, shipping REAL, discounts REAL, pay_last4 TEXT, status TEXT,
@@ -95,6 +100,11 @@ CREATE TABLE IF NOT EXISTS amazon_refunds (
 CREATE TABLE IF NOT EXISTS amazon_matches (
   txn_id TEXT PRIMARY KEY, order_id TEXT, method TEXT NOT NULL, confidence REAL, items TEXT, discount REAL
 );
+DROP VIEW IF EXISTS v_crypto_transfers;
+CREATE VIEW v_crypto_transfers AS
+  SELECT t.*, p.usd AS price_usd, ROUND(t.amount * p.usd, 2) AS usd_value, ROUND(t.fee * p.usd, 2) AS fee_usd
+  FROM crypto_transfers t LEFT JOIN prices p ON p.symbol = t.coin
+   AND p.date = (SELECT MAX(date) FROM prices WHERE symbol = t.coin AND date <= substr(t.date, 1, 10));
 DROP VIEW IF EXISTS v_valuations_latest;
 CREATE VIEW v_valuations_latest AS
   SELECT v.* FROM valuations v

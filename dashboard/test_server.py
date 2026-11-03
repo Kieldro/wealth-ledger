@@ -299,4 +299,16 @@ def test_crypto_groups_by_wallet_and_coin(dbfile):
 
 
 def test_crypto_without_a_valuation(dbfile):
-    assert server.api_crypto({}) == {"total": None, "wallets": [], "coins": []}
+    assert server.api_crypto({}) == {"total": None, "wallets": [], "coins": [], "transfers": []}
+
+
+def test_crypto_lists_transfers_newest_first_with_usd(dbfile):
+    con = ctdb.connect(dbfile)
+    con.execute("INSERT INTO prices VALUES ('2026-03-01','BTC',80000,'x')")
+    con.executemany("INSERT INTO crypto_transfers VALUES (?,?,?,?,?,?,?,?,?,?,?)", [
+        ("W", "BTC", "t1", "in", "2026-03-01T10:00:00-06:00", 0.5, None, "a", None, "", "x"),
+        ("W", "BTC", "t2", "out", "2026-03-02T10:00:00-06:00", 0.1, 0.0001, "b", "Other", "gift", "x")])
+    con.commit()
+    con.close()
+    t = server.api_crypto({})["transfers"]
+    assert [(x["txid"], x["usd_value"], x["memo"]) for x in t] == [("t2", 8000.0, "gift"), ("t1", 40000.0, "")]

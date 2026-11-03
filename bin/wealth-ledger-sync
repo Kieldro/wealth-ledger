@@ -72,6 +72,10 @@ vout=$(cd "$ROOT" && "$PY" -m valuations.run 2>&1); vrc=$?
 echo "$vout"
 (( vrc != 0 )) && problem "Valuations: $(grep -m1 '^error' <<<"$vout" || tail -1 <<<"$vout")"
 
+# crypto sends/receives with memos: on-chain history of your bitcoin xpubs + Exodus CSV exports + Claude's send log
+cout=$(cd "$ROOT" && "$PY" -m insights.crypto_transfers --db "$DB" 2>&1) || problem "$(grep -m1 '^error' <<<"$cout" || tail -1 <<<"$cout")"
+echo "$cout" | tail -1
+
 # yellow label + note on balance-sheet rows nothing keeps current (formatting only; never writes values)
 mout=$(cd "$ROOT" && "$PY" sheet_marks.py 2>&1) || problem "$(grep -m1 '^error' <<<"$mout" || tail -1 <<<"$mout")"
 echo "$mout" | tail -1
