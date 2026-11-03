@@ -1,248 +1,132 @@
 {
-  "_help": "Copy to ~/.config/wealth-ledger/personal.json (chmod 600) and replace every value with your own. Keys starting with _ are comments.",
-  "sheet_id": "YOUR-GOOGLE-SHEET-ID",
-  "networth": {
-    "_help": "Balance-sheet tab labels (column A, exact). synced: label -> account_name LIKE patterns (as shown in v_accounts) whose live balance replaces the sheet value.",
-    "synced": {
-      "Checking": [
-        "Example Bank Checking (0000)"
-      ],
-      "Savings": [
-        "Example Bank Savings%"
-      ],
-      "Brokerage": [
-        "Individual Brokerage%"
-      ],
-      "Roth IRA": [
-        "ROTH IRA%"
-      ],
-      "Mortgage": [
-        "MORTGAGE LOAN%"
-      ],
-      "Credit card": [
-        "Example Rewards Card%"
-      ]
-    },
-    "asset_rows": [
-      "Checking",
-      "Savings",
-      "Brokerage",
-      "Roth IRA",
-      "Cash",
-      "Total cryptocurrency (USD)*",
-      "Total metals value*",
-      "Home",
-      "Car"
-    ],
-    "liab_rows": [
-      "Mortgage",
-      "Credit card"
-    ],
-    "sheet_excluded": []
+ "_help": "Copy to ~/.config/wealth-ledger/personal.json (chmod 600) and replace every value with your own. Keys starting with _ are comments.",
+ "sheet_id": "YOUR-GOOGLE-SHEET-ID",
+ "networth": {
+  "_help": "Balance-sheet tab labels (column A, exact). synced: label -> account_name LIKE patterns (as shown in v_accounts) whose live balance replaces the sheet value.",
+  "synced": {
+   "Checking": ["Example Bank Checking (0000)"],
+   "Savings": ["Example Bank Savings%"],
+   "Brokerage": ["Individual Brokerage%"],
+   "Roth IRA": ["ROTH IRA%"],
+   "Mortgage": ["MORTGAGE LOAN%"],
+   "Credit card": ["Example Rewards Card%"]
   },
-  "credit_limits": {
-    "_help": "Card credit limits for cards whose feed reports none (Plaid sends its own; SimpleFIN never does): account_name LIKE pattern (as shown in v_accounts) -> limit in dollars. Takes effect on the next sync.",
-    "Example Rewards Card%": 5000
+  "asset_rows": ["Checking", "Savings", "Brokerage", "Roth IRA", "Cash", "Total cryptocurrency (USD)*",
+                 "Total metals value*", "Home", "Car"],
+  "liab_rows": ["Mortgage", "Credit card"],
+  "sheet_excluded": []
+ },
+ "credit_limits": {
+  "_help": "Card credit limits for cards whose feed reports none (Plaid sends its own; SimpleFIN never does): account_name LIKE pattern (as shown in v_accounts) -> limit in dollars. Takes effect on the next sync.",
+  "Example Rewards Card%": 5000
+ },
+ "rules": [
+  [10, "%EXAMPLE CARD PYMT%", "checking", "out", "card_payment", "checking-side payment to your card"],
+  [20, "%EXAMPLE BANK XFER%", null, null, "transfer", "transfer between your own accounts"],
+  [30, "%EXAMPLE BULLION DEALER%", null, "out", "investment", "precious metals"]
+ ],
+ "home": {
+  "asset": "Home",
+  "address": "123 Example St, Springfield, ST 00000",
+  "search_text": "123 Example St, Springfield, ST",
+  "suggestion_text": "123 Example St",
+  "comehome_slug": "123-Example-St-Springfield-ST-00000",
+  "cad_office": "Example",
+  "cad_host": "example.prodigycad.com",
+  "cad_pid": "000000",
+  "cad_note": "appraisal-district market value as of Jan 1"
+ },
+ "cars": {
+  "zip": "00000",
+  "radius": 150,
+  "state": "ST",
+  "cars": [
+   {
+    "asset": "Car",
+    "vehicle": "2020 Example Motors Sedan LX FWD",
+    "vin": "VIN-OF-YOUR-CAR",
+    "vin_source": "where the VIN came from",
+    "make": "examplemotors",
+    "model": "sedan",
+    "year": 2020,
+    "years": [2019, 2021],
+    "year_adj": 0.06,
+    "odometer": [50000, "2026-01-01", "where the odometer reading came from"],
+    "miles_per_year": 10000,
+    "sanity": "optional note, e.g. a dealer trade-in estimate",
+    "pools": [
+     {"name": "LX trim", "trim_ok": "^lx$", "reject": "sport|touring"},
+     {"name": "LX, VIN-filtered", "trim_ok": "\\blx\\b", "reject": "sport", "vin": {"drive": "fwd", "max_l": 2.0}}
+    ]
+   }
+  ]
+ },
+ "crypto": {
+  "_help": "exchange_rows: wallets that have their own balance-sheet row (only coins the crypto total counts are counted there).",
+  "exchange_rows": ["ExchangeA", "ExchangeB"],
+  "default_wallet": "Wallet",
+  "xpub_export_dir": "",
+  "xpub_export_wallet": "Wallet"
+ },
+ "dashboard": {
+  "_help": "exact: networth.py line label -> category; rules: [regex, category] fallbacks tried in order. Categories: cash retirement taxable crypto metals realestate vehicles other.",
+  "default_username": "admin",
+  "ledger_start": "2026-01-01",
+  "exact": {
+   "Brokerage": "taxable",
+   "Total cryptocurrency (USD)": "crypto",
+   "Total metals value": "metals",
+   "Home": "realestate",
+   "Cash": "cash",
+   "Mortgage": "mortgage"
   },
   "rules": [
-    [
-      10,
-      "%EXAMPLE CARD PYMT%",
-      "checking",
-      "out",
-      "card_payment",
-      "checking-side payment to your card"
-    ],
-    [
-      20,
-      "%EXAMPLE BANK XFER%",
-      null,
-      null,
-      "transfer",
-      "transfer between your own accounts"
-    ],
-    [
-      30,
-      "%EXAMPLE BULLION DEALER%",
-      null,
-      "out",
-      "investment",
-      "precious metals"
-    ]
-  ],
-  "home": {
-    "asset": "Home",
-    "address": "123 Example St, Springfield, ST 00000",
-    "search_text": "123 Example St, Springfield, ST",
-    "suggestion_text": "123 Example St",
-    "comehome_slug": "123-Example-St-Springfield-ST-00000",
-    "cad_office": "Example",
-    "cad_host": "example.prodigycad.com",
-    "cad_pid": "000000",
-    "cad_note": "appraisal-district market value as of Jan 1"
-  },
-  "cars": {
-    "zip": "00000",
-    "radius": 150,
-    "state": "ST",
-    "cars": [
-      {
-        "asset": "Car",
-        "vehicle": "2020 Example Motors Sedan LX FWD",
-        "vin": "VIN-OF-YOUR-CAR",
-        "vin_source": "where the VIN came from",
-        "make": "examplemotors",
-        "model": "sedan",
-        "year": 2020,
-        "years": [
-          2019,
-          2021
-        ],
-        "year_adj": 0.06,
-        "odometer": [
-          50000,
-          "2026-01-01",
-          "where the odometer reading came from"
-        ],
-        "miles_per_year": 10000,
-        "sanity": "optional note, e.g. a dealer trade-in estimate",
-        "pools": [
-          {
-            "name": "LX trim",
-            "trim_ok": "^lx$",
-            "reject": "sport|touring"
-          },
-          {
-            "name": "LX, VIN-filtered",
-            "trim_ok": "\\blx\\b",
-            "reject": "sport",
-            "vin": {
-              "drive": "fwd",
-              "max_l": 2.0
-            }
-          }
-        ]
-      }
-    ]
-  },
-  "crypto": {
-    "_help": "exchange_rows: wallets that have their own balance-sheet row (only coins the crypto total counts are counted there).",
-    "exchange_rows": [
-      "ExchangeA",
-      "ExchangeB"
-    ],
-    "default_wallet": "Wallet",
-    "xpub_export_dir": "",
-    "xpub_export_wallet": "Wallet"
-  },
-  "dashboard": {
-    "_help": "exact: networth.py line label -> category; rules: [regex, category] fallbacks tried in order. Categories: cash retirement taxable crypto metals realestate vehicles other.",
-    "default_username": "admin",
-    "ledger_start": "2026-01-01",
-    "exact": {
-      "Brokerage": "taxable",
-      "Total cryptocurrency (USD)": "crypto",
-      "Total metals value": "metals",
-      "Home": "realestate",
-      "Cash": "cash",
-      "Mortgage": "mortgage"
-    },
-    "rules": [
-      [
-        "\\b(ira|roth|401\\(?k|403b|hsa|pre-tax|pension)\\b",
-        "retirement"
-      ],
-      [
-        "checking|savings|bank|cash|wallet",
-        "cash"
-      ],
-      [
-        "crypto|bitcoin",
-        "crypto"
-      ],
-      [
-        "metal|gold|silver",
-        "metals"
-      ],
-      [
-        "home|house|property",
-        "realestate"
-      ],
-      [
-        "car\\b|truck|vehicle",
-        "vehicles"
-      ],
-      [
-        "brokerage|individual|taxable",
-        "taxable"
-      ]
-    ]
-  },
-  "budget": {
-    "_help": "insights/budget.py: [transaction regex on 'payee | description', budget-line regex on 'category/item' of the 'income sheet' tab]; tried before the generic defaults in budget.py. Put your landlord, utilities and people you pay here.",
-    "rules": [
-      [
-        "EXAMPLE PROPERTY MGMT",
-        "rent"
-      ],
-      [
-        "ZELLE TRANSFER TO EXAMPLE PERSON",
-        "childcare"
-      ],
-      [
-        "EXAMPLE CITY UTILITIES",
-        "^bills/water"
-      ]
-    ]
-  },
-  "amazon": {
-    "_help": "insights/amazon.py: [item regex on 'department | product name', budget-line regex on 'category/item' of the 'income sheet' tab] for Amazon order items; tried before the generic ITEM_RULES. Put rules for your own hobbies, properties or brands here.",
-    "rules": [
-      [
-        "EXAMPLE HOBBY SUPPLY|example-brand",
-        "^fun/hobby"
-      ]
-    ]
-  },
-  "inherited_ira": {
-    "_help": "insights/inherited_ira.py (dashboard 'Inherited IRA'). account: v_accounts name LIKE pattern (default: BDA/INHERITED/BENEFICIARY). Facts: death_year of the original owner, owner_started_rmds true/false (null = unknown), your beneficiary_birth_year, optional owner_birth_year, growth_rate for the plan, optional year_end_balances {\"YYYY\": balance} when no Dec 31 snapshot exists.",
-    "account": "Example Inherited IRA%",
-    "death_year": null,
-    "owner_started_rmds": null,
-    "beneficiary_birth_year": null,
-    "owner_birth_year": null,
-    "growth_rate": 0.05,
-    "year_end_balances": {},
-    "manual_distributions": [
-      {
-        "date": "2026-04-15",
-        "amount": 5000
-      }
-    ]
-  },
-  "plaid": {
-    "client_user_id": "wealth-ledger-user"
-  },
-  "networth_history": {
-    "_help": "insights/nw_history.py (dashboard trend before the daily snapshots): Drive name of your yearly balance-sheet spreadsheets, each named '<name_query> YYYY' with a 'balance sheet' tab (dated columns, a 'Total Equity' row).",
-    "name_query": "Financial Statements"
-  },
-  "zelle_memos": {
-    "_help": "insights/zelle_memos.py: Gmail search for your bank's Zelle emails (default: zelle)",
-    "query": "zelle"
-  },
-  "backup": {
-    "_help": "bin/wealth-ledger-backup (run after each daily sync): gzipped copy of the database into dir, which should be on a different disk and must already exist. Keeps keep_days of dailies plus every 1st-of-month copy. Leave out to turn backups off.",
-    "dir": "/mnt/other-disk/backups/wealth-ledger",
-    "keep_days": 30
-  },
-  "simplefin_watch": {
-    "_help": "bin/simplefin-institution-check: search SimpleFIN's institution list for these queries; ignore maps a query to the exact result that is already known.",
-    "label": "the account you are waiting for",
-    "queries": [
-      "Example Card",
-      "Example Issuer"
-    ],
-    "ignore": {}
-  }
+   ["\\b(ira|roth|401\\(?k|403b|hsa|pre-tax|pension)\\b", "retirement"],
+   ["checking|savings|bank|cash|wallet", "cash"],
+   ["crypto|bitcoin", "crypto"],
+   ["metal|gold|silver", "metals"],
+   ["home|house|property", "realestate"],
+   ["car\\b|truck|vehicle", "vehicles"],
+   ["brokerage|individual|taxable", "taxable"]
+  ]
+ },
+ "budget": {
+  "_help": "insights/budget.py: [transaction regex on 'payee | description', budget-line regex on 'category/item' of the 'income sheet' tab]; tried before the generic defaults in budget.py. Put your landlord, utilities and people you pay here.",
+  "rules": [
+   ["EXAMPLE PROPERTY MGMT", "rent"],
+   ["ZELLE TRANSFER TO EXAMPLE PERSON", "childcare"],
+   ["EXAMPLE CITY UTILITIES", "^bills/water"]
+  ]
+ },
+ "amazon": {
+  "_help": "insights/amazon.py: [item regex on 'department | product name', budget-line regex on 'category/item' of the 'income sheet' tab] for Amazon order items; tried before the generic ITEM_RULES. Put rules for your own hobbies, properties or brands here.",
+  "rules": [
+   ["EXAMPLE HOBBY SUPPLY|example-brand", "^fun/hobby"]
+  ]
+ },
+ "inherited_ira": {
+  "_help": "insights/inherited_ira.py (dashboard 'Inherited IRA'). account: v_accounts name LIKE pattern (default: BDA/INHERITED/BENEFICIARY). Facts: death_year of the original owner, owner_started_rmds true/false (null = unknown), your beneficiary_birth_year, optional owner_birth_year, growth_rate for the plan, optional year_end_balances {\"YYYY\": balance} when no Dec 31 snapshot exists, optional manual_distributions [{date, amount}] for withdrawals from before the bank feed's history.",
+  "account": "Example Inherited IRA%",
+  "death_year": null,
+  "owner_started_rmds": null,
+  "beneficiary_birth_year": null,
+  "owner_birth_year": null,
+  "growth_rate": 0.05,
+  "year_end_balances": {},
+  "manual_distributions": [{"date": "2026-04-15", "amount": 5000}]
+ },
+ "plaid": {"client_user_id": "wealth-ledger-user"},
+ "networth_history": {"_help": "insights/nw_history.py (dashboard trend before the daily snapshots): Drive name of your yearly balance-sheet spreadsheets, each named '<name_query> YYYY' with a 'balance sheet' tab (dated columns, a 'Total Equity' row).", "name_query": "Financial Statements"},
+ "zelle_memos": {"_help": "insights/zelle_memos.py: Gmail search for your bank's Zelle emails (default: zelle)", "query": "zelle"},
+ "backup": {
+  "_help": "bin/wealth-ledger-backup (run after each daily sync): gzipped copy of the database into dir, which should be on a different disk and must already exist. Keeps keep_days of dailies plus every 1st-of-month copy. Leave out to turn backups off.",
+  "dir": "/mnt/other-disk/backups/wealth-ledger",
+  "keep_days": 30
+ },
+ "simplefin_watch": {
+  "_help": "bin/simplefin-institution-check: search SimpleFIN's institution list for these queries; ignore maps a query to the exact result that is already known.",
+  "label": "the account you are waiting for",
+  "queries": ["Example Card", "Example Issuer"],
+  "ignore": {}
+ }
 }
