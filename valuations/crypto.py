@@ -6,10 +6,11 @@ by one row per wallet (A = wallet, B = quantity) and "Total ..." rows. The tab's
 some coins out); that formula is parsed so the sheet's own number can be reproduced exactly.
 
 Quantity per (wallet, coin), best source first:
-  1. onchain       addresses / xpubs in ~/.config/wealth-ledger/crypto_wallets.json (+ xpubs found in the
-                   *.txt wallet exports in personal.json crypto.xpub_export_dir): BTC via mempool.space
-                   (blockstream.info fallback),
-                   ETH + ERC-20 USDT/USDC via public RPCs, TRX + TRC-20 USDT via TronGrid, SOL via Solana RPC
+  1. onchain       addresses / xpubs in ~/.config/wealth-ledger/crypto_wallets.json (+ bitcoin xpubs in the
+                   *.txt wallet exports and the wallet's own addresses in Exodus "*-addresses-*.csv" exports in
+                   personal.json crypto.xpub_export_dir): BTC via mempool.space (blockstream.info fallback),
+                   ETH + ERC-20 USDT/USDC via public RPCs, TRX + TRC-20 USDT via TronGrid, SOL via Solana RPC,
+                   ALGO via AlgoNode
   2. exchange-api  Gemini / Kraken / Coinbase private balance calls, only if read-only keys are in that file
   3. simplefin     exchange wallets synced into txns.db (kind='crypto'); networth.py counts them nowhere else
   4. sheet         the crypto tab's manual quantity
@@ -410,6 +411,7 @@ ERC20 = {"USDT": ("0xdAC17F958D2ee523a2206206994597C13D831ec7", 6),
          "USDC": ("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", 6)}
 TRC20 = {"USDT": ("TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t", 6)}
 SOL_RPCS = ["https://api.mainnet-beta.solana.com", "https://solana-rpc.publicnode.com"]
+ALGO_API = "https://mainnet-api.algonode.cloud/v2/accounts/"
 
 
 def eth_balances(addr: str) -> dict[str, float]:
@@ -438,6 +440,12 @@ def sol_balances(addr: str) -> dict[str, float]:
     if not re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]{32,44}", addr):
         raise ValueError("bad Solana address")
     return {"SOL": _rpc(SOL_RPCS, "getBalance", [addr])["value"] / 1e9}
+
+
+def algo_balances(addr: str) -> dict[str, float]:
+    if not re.fullmatch(r"[A-Z2-7]{58}", addr):
+        raise ValueError("bad Algorand address")
+    return {"ALGO": _req(ALGO_API + addr + "?exclude=all")["amount"] / 1e6}
 
 
 # ---------------------------------------------------------------- exchanges (read-only keys)
@@ -471,9 +479,10 @@ def gemini_sign(payload: dict, secret: str) -> tuple[str, str]:
 
 
 def gemini_balances(key: str, secret: str, account: str = "primary") -> tuple[dict[str, float], dict]:
-    """POST /v1/balances; time-based nonce in epoch seconds (must be within 30 s of Gemini's clock). A master
+    """POST /v1/balances; nonce in epoch milliseconds (Gemini rejects a nonce lower than the last one it saw for the
+    key, and other scripts with this key send milliseconds, so seconds would always be "too low"). A master
     (account-group) key must name the account it reads; an account-level key must not."""
-    payload = {"request": "/v1/balances", "nonce": str(int(time.time()))}
+    payload = {"request": "/v1/balances", "nonce": str(int(time.time() * 1000))}
     if key.startswith("master-"):
         payload["account"] = account
     b64, sig = gemini_sign(payload, secret)
@@ -552,6 +561,8 @@ TEMPLATE = {
     "_trx_example": [{"wallet": "Desktop", "address": "T... (TRX + TRC-20 USDT)"}],
     "sol": [],
     "_sol_example": [{"wallet": "Mobile", "address": "base58 address"}],
+    "algo": [],
+    "_algo_example": [{"wallet": "Mobile", "address": "58-character Algorand address"}],
     "gemini": {"api_key": "", "api_secret": "", "_note": "read-only key, Fund Management: balances only"},
     "kraken": {"api_key": "", "api_secret": "", "_note": "read-only key, Query Funds only"},
     "coinbase": {"key_file": "", "_note": "CDP API key file (View permission only), chmod 600"},
@@ -591,15 +602,35 @@ def xpub_export_dir() -> Path | None:
     return Path(d).expanduser() if d else None
 
 
+# a key export whose file name names one of these coins is that coin's key (Exodus exports every coin as "xpub..."),
+# not bitcoin: scanning it on the BTC chain would only find nothing
+OTHER_XPUB_COINS = re.compile(r"bitcoincash|bcash|bitcoinsv|bitcoingold|litecoin|dogecoin|zcash|digibyte|ravencoin"
+                              r"|dash|qtum|decred|(?<![a-z])(?:bch|bsv|btg|ltc|doge|zec|dgb|rvn)(?![a-z])")
+# Exodus address exports ("exodus_0-<asset>-addresses-<date>.csv") -> the chain the address is read on.
+# Other assets (bitcoin: covered by the xpub; BSC / Polygon tokens: no reader) are skipped.
+EXPORT_ADDRESS_CHAINS = {"ethereum": "eth", "tetherusd": "eth", "usdcoin": "eth",
+                         "tronmainnet": "trx", "tetherusd_tron": "trx",
+                         "solana": "sol", "tetherusd_solana": "sol", "algorand": "algo"}
+ADDRESS_RE = {"eth": r"0x[0-9a-fA-F]{40}", "trx": r"T[1-9A-HJ-NP-Za-km-z]{33}",
+              "sol": r"[1-9A-HJ-NP-Za-km-z]{32,44}", "algo": r"[A-Z2-7]{58}"}
+
+
+def _export_wallet(wallet: str | None) -> str:
+    return wallet or _crypto_cfg().get("xpub_export_wallet") or default_wallet()
+
+
 def export_entries(folder: Path | None = None, wallet: str | None = None) -> list[dict]:
-    """xpub/ypub/zpub keys in wallet-export .txt files -> btc config entries for `wallet`
-    (personal.json crypto.xpub_export_wallet). Addresses are not auto-imported: transaction exports also
-    contain other people's addresses."""
+    """bitcoin xpub/ypub/zpub keys in wallet-export .txt files -> btc config entries for `wallet`
+    (personal.json crypto.xpub_export_wallet). Files named after another coin (dogecoin, litecoin, bcash...)
+    are skipped. For addresses see export_address_entries."""
     out, seen, folder = [], set(), folder or xpub_export_dir()
     if not folder or not folder.is_dir():
         return out
-    wallet = wallet or _crypto_cfg().get("xpub_export_wallet") or default_wallet()
+    wallet = _export_wallet(wallet)
     for p in sorted(folder.glob("*.txt")):
+        if OTHER_XPUB_COINS.search(p.name.lower().replace("-", "").replace("_", "")) \
+                or OTHER_XPUB_COINS.search(p.name.lower()):
+            continue
         for k in re.findall(r"\b[xyz]pub[1-9A-HJ-NP-Za-km-z]{100,112}\b", p.read_text(errors="ignore")):
             if k not in seen:
                 try:
@@ -608,6 +639,33 @@ def export_entries(folder: Path | None = None, wallet: str | None = None) -> lis
                     continue
                 seen.add(k)
                 out.append({"wallet": wallet, "xpub": k, "_from": "xpub-exports"})
+    return out
+
+
+def export_address_entries(folder: Path | None = None, wallet: str | None = None) -> dict[str, list[dict]]:
+    """The wallet's own receive addresses from Exodus address exports ("*-addresses-*.csv": ADDRESS,PATH,BALANCE)
+    -> {chain: [config entries]}. Only the ADDRESS column of these files is read (never the balance, never
+    transaction exports, which also contain other people's addresses)."""
+    import csv
+    out: dict[str, list[dict]] = {}
+    folder = folder or xpub_export_dir()
+    if not folder or not folder.is_dir():
+        return out
+    wallet, seen = _export_wallet(wallet), set()
+    for p in sorted(folder.glob("*-addresses-*.csv")):
+        m = re.match(r"(?:.*?-)?([a-z0-9_]+)-addresses-", p.name.lower())
+        chain = EXPORT_ADDRESS_CHAINS.get(m.group(1)) if m else None
+        if not chain:
+            continue
+        try:
+            rows = list(csv.DictReader(p.read_text(errors="ignore").splitlines()))
+        except csv.Error:
+            continue
+        for r in rows:
+            a = str(r.get("ADDRESS") or "").strip()
+            if re.fullmatch(ADDRESS_RE[chain], a) and (chain, a.lower()) not in seen:
+                seen.add((chain, a.lower()))
+                out.setdefault(chain, []).append({"wallet": wallet, "address": a, "_from": "address-exports"})
     return out
 
 
@@ -625,6 +683,8 @@ def onchain_sources(cfg: dict, btc_lookup=None) -> tuple[list[dict], list[str]]:
     have = {key_id(e["xpub"]) for e in btc if e.get("xpub")}
     btc += [e for e in export_entries() if key_id(e["xpub"]) not in have]
     lookup = btc_lookup or BtcApi()
+    with_history: set[str] = set()   # wallets with at least one BTC key / address that has transactions
+    empty: list[tuple[str, int, str]] = []  # (wallet, n, note) for keys with no used addresses
     for n, e in enumerate(btc, 1):
         w = e.get("wallet") or default_wallet()
         try:
@@ -639,19 +699,37 @@ def onchain_sources(cfg: dict, btc_lookup=None) -> tuple[list[dict], list[str]]:
                     if not used and not kinds and not e.get("scripts") and e["xpub"].startswith("xpub") \
                             and "p2wpkh" not in names:
                         kinds = ["p2wpkh", "p2sh-p2wpkh"]
-                if not used:  # almost always a wrong key or script type; don't zero the wallet
-                    raise ValueError(f"no used addresses ({'+'.join(names)}); set \"scripts\" if the type is wrong")
+                if not used:  # decided after the loop: fine next to a key with history, else a wrong key/script
+                    empty.append((w, n, f"no used addresses ({'+'.join(names)}) of {checked} checked"))
+                    continue
                 note = f"{e['xpub'][:4]} #{n} ({'+'.join(names)}): {used} used of {checked} addresses checked"
+                with_history.add(wallet_name(w))
             else:
                 sats, txs = lookup(e["address"])
                 note = f"address #{n}"
+                if txs:
+                    with_history.add(wallet_name(w))
             out.append({"wallet": w, "chain": "btc", "source": "onchain", "coins": {"BTC"}, "qty": {"BTC": sats / 1e8},
                         "note": note})
         except Exception as ex:  # noqa: BLE001 - keep the sheet quantity for this wallet
             warns.append(f"BTC {w} #{n}: {ex}")
             failed.add((wallet_name(w), "btc"))
-    for chain, fn in (("eth", eth_balances), ("trx", trx_balances), ("sol", sol_balances)):
-        for n, e in enumerate(cfg.get(chain) or [], 1):
+    # A key with no used addresses is almost always a wrong key or script type, so on its own it must not zero
+    # the wallet. Next to another key of the same wallet that has history it is just an unused account (wallets
+    # export several), so it only adds a note.
+    for w, n, why in empty:
+        if wallet_name(w) in with_history:
+            out.append({"wallet": w, "chain": "btc", "source": "onchain", "coins": {"BTC"}, "qty": {"BTC": 0.0},
+                        "note": f"key #{n}: {why}, ignored (another key of this wallet has history)"})
+        else:
+            warns.append(f"BTC {w} #{n}: {why}; set \"scripts\" if the type is wrong")
+            failed.add((wallet_name(w), "btc"))
+    exported = export_address_entries()
+    for chain, fn in (("eth", eth_balances), ("trx", trx_balances), ("sol", sol_balances), ("algo", algo_balances)):
+        entries = list(cfg.get(chain) or [])
+        have = {str(e.get("address", "")).lower() for e in entries}
+        entries += [e for e in exported.get(chain, []) if e["address"].lower() not in have]
+        for n, e in enumerate(entries, 1):
             w = e.get("wallet") or default_wallet()
             try:
                 q = fn(e["address"])

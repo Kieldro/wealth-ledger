@@ -307,3 +307,79 @@ def test_coinbase_balances_sum_available_and_hold(monkeypatch):
         {"currency": "USD", "available_balance": {"value": "5.5"}}]})
     qty, _ = c.coinbase_balances("n", "k")
     assert qty == {"BTC": pytest.approx(0.12), "USD": 5.5}
+
+
+def test_empty_key_next_to_key_with_history_is_a_note(monkeypatch, tmp_path):
+    # wallets export several accounts; an unused one must not fail the wallet that has a used one
+    monkeypatch.setattr(c, "XPUB_EXPORT_DIR", tmp_path)
+    good = c.xpub_addresses(ZPUB, 0, 0, 1)[0]
+    cfg = {"btc": [{"wallet": "Hodl", "xpub": YPUB, "gap": 2}, {"wallet": "Hodl", "xpub": ZPUB, "gap": 2}]}
+    out, warns = c.onchain_sources(cfg, btc_lookup=lambda a: (7000, 2) if a == good else (0, 0))
+    assert warns == []
+    assert sum(e["qty"]["BTC"] for e in out if e["wallet"] == "Hodl") == 7000 / 1e8
+    assert any("no used addresses" in e["note"] and "ignored" in e["note"] for e in out)
+
+
+def test_all_keys_of_a_wallet_empty_falls_back_to_sheet(monkeypatch, tmp_path):
+    monkeypatch.setattr(c, "XPUB_EXPORT_DIR", tmp_path)
+    good = c.xpub_addresses(ZPUB, 0, 0, 1)[0]
+    cfg = {"btc": [{"wallet": "Hodl", "xpub": YPUB, "gap": 1}, {"wallet": "Hodl", "address": "bc1qnever"},
+                   {"wallet": "Mobile", "xpub": ZPUB, "gap": 1}]}  # history in another wallet doesn't count
+    out, warns = c.onchain_sources(cfg, btc_lookup=lambda a: (100, 1) if a == good else (0, 0))
+    assert [e["wallet"] for e in out] == ["Mobile"]
+    assert any("Hodl #1: no used addresses" in w for w in warns) and any("Hodl: lookup failed" in w for w in warns)
+
+
+def test_xpub_exports_skip_other_coins(tmp_path):
+    for name in ("w_0-dogecoin-xpub.txt", "w_0-litecoin-xpub.txt", "w_0-bcash-xpub.txt", "bitcoin-cash.txt",
+                 "keys_ltc.txt"):
+        (tmp_path / name).write_text(YPUB)
+    (tmp_path / "w_0-bitcoin-xpub.txt").write_text(ZPUB)
+    assert [e["xpub"] for e in c.export_entries(tmp_path, "Hodl")] == [ZPUB]
+
+
+TRX_A, SOL_A, ALGO_A, ETH_A = "T" + "A" * 33, "So1" + "b" * 40, "A" * 58, "0x" + "ab" * 20
+
+
+def test_address_exports_read_own_addresses_by_asset(tmp_path):
+    hdr = "ADDRESS,PATH,BALANCE\n"
+    files = {"w_0-tronmainnet-addresses-2026-01-01_00-00-00.csv": f"{TRX_A},m/0/0,1.5",
+             "w_0-tetherusd_tron-addresses-2026-01-01_00-00-00.csv": f"{TRX_A},m/0/0,9",  # same address: once
+             "w_0-solana-addresses-2026-01-01_00-00-00.csv": f"{SOL_A},m/0/0,0.1\nnot-an-address,m/0/1,5",
+             "w_0-algorand-addresses-2026-01-01_00-00-00.csv": f"{ALGO_A},m/0/0,3",
+             "w_0-tetherusd-addresses-2026-01-01_00-00-00.csv": f"{ETH_A},m/0/0,0",
+             "w_0-usdt_bsc_ddedf0f8-addresses-2026-01-01_00-00-00.csv": f"{ETH_A},m/0/0,0",   # no BSC reader
+             "w_0-bitcoin-addresses-2026-01-01_00-00-00.csv": "bc1qxyz,m/0/0,1",              # the xpub covers it
+             "w_0-solana-addresses-broken.csv": "\x00garbage"}
+    for name, body in files.items():
+        (tmp_path / name).write_text(hdr + body)
+    (tmp_path / "transactions.csv").write_text(hdr + f"{TRX_A},x,1")  # not an address export
+    got = c.export_address_entries(tmp_path, "Hodl")
+    assert {k: [e["address"] for e in v] for k, v in got.items()} == \
+        {"trx": [TRX_A], "sol": [SOL_A], "algo": [ALGO_A], "eth": [ETH_A]}
+    assert all(e["wallet"] == "Hodl" for v in got.values() for e in v)
+
+
+def test_address_exports_merge_with_config_without_double_count(monkeypatch, tmp_path):
+    (tmp_path / "w_0-tronmainnet-addresses-x.csv").write_text(f"ADDRESS,PATH,BALANCE\n{TRX_A},m/0/0,1")
+    monkeypatch.setattr(c, "XPUB_EXPORT_DIR", tmp_path)
+    monkeypatch.setattr(c, "_crypto_cfg", lambda: {"xpub_export_wallet": "Hodl"})
+    monkeypatch.setattr(c, "trx_balances", lambda a: {"TRX": 2.0, "USDT": 300.0})
+    monkeypatch.setattr(c, "algo_balances", lambda a: {"ALGO": 4.0})
+    out, warns = c.onchain_sources({"trx": [{"wallet": "Hodl", "address": TRX_A}],
+                                    "algo": [{"wallet": "Hodl", "address": ALGO_A}]}, btc_lookup=lambda a: (0, 0))
+    assert warns == [] and [(e["chain"], e["qty"]) for e in out] == \
+        [("trx", {"TRX": 2.0, "USDT": 300.0}), ("algo", {"ALGO": 4.0})]
+
+
+def test_trx_balances_count_trc20_usdt(monkeypatch):
+    monkeypatch.setattr(c, "_req", lambda *a, **k: {"data": [{"balance": 12_500_000, "trc20": [
+        {c.TRC20["USDT"][0]: "42000001"}, {"TOtherToken111111111111111111111": "5"}]}]})
+    assert c.trx_balances(TRX_A) == {"TRX": 12.5, "USDT": 42.000001}
+
+
+def test_algo_balances(monkeypatch):
+    monkeypatch.setattr(c, "_req", lambda url, *a, **k: {"amount": 3_250_000} if ALGO_A in url else {})
+    assert c.algo_balances(ALGO_A) == {"ALGO": 3.25}
+    with pytest.raises(ValueError):
+        c.algo_balances("bad")
