@@ -6,7 +6,7 @@
 
 Every path needs a login session (cookie) except /login, /logout (POST) and /robots.txt.
 Endpoints: /api/summary, POST /api/refresh (re-runs networth.py), /api/trend, /api/accounts,
-/api/holdings, /api/cards, /api/spending, /api/drafts (overdraft forecast), /api/budget (budget vs actual),
+/api/holdings, /api/crypto, /api/cards, /api/spending, /api/drafts (overdraft forecast), /api/budget (budget vs actual),
 /api/subscriptions (recurring charges + unusual charges), /api/rental (rental P&L),
 /api/inherited_ira (10-year rule tracker), /healthz. Page: /
 """
@@ -175,6 +175,12 @@ def period_changes(series: list[dict]) -> dict:
 
 
 # ---------- endpoints ----------
+def line_source(line: dict) -> str:
+    """live = synced balance; est = priced by valuations/ (spot, on-chain, exchange APIs, AVMs); sheet = typed in."""
+    f = line["from"]
+    return "live" if f.startswith("live") else "est" if f.startswith("estimate") else "sheet"
+
+
 def api_summary(params) -> dict:
     nw = networth(refresh="refresh" in params)
     data = nw["data"]
@@ -183,20 +189,20 @@ def api_summary(params) -> dict:
            "cache_ttl_s": CACHE_TTL}
     if not data:
         return res
-    cats = {k: {"key": k, "label": lbl, "type": t, "value": 0.0, "live": 0.0, "sheet": 0.0, "lines": []}
+    cats = {k: {"key": k, "label": lbl, "type": t, "value": 0.0, "live": 0.0, "est": 0.0, "sheet": 0.0, "lines": []}
             for k, lbl, t in CATEGORIES}
     for l in data["lines"]:
         if abs(l["used"] or 0) < 0.005:
             continue
         c = cats[categorize(l)]
         signed = l["used"] if l["type"] == "asset" else -l["used"]
-        live = l["from"].startswith("live")
+        src = line_source(l)
         c["value"] += signed
-        c["live" if live else "sheet"] += signed
-        c["lines"].append({"line": l["line"], "value": round(signed, 2), "source": "live" if live else "sheet"})
+        c[src] += signed
+        c["lines"].append({"line": l["line"], "value": round(signed, 2), "source": src})
     for c in cats.values():
         c["lines"].sort(key=lambda x: -abs(x["value"]))
-        for k in ("value", "live", "sheet"):
+        for k in ("value", "live", "est", "sheet"):
             c[k] = round(c[k], 2)
     sheet_const = round(sum((l["used"] if l["type"] == "asset" else -l["used"])
                             for l in data["lines"] if not l["from"].startswith("live")), 2)
@@ -348,6 +354,38 @@ def api_holdings(params) -> dict:
     return {"holdings": out, "total": round(total, 2), "count": len(out),
             "note": "Excludes custodial accounts and blank-symbol cash sweeps. SimpleFIN has no cost basis, so no gains. "
                     "Manual holdings are as of their last manual entry."}
+
+
+def api_crypto(params) -> dict:
+    """Every crypto holding from the latest valuations/crypto.py run, grouped by wallet and by coin."""
+    rows = q("SELECT snapshot_date, value, detail, fetched_at FROM v_valuations_latest "
+             "WHERE asset = 'Total cryptocurrency (USD)'")
+    if not rows:
+        return {"total": None, "wallets": [], "coins": []}
+    r = rows[0]
+    d = json.loads(r["detail"] or "{}")
+    wallets: dict[str, dict] = {}
+    for h in d.get("holdings") or []:
+        value, qty = h.get("value") or 0, h.get("qty") or 0
+        if abs(value) < 0.01 and not (h.get("price") is None and qty > 0):  # dust; keep an unpriced coin visible
+            continue
+        w = wallets.setdefault(h["wallet"], {"wallet": h["wallet"], "value": 0.0, "holdings": []})
+        if h.get("counted", True):
+            w["value"] += value
+        w["holdings"].append({"coin": h["coin"], "qty": qty, "price": h.get("price"), "value": round(value, 2),
+                              "qty_source": h.get("qty_source"), "counted": h.get("counted", True),
+                              "why_not_counted": h.get("why_not_counted")})
+    out = sorted(wallets.values(), key=lambda w: -w["value"])
+    for w in out:
+        w["value"] = round(w["value"], 2)
+        w["holdings"].sort(key=lambda h: (not h["counted"], -h["value"]))
+    total = r["value"] or 0
+    coins = sorted(({"coin": c, "qty": v.get("qty"), "price": v.get("price"), "value": round(v.get("value") or 0, 2),
+                     "pct": round(100 * (v.get("value") or 0) / total, 2) if total else 0}
+                    for c, v in (d.get("by_coin") or {}).items() if abs(v.get("value") or 0) >= 0.01),
+                   key=lambda c: -c["value"])
+    return {"total": round(total, 2), "as_of": r["snapshot_date"], "fetched_at": r["fetched_at"],
+            "sheet_total": d.get("sheet_total"), "wallets": out, "coins": coins, "warnings": d.get("warnings") or []}
 
 
 def api_cards(params) -> dict:
@@ -523,7 +561,7 @@ def api_spending(params) -> dict:
 
 
 ROUTES = {"/api/summary": api_summary, "/api/trend": api_trend, "/api/accounts": api_accounts,
-          "/api/holdings": api_holdings, "/api/cards": api_cards, "/api/spending": api_spending,
+          "/api/holdings": api_holdings, "/api/crypto": api_crypto, "/api/cards": api_cards, "/api/spending": api_spending,
           "/api/drafts": api_drafts, "/api/budget": api_budget, "/api/subscriptions": api_subscriptions,
           "/api/rental": api_rental, "/api/inherited_ira": api_inherited_ira, "/api/account_txns": api_account_txns}
 

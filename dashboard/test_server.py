@@ -269,3 +269,34 @@ def test_trend_benchmarks_are_overlays_not_units(dbfile, monkeypatch):
     assert b["prices"]["IXIC"] == [None] * len(b["dates"])
     assert "SPX" not in out["prices"] and "SPX" not in out["spot"] and "IXIC" not in out["spot"]
     json.dumps(out)
+
+
+def test_line_source_live_estimate_sheet():
+    assert server.line_source({"from": "live (2 accounts)"}) == "live"
+    assert server.line_source({"from": "estimate (spot)"}) == "est"
+    assert server.line_source({"from": "sheet"}) == "sheet"
+
+
+def test_crypto_groups_by_wallet_and_coin(dbfile):
+    detail = {"holdings": [
+        {"wallet": "W1", "coin": "BTC", "qty": 0.5, "price": 80000.0, "value": 40000.0, "qty_source": "onchain", "counted": True},
+        {"wallet": "W1", "coin": "DUST", "qty": 1e-9, "price": 1.0, "value": 0.0, "qty_source": "onchain", "counted": True},
+        {"wallet": "W2", "coin": "BTC", "qty": 0.25, "price": 80000.0, "value": 20000.0, "qty_source": "exchange-api", "counted": True},
+        {"wallet": "W2", "coin": "USD", "qty": 50.0, "price": 1.0, "value": 50.0, "qty_source": "exchange-api",
+         "counted": False, "why_not_counted": "own sheet line"},
+        {"wallet": "W2", "coin": "NEW", "qty": 3.0, "price": None, "value": 0.0, "qty_source": "exchange-api", "counted": False}],
+        "by_coin": {"BTC": {"qty": 0.75, "price": 80000.0, "value": 60000.0}}, "sheet_total": 59000.0, "warnings": ["no price for W2 NEW"]}
+    con = ctdb.connect(dbfile)
+    con.execute("INSERT INTO valuations VALUES (?,?,?,?,?,?)",
+                (TODAY, "Total cryptocurrency (USD)", 60000.0, "estimate", json.dumps(detail), TODAY))
+    con.commit()
+    con.close()
+    c = server.api_crypto({})
+    assert c["total"] == 60000.0 and c["sheet_total"] == 59000.0 and c["warnings"] == ["no price for W2 NEW"]
+    assert [(w["wallet"], w["value"]) for w in c["wallets"]] == [("W1", 40000.0), ("W2", 20000.0)]
+    assert [h["coin"] for h in c["wallets"][1]["holdings"]] == ["BTC", "USD", "NEW"]  # uncounted last, dust dropped
+    assert c["coins"] == [{"coin": "BTC", "qty": 0.75, "price": 80000.0, "value": 60000.0, "pct": 100.0}]
+
+
+def test_crypto_without_a_valuation(dbfile):
+    assert server.api_crypto({}) == {"total": None, "wallets": [], "coins": []}

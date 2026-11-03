@@ -98,6 +98,7 @@ tr.sub td:first-child { padding-left: 26px; }
 .badge { display: inline-block; font-size: 10.5px; font-weight: 600; padding: 1px 6px; border-radius: 5px; letter-spacing: .02em; text-transform: uppercase; white-space: nowrap; }
 .b-live { background: color-mix(in srgb, var(--pos) 16%, transparent); color: var(--pos); }
 .b-sheet { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+.b-est { background: color-mix(in srgb, var(--s1) 16%, transparent); color: var(--s1); }
 .b-mixed { background: var(--surface-2); color: var(--text-2); }
 .b-muted { background: var(--surface-2); color: var(--muted); }
 .b-stale { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); margin-right: 4px; }
@@ -229,7 +230,7 @@ footer code { font-size: 11.5px; }
   <div class="grid" style="margin-top:12px">
     <section class="card span-7">
       <div class="hd"><h2>Allocation</h2><span class="note">tap a row for its line items</span></div>
-      <p class="sub">Every balance-sheet line, grouped. <span class="badge b-live">live</span> = synced today; <span class="badge b-sheet">sheet</span> = as of the last manual update.</p>
+      <p class="sub">Every balance-sheet line, grouped. <span class="badge b-live">live</span> = synced today; <span class="badge b-est">est</span> = priced daily (spot, wallets, home/car estimates); <span class="badge b-sheet">sheet</span> = as of the last manual update.</p>
       <div class="alloc">
         <div class="donut"><canvas id="donut" aria-label="Asset allocation donut" role="img"></canvas><div class="c"><span class="note">assets</span><b id="donutc">—</b></div></div>
         <div class="tw"><table id="cats"></table></div>
@@ -260,6 +261,15 @@ footer code { font-size: 11.5px; }
       <p class="sub" id="holdsub">Same symbol combined across accounts.</p>
       <div class="tw"><table id="holds"></table></div>
       <p class="note" style="margin-top:8px"><button id="moreholds">Show all</button></p>
+    </section>
+
+    <section class="card span-12" id="cryptocard">
+      <div class="hd"><h2>Crypto</h2><span class="note" id="cryptonote"></span></div>
+      <p class="sub" id="cryptosub"></p>
+      <div class="cols2">
+        <div><h2>By wallet</h2><div class="tw"><table id="cwallets"></table></div></div>
+        <div><h2>By coin</h2><div class="tw"><table id="ccoins"></table></div></div>
+      </div>
     </section>
 
     <section class="card span-12" id="ira">
@@ -435,8 +445,9 @@ const KIND_LABEL = {hsa: "HSA", loan: "Loans", credit: "Credit cards", checking:
 let data = {};
 
 function srcBadge(c) {
-  if (c.sheet && c.live) return `<span class="badge b-mixed" title="${esc(f0(c.live))} live, ${esc(f0(c.sheet))} sheet">mixed</span>`;
-  return c.sheet ? '<span class="badge b-sheet">sheet</span>' : '<span class="badge b-live">live</span>';
+  const parts = ["live", "est", "sheet"].filter(k => c[k]);
+  if (parts.length > 1) return `<span class="badge b-mixed" title="${esc(parts.map(k => f0(c[k]) + " " + k).join(", "))}">mixed</span>`;
+  return `<span class="badge b-${parts[0] || "live"}">${parts[0] || "live"}</span>`;
 }
 
 function renderSummary(s) {
@@ -457,8 +468,8 @@ function renderSummary(s) {
   $("assets").textContent = f0(s.assets);
   $("liabs").textContent = f0(s.liabilities);
   const cats = s.categories;
-  const live = cats.filter(c => c.type === "asset").reduce((a, c) => a + c.live, 0);
-  $("assetsnote").textContent = `${compact(live)} live · ${compact(s.assets - live)} sheet`;
+  const assetCats = cats.filter(c => c.type === "asset"), sumOf = k => assetCats.reduce((a, c) => a + (c[k] || 0), 0);
+  $("assetsnote").textContent = `${compact(sumOf("live"))} live · ${compact(sumOf("est"))} est · ${compact(sumOf("sheet"))} sheet`;
   const mort = cats.find(c => c.key === "mortgage"), cardsC = cats.find(c => c.key === "cards");
   $("liabsnote").textContent = `Mortgage ${compact(-mort.value)} · cards ${compact(-cardsC.value)}`;
   // MTD/YTD only appear once history reaches back to the previous month-/year-end
@@ -543,7 +554,7 @@ function syncUnit() {
   $("unitprice").textContent = sp ? priceAt(sp.usd, cur) : "";
   $("unitprice").title = sp ? `Every value is converted at this price${sp.date ? " (" + sp.date + ")" : ""}${sp.source ? ", source: " + sp.source : ""}` : "";
 }
-const RENDER = {summary: renderSummary, accounts: renderAccounts, holdings: renderHoldings, cards: renderCards, spending: renderSpending,
+const RENDER = {summary: renderSummary, accounts: renderAccounts, holdings: renderHoldings, crypto: renderCrypto, cards: renderCards, spending: renderSpending,
   drafts: renderDrafts, budget: renderBudget, subscriptions: renderSubscriptions, rental: renderRental, inherited: renderInherited};
 function renderAll() {
   if (data.trend) renderTrend(data.trend);
@@ -829,6 +840,38 @@ function renderHoldings(hd) {
   $("holds").innerHTML = h + "</tbody>";
   $("moreholds").textContent = holdLimit < hd.holdings.length ? `Show all ${hd.holdings.length}` : "Show top 15";
   $("moreholds").onclick = () => { holdLimit = holdLimit < hd.holdings.length ? 999 : 15; renderHoldings(hd); };
+}
+
+// coin amounts: more decimals the smaller the amount (0.75001309 BTC, 307.94 USDT, 4,213 DOGE)
+const qtyFmt = q => q == null ? "—" : q.toLocaleString("en-US", {maximumFractionDigits: q < 1 ? 8 : q < 1000 ? 4 : 0});
+const priceFmt = p => p == null ? "no price" : p < 1 ? "$" + p.toLocaleString("en-US", {maximumSignificantDigits: 4}) : (p < 100 ? usd2 : usd0).format(p);
+const QTY_SRC = {onchain: ["on-chain", "b-live", "Amount read from the blockchain"],
+  "exchange-api": ["exchange", "b-live", "Amount read from the exchange's API"],
+  sheet: ["sheet", "b-sheet", "Amount typed in the crypto tab of the sheet"]};
+function renderCrypto(c) {
+  if (c.total == null) { $("cryptosub").textContent = "No crypto valuation yet (valuations/crypto.py runs in the daily sync)."; return; }
+  $("cryptonote").textContent = `priced ${fmtTime(c.fetched_at)}`;
+  $("cryptosub").textContent = `${f0(c.total)} across ${c.wallets.length} wallets` +
+    (c.sheet_total ? ` (sheet says ${f0(c.sheet_total)}).` : ".") +
+    " Exchange USD cash is shown dimmed and counted as its own balance-sheet line, not in this total." +
+    c.warnings.map(w => " " + w[0].toUpperCase() + w.slice(1) + ".").join("");
+  let h = `<thead><tr><th>Coin</th><th class="r">Amount</th><th class="r hide-sm">Price</th><th class="r">Value</th><th class="r">Source</th></tr></thead><tbody>`;
+  for (const w of c.wallets) {
+    h += `<tr class="group"><td colspan="3">${esc(w.wallet)}</td><td class="r">${f0(w.value)}</td><td></td></tr>`;
+    for (const r of w.holdings) {
+      const [lbl, cls, tip] = QTY_SRC[r.qty_source] || [r.qty_source || "?", "b-muted", ""];
+      h += `<tr class="${r.counted ? "" : "dim"}"${r.counted ? "" : ` title="${esc(r.why_not_counted || "not counted")}"`}><td><b>${esc(r.coin)}</b></td>
+        <td class="r">${qtyFmt(r.qty)}</td><td class="r hide-sm">${priceFmt(r.price)}</td><td class="r">${f2(r.value)}</td>
+        <td class="r"><span class="badge ${cls}" title="${esc(tip)}">${lbl}</span></td></tr>`;
+    }
+  }
+  $("cwallets").innerHTML = h + "</tbody>";
+  const max = c.coins[0]?.value || 1;
+  let k = `<thead><tr><th>Coin</th><th class="r">Amount</th><th class="r">Value</th><th class="r">%</th><th class="bart hide-sm"></th></tr></thead><tbody>`;
+  for (const r of c.coins) k += `<tr><td><b>${esc(r.coin)}</b><div class="note">${priceFmt(r.price)}</div></td><td class="r">${qtyFmt(r.qty)}</td>
+    <td class="r">${f0(r.value)}</td><td class="r">${r.pct.toFixed(1)}%</td>
+    <td class="bart hide-sm"><div class="bar" style="width:${(100 * r.value / max).toFixed(1)}%;background:var(--s4)"></div></td></tr>`;
+  $("ccoins").innerHTML = k + `<tr class="total"><td>Total</td><td></td><td class="r">${f0(c.total)}</td><td></td><td class="hide-sm"></td></tr></tbody>`;
 }
 
 const owedCell = v => v < 0 ? `<span class="amt-pos" title="credit balance">${f2(-v)} cr</span>` : f2(v);
@@ -1185,7 +1228,7 @@ async function load(refresh = false) {
   const parts = {
     summary: ["/api/summary", renderSummary],
     trend: ["/api/trend", renderTrend], accounts: ["/api/accounts", renderAccounts],
-    holdings: ["/api/holdings", renderHoldings], cards: ["/api/cards", renderCards], spending: ["/api/spending", renderSpending],
+    holdings: ["/api/holdings", renderHoldings], crypto: ["/api/crypto", renderCrypto], cards: ["/api/cards", renderCards], spending: ["/api/spending", renderSpending],
     drafts: ["/api/drafts", renderDrafts], budget: ["/api/budget", renderBudget],
     subscriptions: ["/api/subscriptions", renderSubscriptions], rental: ["/api/rental", renderRental],
     inherited: ["/api/inherited_ira", renderInherited],
