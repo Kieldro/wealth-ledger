@@ -146,3 +146,16 @@ def test_life_table_matches_pub_590b_spot_values():
     for age, f in ((0, 84.6), (30, 55.3), (42, 43.8), (59, 28.0), (60, 27.1), (73, 16.4), (90, 5.7), (120, 1.0)):
         assert ira.life_expectancy(age) == f
     assert ira.life_expectancy(130) == 1.0
+
+
+def test_manual_distributions_fill_in_before_synced_history(led):
+    led.balance(TODAY, 90000)
+    led.txn(date(2026, 8, 1), -1000, "PARTIAL DISTRIBUTION (Cash)")  # synced history starts here
+    cfg = dict(CFG, manual_distributions=[
+        {"date": "2026-04-15", "amount": 5000},     # before the feed's history: counted
+        {"date": "2026-08-01", "amount": 1000},     # the feed has it already: ignored (no double count)
+        {"date": "2025-06-01", "amount": 7000},     # another year
+        {"date": "bad", "amount": 1}, {"amount": 2}])
+    ty = led.report(cfg)["this_year"]
+    assert ty["taken"] == 6000 and [r["amount"] for r in ty["rows"]] == [5000, 1000]
+    assert "entered by hand" in ty["rows"][0]["description"]

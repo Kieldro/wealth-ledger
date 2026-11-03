@@ -18,6 +18,8 @@ Facts about the owner live in personal.json (outside the repo), key "inherited_i
   owner_birth_year       optional; the owner's remaining life expectancy is used if it is longer
   growth_rate            assumed annual return for the level plan (default 0.05)
   year_end_balances      optional {"YYYY": balance} when no Dec 31 snapshot exists (RMDs use the prior Dec 31 value)
+  manual_distributions   optional [{"date": "YYYY-MM-DD", "amount": n}] withdrawals from before the synced history
+                         starts (the bank feed only goes back ~90 days); ones on/after that date are ignored
 
   python -m insights.inherited_ira [--json]
 Never sends notifications (owner's rule).
@@ -78,6 +80,13 @@ def _year(v) -> int | None:
     return v if isinstance(v, int) and not isinstance(v, bool) and 1900 <= v <= 2100 else None
 
 
+def _iso(v) -> bool:
+    try:
+        return isinstance(v, str) and bool(date.fromisoformat(v))
+    except ValueError:
+        return False
+
+
 def parse_settings(raw: dict, where: str = "personal.json") -> tuple[dict, list[dict]]:
     """Validated settings plus a list of {key, msg} for every missing or invalid fact."""
     missing = []
@@ -87,13 +96,16 @@ def parse_settings(raw: dict, where: str = "personal.json") -> tuple[dict, list[
          "owner_birth_year": _year(raw.get("owner_birth_year")),
          "owner_started_rmds": raw.get("owner_started_rmds") if isinstance(raw.get("owner_started_rmds"), bool)
          else None,
-         "year_end_balances": {}}
+         "year_end_balances": {}, "manual_distributions": []}
     g = raw.get("growth_rate", DEFAULT_GROWTH)
     s["growth_rate"] = float(g) if isinstance(g, (int, float)) and not isinstance(g, bool) and -0.5 < g < 0.5 \
         else DEFAULT_GROWTH
     for y, v in (raw.get("year_end_balances") or {}).items() if isinstance(raw.get("year_end_balances"), dict) else ():
         if isinstance(v, (int, float)) and not isinstance(v, bool):
             s["year_end_balances"][str(y)] = float(v)
+    for d in raw.get("manual_distributions") or [] if isinstance(raw.get("manual_distributions"), list) else ():
+        if isinstance(d, dict) and isinstance(d.get("amount"), (int, float)) and _iso(d.get("date")):
+            s["manual_distributions"].append({"date": d["date"], "amount": round(float(d["amount"]), 2)})
     if s["death_year"] is None:
         missing.append({"key": "death_year", "msg": f"Set {KEY}.death_year (year the original owner died) in {where} "
                                                    "to get the deadline and plan."})
@@ -227,8 +239,11 @@ def report(con: sqlite3.Connection, today: date | None = None, raw: dict | None 
     res["trend"] = trend
 
     rows = distributions(con, acct["account_id"], f"{y}-01-01", f"{y}-12-31")
-    taken = round(sum(r["amount"] for r in rows), 2)
     hist = con.execute("SELECT MIN(date) FROM v_ledger WHERE account_id=?", (acct["account_id"],)).fetchone()[0]
+    rows = sorted(rows + [{**d, "description": f"entered by hand ({KEY}.manual_distributions)", "pending": False}
+                          for d in cfg["manual_distributions"]
+                          if d["date"].startswith(str(y)) and (not hist or d["date"] < hist)], key=lambda r: r["date"])
+    taken = round(sum(r["amount"] for r in rows), 2)
     res["this_year"] = {"year": y, "taken": taken, "rows": rows, "history_starts": hist,
                         "partial": bool(hist and hist > f"{y}-01-01")}
 
