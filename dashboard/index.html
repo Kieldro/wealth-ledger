@@ -168,6 +168,10 @@ td.neg { color: var(--neg); font-weight: 600; }
 .nwunit { font-size: 12px; color: var(--text-2); margin: -3px 0 6px; }
 .nwunit:empty { display: none; }
 .cols2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.stack { display: flex; height: 14px; border-radius: 7px; overflow: hidden; margin: 8px 0 6px; background: var(--surface-2); }
+.stack span { display: block; min-width: 2px; }
+.stack span + span { border-left: 2px solid var(--surface); }
+.cdot, .legend i.cdot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
 .cols2 > * { min-width: 0; }  /* a wide table scrolls in its .tw instead of widening the column */
 .toggle { font-size: 12px; color: var(--text-2); display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
 /* budget vs actual */
@@ -267,7 +271,14 @@ footer code { font-size: 11.5px; }
     <section class="card span-12" id="cryptocard">
       <div class="hd"><h2>Crypto</h2><span class="note" id="cryptonote"></span></div>
       <p class="sub" id="cryptosub"></p>
-      <div class="cols2">
+      <div id="btcwhere">
+        <h2>Where your Bitcoin is</h2>
+        <p class="sub" id="btcsub"></p>
+        <div class="stack" id="btcstack" role="img"></div>
+        <div class="legend" id="btclegend" style="margin-bottom:10px"></div>
+        <div class="tw"><table id="btcloc"></table></div>
+      </div>
+      <div class="cols2" style="margin-top:14px">
         <div><h2>By wallet</h2><div class="tw"><table id="cwallets"></table></div></div>
         <div><h2>By coin</h2><div class="tw"><table id="ccoins"></table></div></div>
       </div>
@@ -891,8 +902,35 @@ function renderCrypto(c) {
   for (const r of c.coins) k += `<tr><td><b>${esc(r.coin)}</b><div class="note">${priceFmt(r.price)}</div></td><td class="r">${qtyFmt(r.qty)}</td>
     <td class="r">${f0(r.value)}</td><td class="r">${r.pct.toFixed(1)}%</td>
     <td class="bart hide-sm"><div class="bar" style="width:${(100 * r.value / max).toFixed(1)}%;background:var(--s4)"></div></td></tr>`;
+  renderBtcWhere(c.btc);
   renderCryptoTransfers(c.transfers || []);
   $("ccoins").innerHTML = k + `<tr class="total"><td>Total</td><td></td><td class="r">${f0(c.total)}</td><td></td><td class="hide-sm"></td></tr></tbody>`;
+}
+
+// self-custody = keys Ian holds; exchange = an exchange holds the coins; fund = a spot bitcoin ETF share in an account
+const BTC_TYPES = {"self-custody": ["Self-custody", "var(--s3)", "You hold the keys"],
+  exchange: ["Exchange", "var(--s4)", "The exchange holds the coins for you"],
+  fund: ["Fund", "var(--s1)", "Bitcoin fund shares (ETF) in a brokerage or IRA account; BTC is the equivalent at today's price"]};
+function renderBtcWhere(b) {
+  $("btcwhere").hidden = !b || !b.locations.length;
+  if (!b || !b.locations.length) return;
+  const btc = q => q == null ? "—" : q.toLocaleString("en-US", {minimumFractionDigits: 4, maximumFractionDigits: q < 0.01 ? 8 : 4});
+  $("btcsub").textContent = `${btc(b.btc)} BTC ≈ ${f0(b.value)} at ${priceFmt(b.price)}. ` +
+    "Fund amounts are BTC-equivalent (fund value ÷ BTC price).";
+  const types = b.by_type.filter(t => t.value > 0);
+  $("btcstack").innerHTML = types.map(t => `<span style="width:${t.pct}%;background:${BTC_TYPES[t.type]?.[1] || "var(--muted)"}" title="${esc(BTC_TYPES[t.type]?.[0] || t.type)}: ${btc(t.btc)} BTC · ${t.pct.toFixed(1)}%"></span>`).join("");
+  $("btcstack").setAttribute("aria-label", types.map(t => `${BTC_TYPES[t.type]?.[0] || t.type} ${t.pct.toFixed(0)}%`).join(", "));
+  $("btclegend").innerHTML = types.map(t => `<span title="${esc(BTC_TYPES[t.type]?.[2] || "")}"><i class="cdot" style="background:${BTC_TYPES[t.type]?.[1] || "var(--muted)"}"></i><b>${esc(BTC_TYPES[t.type]?.[0] || t.type)}</b> ${btc(t.btc)} BTC · ${f0(t.value)} · ${t.pct.toFixed(1)}%</span>`).join("");
+  const max = b.locations[0]?.value || 1;
+  let h = `<thead><tr><th>Where</th><th class="hide-sm">Type</th><th class="r">BTC</th><th class="r">Value</th><th class="r">%</th><th class="bart hide-sm"></th></tr></thead><tbody>`;
+  for (const x of b.locations.filter(x => x.value >= 1)) {  // skip exchange dust
+    const [lbl, color, tip] = BTC_TYPES[x.type] || [x.type, "var(--muted)", ""];
+    h += `<tr><td><i class="cdot" style="background:${color}" title="${esc(lbl)}"></i><b>${esc(x.where)}</b>${x.symbol ? ` <span class="note">${esc(x.symbol)}</span>` : ""}</td>
+      <td class="hide-sm" title="${esc(tip)}">${lbl}</td>
+      <td class="r">${x.type === "fund" ? "≈ " : ""}${btc(x.btc)}</td><td class="r">${f0(x.value)}</td><td class="r">${x.pct.toFixed(1)}%</td>
+      <td class="bart hide-sm"><div class="bar" style="width:${(100 * x.value / max).toFixed(1)}%;background:${color}"></div></td></tr>`;
+  }
+  $("btcloc").innerHTML = h + `<tr class="total"><td>Total</td><td class="hide-sm"></td><td class="r">${btc(b.btc)}</td><td class="r">${f0(b.value)}</td><td></td><td class="hide-sm"></td></tr></tbody>`;
 }
 
 let ctxLimit = 25;

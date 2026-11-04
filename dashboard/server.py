@@ -384,9 +384,47 @@ def api_crypto(params) -> dict:
                      "pct": round(100 * (v.get("value") or 0) / total, 2) if total else 0}
                     for c, v in (d.get("by_coin") or {}).items() if abs(v.get("value") or 0) >= 0.01),
                    key=lambda c: -c["value"])
+    btc_price = (d.get("by_coin") or {}).get("BTC", {}).get("price")
     return {"total": round(total, 2), "as_of": r["snapshot_date"], "fetched_at": r["fetched_at"],
             "sheet_total": d.get("sheet_total"), "wallets": out, "coins": coins, "warnings": d.get("warnings") or [],
-            "transfers": crypto_transfers()}
+            "btc": btc_locations(out, btc_price), "transfers": crypto_transfers()}
+
+
+# Spot bitcoin funds (Grayscale's Mini Trust trades as "BTC"); held in brokerage/IRA accounts, not wallets.
+BTC_FUNDS = {"FBTC", "IBIT", "GBTC", "BTC", "BITB", "ARKB", "HODL", "BRRR", "EZBC", "BTCO", "BTCW"}
+EXCHANGES = {"Gemini", "Coinbase", "Kraken", "Binance", "Fidelity Crypto", "Cash App", "Strike", "River"}
+
+
+def btc_locations(wallets: list[dict], btc_price: float | None) -> dict:
+    """Where Ian's bitcoin is: wallets (self-custody or exchange) plus bitcoin funds in brokerage/IRA accounts,
+    as BTC-equivalent at today's price (fund value / BTC price; close enough, the funds track spot)."""
+    rows = [{"where": w["wallet"], "type": "exchange" if w["wallet"] in EXCHANGES else "self-custody",
+             "btc": h["qty"], "value": h["value"], "source": h["qty_source"]}
+            for w in wallets for h in w["holdings"] if h["coin"] == "BTC" and h["counted"] and h["qty"]]
+    funds = q(f"""SELECT h.account_name, h.symbol, SUM(h.value) value, MIN(h.snapshot_date) as_of
+                  FROM v_holdings_latest h JOIN account_kind k USING (account_id)
+                  WHERE h.symbol IN ({",".join("?" * len(BTC_FUNDS))}) AND k.kind IN ('investment', 'retirement')
+                    AND h.value > 0
+                  GROUP BY h.account_name, h.symbol""", sorted(BTC_FUNDS))
+    for f in funds:
+        rows.append({"where": re.sub(r"\s*\([0-9a-f]{8}-[0-9a-f-]+\)$", "", f["account_name"] or ""), "symbol": f["symbol"],
+                     "type": "fund", "btc": f["value"] / btc_price if btc_price else None,
+                     "value": round(f["value"], 2), "source": "fund", "as_of": f["as_of"]})
+    rows.sort(key=lambda x: -x["value"])
+    total_value = sum(x["value"] for x in rows)
+    total_btc = sum(x["btc"] or 0 for x in rows)
+    for x in rows:
+        x["pct"] = round(100 * x["value"] / total_value, 2) if total_value else 0
+    by_type = {}
+    for x in rows:
+        t = by_type.setdefault(x["type"], {"type": x["type"], "btc": 0.0, "value": 0.0})
+        t["btc"] += x["btc"] or 0
+        t["value"] += x["value"]
+    types = sorted(by_type.values(), key=lambda t: -t["value"])
+    for t in types:
+        t["pct"] = round(100 * t["value"] / total_value, 2) if total_value else 0
+        t["value"] = round(t["value"], 2)
+    return {"price": btc_price, "btc": total_btc, "value": round(total_value, 2), "locations": rows, "by_type": types}
 
 
 def crypto_transfers() -> list[dict]:

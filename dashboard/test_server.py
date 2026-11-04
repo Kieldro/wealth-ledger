@@ -296,6 +296,28 @@ def test_crypto_groups_by_wallet_and_coin(dbfile):
     assert [(w["wallet"], w["value"]) for w in c["wallets"]] == [("W1", 40000.0), ("W2", 20000.0)]
     assert [h["coin"] for h in c["wallets"][1]["holdings"]] == ["BTC", "USD", "NEW"]  # uncounted last, dust dropped
     assert c["coins"] == [{"coin": "BTC", "qty": 0.75, "price": 80000.0, "value": 60000.0, "pct": 100.0}]
+    assert [(x["where"], x["type"], x["btc"]) for x in c["btc"]["locations"]] == [
+        ("W1", "self-custody", 0.5), ("W2", "self-custody", 0.25)]
+
+
+def test_btc_locations_add_bitcoin_funds(dbfile):
+    con = ctdb.connect(dbfile)
+    for aid, kind in (("ira", "retirement"), ("kid", "custodial"), ("cb", "crypto")):
+        con.execute("INSERT INTO account_kind VALUES (?,?,NULL)", (aid, kind))
+    con.executemany("INSERT INTO holdings VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", [
+        (TODAY, "simplefin", "ira", "IRA (1234)", "Fid", "k1", "FBTC", "Fidelity Bitcoin", "100", "80", "8000", None, "USD"),
+        (TODAY, "simplefin", "ira", "IRA (1234)", "Fid", "k2", "VTI", "Total market", "10", "300", "3000", None, "USD"),
+        (TODAY, "simplefin", "kid", "UTMA (1)", "Fid", "k3", "FBTC", "Fidelity Bitcoin", "1", "80", "80", None, "USD"),
+        (TODAY, "simplefin", "cb", "Wallet (ab-12)", "CB", "k4", "BTC", "Bitcoin", "0.1", "0", "0", None, "USD")])
+    con.commit()
+    con.close()
+    wallets = [{"wallet": "Coinbase", "holdings": [
+        {"coin": "BTC", "qty": 0.05, "value": 4000.0, "qty_source": "exchange-api", "counted": True}]}]
+    b = server.btc_locations(wallets, 80000.0)
+    assert [(x["where"], x["type"], x["btc"], round(x["pct"])) for x in b["locations"]] == [
+        ("IRA (1234)", "fund", 0.1, 67), ("Coinbase", "exchange", 0.05, 33)]  # custodial + crypto-kind rows skipped
+    assert b["btc"] == pytest.approx(0.15) and b["value"] == 12000.0
+    assert [t["type"] for t in b["by_type"]] == ["fund", "exchange"]
 
 
 def test_crypto_without_a_valuation(dbfile):
