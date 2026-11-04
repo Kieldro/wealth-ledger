@@ -915,22 +915,33 @@ function renderBtcWhere(b) {
   $("btcwhere").hidden = !b || !b.locations.length;
   if (!b || !b.locations.length) return;
   const btc = q => q == null ? "—" : q.toLocaleString("en-US", {minimumFractionDigits: 4, maximumFractionDigits: q < 0.01 ? 8 : 4});
-  $("btcsub").textContent = `${btc(b.btc)} BTC ≈ ${f0(b.value)} at ${priceFmt(b.price)}. ` +
-    "Fund amounts are BTC-equivalent (fund value ÷ BTC price).";
-  const types = b.by_type.filter(t => t.value > 0);
-  $("btcstack").innerHTML = types.map(t => `<span style="width:${t.pct}%;background:${BTC_TYPES[t.type]?.[1] || "var(--muted)"}" title="${esc(BTC_TYPES[t.type]?.[0] || t.type)}: ${btc(t.btc)} BTC · ${t.pct.toFixed(1)}%"></span>`).join("");
-  $("btcstack").setAttribute("aria-label", types.map(t => `${BTC_TYPES[t.type]?.[0] || t.type} ${t.pct.toFixed(0)}%`).join(", "));
-  $("btclegend").innerHTML = types.map(t => `<span title="${esc(BTC_TYPES[t.type]?.[2] || "")}"><i class="cdot" style="background:${BTC_TYPES[t.type]?.[1] || "var(--muted)"}"></i><b>${esc(BTC_TYPES[t.type]?.[0] || t.type)}</b> ${btc(t.btc)} BTC · ${f0(t.value)} · ${t.pct.toFixed(1)}%</span>`).join("");
-  const max = b.locations[0]?.value || 1;
-  let h = `<thead><tr><th>Where</th><th class="hide-sm">Type</th><th class="r">BTC</th><th class="r">Value</th><th class="r">%</th><th class="bart hide-sm"></th></tr></thead><tbody>`;
-  for (const x of b.locations.filter(x => x.value >= 1)) {  // skip exchange dust
-    const [lbl, color, tip] = BTC_TYPES[x.type] || [x.type, "var(--muted)", ""];
-    h += `<tr><td><i class="cdot" style="background:${color}" title="${esc(lbl)}"></i><b>${esc(x.where)}</b>${x.symbol ? ` <span class="note">${esc(x.symbol)}</span>` : ""}</td>
+  const sum = (xs, k) => xs.reduce((a, x) => a + (x[k] || 0), 0);
+  // coins Ian owns (wallets + exchanges) vs bitcoin fund shares: funds are exposure, not bitcoin he holds
+  const coins = b.locations.filter(x => x.type !== "fund" && x.value >= 1), funds = b.locations.filter(x => x.type === "fund");
+  const cBtc = sum(coins, "btc"), cVal = sum(coins, "value"), fBtc = sum(funds, "btc"), fVal = sum(funds, "value");
+  $("btcsub").textContent = `You own ${btc(cBtc)} BTC ≈ ${f0(cVal)} at ${priceFmt(b.price)}.` +
+    (funds.length ? ` Separately, bitcoin funds in your brokerage/IRA accounts give ≈ ${btc(fBtc)} BTC of exposure (${f0(fVal)}); those are fund shares, not coins.` : "");
+  const types = b.by_type.filter(t => t.type !== "fund" && t.value > 0);
+  const pctOf = v => cVal ? 100 * v / cVal : 0;
+  $("btcstack").innerHTML = types.map(t => `<span style="width:${pctOf(t.value)}%;background:${BTC_TYPES[t.type]?.[1] || "var(--muted)"}" title="${esc(BTC_TYPES[t.type]?.[0] || t.type)}: ${btc(t.btc)} BTC · ${pctOf(t.value).toFixed(1)}%"></span>`).join("");
+  $("btcstack").setAttribute("aria-label", types.map(t => `${BTC_TYPES[t.type]?.[0] || t.type} ${pctOf(t.value).toFixed(0)}%`).join(", "));
+  $("btclegend").innerHTML = types.map(t => `<span title="${esc(BTC_TYPES[t.type]?.[2] || "")}"><i class="cdot" style="background:${BTC_TYPES[t.type]?.[1] || "var(--muted)"}"></i><b>${esc(BTC_TYPES[t.type]?.[0] || t.type)}</b> ${btc(t.btc)} BTC · ${f0(t.value)} · ${pctOf(t.value).toFixed(1)}%</span>`).join("");
+  const max = Math.max(...b.locations.map(x => x.value), 1);
+  const row = (x, pct) => { const [lbl, color, tip] = BTC_TYPES[x.type] || [x.type, "var(--muted)", ""];
+    return `<tr><td><i class="cdot" style="background:${color}" title="${esc(lbl)}"></i><b>${esc(x.where)}</b>${x.symbol ? ` <span class="note">${esc(x.symbol)}</span>` : ""}</td>
       <td class="hide-sm" title="${esc(tip)}">${lbl}</td>
-      <td class="r">${x.type === "fund" ? "≈ " : ""}${btc(x.btc)}</td><td class="r">${f0(x.value)}</td><td class="r">${x.pct.toFixed(1)}%</td>
-      <td class="bart hide-sm"><div class="bar" style="width:${(100 * x.value / max).toFixed(1)}%;background:${color}"></div></td></tr>`;
+      <td class="r">${x.type === "fund" ? "≈ " : ""}${btc(x.btc)}</td><td class="r">${f0(x.value)}</td><td class="r">${pct.toFixed(1)}%</td>
+      <td class="bart hide-sm"><div class="bar" style="width:${(100 * x.value / max).toFixed(1)}%;background:${color}"></div></td></tr>`; };
+  const subtotal = (label, q, v, approx) => `<tr class="total"><td>${label}</td><td class="hide-sm"></td><td class="r">${approx ? "≈ " : ""}${btc(q)}</td><td class="r">${f0(v)}</td><td></td><td class="hide-sm"></td></tr>`;
+  let h = `<thead><tr><th>Where</th><th class="hide-sm">Type</th><th class="r">BTC</th><th class="r">Value</th><th class="r">%</th><th class="bart hide-sm"></th></tr></thead><tbody>`;
+  for (const x of coins) h += row(x, pctOf(x.value));
+  h += subtotal("Bitcoin you own", cBtc, cVal, false);
+  if (funds.length) {
+    h += `<tr class="group"><td colspan="6">Bitcoin funds: shares, not coins (BTC = fund value ÷ BTC price)</td></tr>`;
+    for (const x of funds) h += row(x, fVal ? 100 * x.value / fVal : 0);
+    h += subtotal("Fund exposure", fBtc, fVal, true);
   }
-  $("btcloc").innerHTML = h + `<tr class="total"><td>Total</td><td class="hide-sm"></td><td class="r">${btc(b.btc)}</td><td class="r">${f0(b.value)}</td><td></td><td class="hide-sm"></td></tr></tbody>`;
+  $("btcloc").innerHTML = h + "</tbody>";
 }
 
 let ctxLimit = 25;
