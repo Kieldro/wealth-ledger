@@ -392,3 +392,13 @@ def test_summary_shows_networth_warnings_with_the_sync_problems(tmp_path, monkey
     monkeypatch.setattr(server, "networth", lambda refresh=False: {"data": data, "error": None, "fetched": 0.0})
     monkeypatch.setattr(server, "synced_series", lambda: [])
     assert server.api_summary({})["status"]["problems"] == data["warnings"]
+
+
+def test_page_reloads_itself_and_says_when_numbers_are_old():
+    """Guard on the page source (behaviour is checked in a browser by hand): an open tab must re-fetch once its
+    data is older than the cache lifetime, and must say so when the numbers are over a day old or a reload failed."""
+    html = open(server.os.path.join(server.os.path.dirname(server.__file__), "index.html")).read()
+    for needle in ('document.addEventListener("visibilitychange", reloadIfOld)', "setInterval(reloadIfOld",
+                   'addEventListener("pageshow"', "data.summary?.cache_ttl_s", "function agePill(s)",
+                   'id="unrefreshed"', 'id="loaderrors"'):
+        assert needle in html, needle

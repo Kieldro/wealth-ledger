@@ -49,6 +49,7 @@ header.top h1 { font-size: 15px; font-weight: 600; margin: 0; color: var(--text-
 .pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); white-space: nowrap; }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--pos); flex: none; }
 .dot.bad { background: var(--neg); }
+.pill.old { background: var(--warn-bg); color: var(--warn); border-color: transparent; font-weight: 600; }
 button { font: inherit; font-size: 12px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 4px 11px; cursor: pointer; }
 button:hover { border-color: var(--accent); }
 button:disabled { opacity: .6; cursor: progress; }
@@ -224,6 +225,7 @@ footer code { font-size: 11.5px; }
   </header>
   <div class="alert" id="odwarn" role="alert"></div>
   <div class="problems" id="problems"></div>
+  <div class="problems" id="loaderrors"></div>
 
   <section class="hero" id="hero">
     <div class="card"><div class="label">Net worth</div>
@@ -466,11 +468,21 @@ function srcBadge(c) {
   return `<span class="badge b-${parts[0] || "live"}">${parts[0] || "live"}</span>`;
 }
 
+// How old the numbers are when that is worth saying: the last finished sync, or the server's copy of the balance
+// sheet, whichever is older. A sync runs every 24 h, so anything past OLD_MS means one was missed.
+const OLD_MS = 26 * 3600e3;
+function agePill(s) {
+  const times = [s.status?.last_run, s.networth_fetched].map(t => Date.parse(t)).filter(t => !isNaN(t));
+  const age = times.length ? Date.now() - Math.min(...times) : 0;
+  if (age < OLD_MS) return "";
+  return `<span class="pill old" title="Last finished sync or balance-sheet read; see the problems below">Numbers from ${esc(fmtTime(new Date(Math.min(...times)).toISOString()))} · ${age < 48 * 3600e3 ? Math.round(age / 36e5) + " hours" : Math.floor(age / 864e5) + " days"} old</span>`;
+}
+
 function renderSummary(s) {
   const st = s.status || {};
   const sync = (st.problems || []).filter(p => !OD_LINE.test(p));  // overdraft lines get their own banner
   const bad = (st.rc && st.rc !== 0) || sync.length;
-  $("status").innerHTML =
+  $("status").innerHTML = agePill(s) +
     `<span class="pill"><span class="dot ${bad ? "bad" : ""}"></span>Synced ${esc(fmtTime(st.last_run))}${st.rc ? " (rc=" + st.rc + ")" : ""}</span>` +
     `<button id="refresh" title="Re-read the balance sheet (networth.py); does not call the banks">Refresh</button>`;
   $("refresh").onclick = () => load(true);
@@ -1317,7 +1329,12 @@ function renderBudget(b) {
   $("budnote").textContent = notes.join(" ");
 }
 
+// A tab or phone page left open must not keep showing the numbers from when it loaded: load() runs again when the
+// page becomes visible (or once a minute while it is) and the data is older than the server's cache lifetime.
+let loadedAt = 0, loading = false;
 async function load(refresh = false) {
+  if (loading) return;
+  loading = true;
   const btn = $("refresh"); if (btn) { btn.disabled = true; btn.textContent = "Refreshing…"; }
   const parts = {
     summary: ["/api/summary", renderSummary],
@@ -1327,12 +1344,32 @@ async function load(refresh = false) {
     subscriptions: ["/api/subscriptions", renderSubscriptions], rental: ["/api/rental", renderRental],
     inherited: ["/api/inherited_ira", renderInherited],
   };
-  // summary first when refreshing, so the trend uses the new sheet total
-  if (refresh) await get("/api/refresh", {method: "POST"}).then(d => { data.summary = d; renderSummary(d); }).catch(e => $("problems").textContent = e.message);
-  await Promise.all(Object.entries(parts).filter(([k]) => !(refresh && k === "summary")).map(([k, [url, fn]]) =>
-    get(url).then(d => { data[k] = d; fn(d); if (k === "trend" && curUnit() !== "USD") renderAll(); }).catch(e => { console.error(e); $("problems").insertAdjacentHTML("beforeend", `<div class="err">${esc(k)}: ${esc(e.message)}</div>`); })));
-  document.body.dataset.ready = "1";
+  const failed = [];  // kept apart from #problems, which renderSummary rewrites
+  const fail = (k, e) => { console.error(e); failed.push(`<div class="err">${esc(k)}: ${esc(e.message)}</div>`); };
+  let summaryOk = false;
+  try {
+    // summary first when refreshing, so the trend uses the new sheet total; if the re-read fails, the plain summary still loads
+    if (refresh) await get("/api/refresh", {method: "POST"}).then(d => { data.summary = d; renderSummary(d); summaryOk = true; }).catch(e => fail("refresh", e));
+    await Promise.all(Object.entries(parts).filter(([k]) => !(summaryOk && k === "summary")).map(([k, [url, fn]]) =>
+      get(url).then(d => { data[k] = d; fn(d); if (k === "summary") summaryOk = true; if (k === "trend" && curUnit() !== "USD") renderAll(); }).catch(e => fail(k, e))));
+  } finally {
+    loading = false;
+    $("loaderrors").innerHTML = failed.join("");
+    const b = $("refresh"); if (b) { b.disabled = false; b.textContent = "Refresh"; }
+    if (summaryOk) loadedAt = Date.now();
+    else if (loadedAt && !$("unrefreshed")) $("status").insertAdjacentHTML("afterbegin",
+      `<span class="pill old" id="unrefreshed">Couldn't refresh · showing numbers loaded ${esc(fmtTime(new Date(loadedAt).toISOString()))}</span>`);
+    document.body.dataset.ready = "1";
+  }
 }
+function reloadIfOld() {
+  if (document.visibilityState === "visible" && Date.now() - loadedAt > (data.summary?.cache_ttl_s || 600) * 1000) load();
+}
+document.addEventListener("visibilitychange", reloadIfOld);
+addEventListener("pageshow", e => { if (e.persisted) reloadIfOld(); });  // back/forward cache restores the old page as it was
+addEventListener("focus", reloadIfOld);
+addEventListener("online", reloadIfOld);
+setInterval(reloadIfOld, 60e3);
 $("showzero").onchange = () => data.accounts && renderAccounts(data.accounts);
 $("txq").oninput = $("txcls").onchange = () => (acctView || data.spending) && renderRecent(data.spending?.recent || []);
 $("acctclear").onclick = clearAccount;
