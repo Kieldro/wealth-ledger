@@ -151,12 +151,14 @@ def _daily_charges(con, card: dict, today: date) -> float:
 
 
 def statement_lag(con, card: dict, pays: list[tuple[date, float]]) -> int:
-    """Days from statement close to autopay: the lag that explains the most past autopays.
+    """Days from statement close to autopay, learned from the closes the card's past autopays fit.
 
     Each payment fits a run of lags (the days around its close with no new charges), and a payment that wasn't
     the statement balance (made by hand mid-cycle, or a partial one) fits unrelated ones. So every payment votes
-    for all the lags it fits and the lag with the most votes wins; among equals, the one nearest the usual
-    STATEMENT_LAG, then the shorter (a later close counts more charges: the safer side)."""
+    for all the lags it fits. The most-voted lags win, together with any lag only one payment short of them once
+    three agree: closes move a day either way between cycles, so "all but one" is as good as it gets. Among
+    those, the lag nearest the usual STATEMENT_LAG, then the shorter (a later close counts more charges: the
+    safer side). Expect the result to be a day's charges off now and then."""
     votes: dict[int, int] = defaultdict(int)
     for pd, amt in pays[-6:]:
         for L in range(3, 41):
@@ -165,7 +167,9 @@ def statement_lag(con, card: dict, pays: list[tuple[date, float]]) -> int:
                 votes[L] += 1
     if not votes:
         return STATEMENT_LAG
-    return min(votes, key=lambda L: (-votes[L], abs(L - STATEMENT_LAG), L))
+    top = max(votes.values())
+    good = [L for L, n in votes.items() if n >= (top - 1 if top >= 3 else top)]
+    return min(good, key=lambda L: (abs(L - STATEMENT_LAG), L))
 
 
 def _funding_account(con, card_id: str) -> str | None:

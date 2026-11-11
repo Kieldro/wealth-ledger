@@ -127,8 +127,8 @@ AUTOPAY, MANUAL = "AUTOPAY PAYMENT - THANK YOU", "ONLINE PAYMENT - THANK YOU"
 
 def test_statement_lag_is_the_one_most_autopays_agree_on(led):
     """Statement closes on the 8th, autopay on the 1st. Quiet days after a close make short lags fit some months
-    (13 fits August, 12 fits October) but only 22-24 fit all three, so a hand payment mid-cycle must not push the
-    close into the future: the 10/31 autopay is the $600 statement less that $200, not the $600 owed today."""
+    (13 fits August, 12 fits October), so a hand payment mid-cycle must not push the close into the future: the
+    10/31 autopay is the $600 statement less that $200, not the $600 owed today."""
     led.card(-600, [
         (date(2026, 7, 8), -300, "STORE"), (date(2026, 7, 20), -200, "STORE"),
         (date(2026, 8, 1), 300, AUTOPAY), (date(2026, 8, 8), -150, "STORE"), (date(2026, 8, 11), -100, "STORE"),
@@ -139,10 +139,35 @@ def test_statement_lag_is_the_one_most_autopays_agree_on(led):
     led.db.row_factory = overdraft.sqlite3.Row
     card = {"account_id": CARD, "balance": -600}
     pays = [(date(2026, 8, 1), 300), (date(2026, 9, 1), 350), (date(2026, 10, 1), 500)]
-    assert overdraft.statement_lag(led.db, card, pays) == 22
-    assert overdraft.statement_lag(led.db, card, pays + [(date(2026, 10, 14), 200)]) == 22  # an outlier can't outvote
+    # 22-24 fit all three and 13-21 fit two of them: 21 is the nearest to the usual lag; 12 fits only one
+    assert overdraft.statement_lag(led.db, card, pays) == 21
+    assert overdraft.statement_lag(led.db, card, pays[1:]) == 22  # with two payments, only what both fit
+    assert overdraft.statement_lag(led.db, card, pays + [(date(2026, 10, 14), 200)]) == 21  # an outlier can't outvote
     assert overdraft.statement_lag(led.db, card, [(date(2026, 10, 14), 77)]) == overdraft.STATEMENT_LAG  # fits nothing
     assert led.autopays() == [("2026-10-31", -400)]
+
+
+def test_statement_lag_allows_for_a_close_that_moves_by_a_day(led):
+    """$10 charged every day except a few quiet days after each close. The four autopays fit closes 23-27,
+    22-25, 22-27 and 22-27 days earlier: 23-25 fit all four, 22 fits all but one. The close does move by a day
+    between cycles, so 22 counts too, and being the later close it is the safer one: the 11/29 autopay includes
+    the charge of 11/7."""
+    start, today = date(2026, 6, 1), date(2026, 11, 11)
+    cycles = [(date(2026, 8, 2), 27, 4), (date(2026, 8, 30), 25, 3), (date(2026, 9, 29), 27, 5), (date(2026, 10, 30), 27, 5)]
+    quiet = {pay - timedelta(days=lag) + timedelta(days=i) for pay, lag, n in cycles for i in range(1, n + 1)}
+    days = [start + timedelta(days=i) for i in range((today - start).days + 1)]
+    owed = lambda d: 10 * sum(1 for x in days if x <= d and x not in quiet)
+    pays, paid = [], 0
+    for pay, lag, _ in cycles:
+        pays.append((pay, owed(pay - timedelta(days=lag)) - paid))
+        paid += pays[-1][1]
+    led.card(-(owed(today) - paid), sorted([(d, -10, "DAILY LUNCH") for d in days if d not in quiet]
+                                           + [(d, a, AUTOPAY) for d, a in pays]))
+    led.db.commit()
+    led.db.row_factory = overdraft.sqlite3.Row
+    assert overdraft.statement_lag(led.db, {"account_id": CARD, "balance": -(owed(today) - paid)}, pays) == 22
+    assert led.autopays(today) == [("2026-11-29", -(owed(date(2026, 11, 7)) - paid))]
+    assert owed(date(2026, 11, 7)) - owed(date(2026, 11, 6)) == 10  # the day a 23-day lag would have left out
 
 
 def test_returned_autopay_retry_then_issuer_skips_a_cycle(led):
@@ -169,8 +194,8 @@ def test_returned_autopay_retry_then_issuer_skips_a_cycle(led):
     led.txn(CARD, date(2026, 12, 1), 800, AUTOPAY)  # it resumes; the gap doesn't break the series
     led.txn(CHK, date(2026, 12, 2), -800, "DIRECT DEBIT VISA EPAYMENT")
     led.db.execute("UPDATE balances SET balance='-90' WHERE account_id=?", (CARD,))
-    # next statement is still open: the $90 owed plus 4 days of the card's usual $9 a day until it closes
-    assert led.autopays(date(2026, 12, 5)) == [("2026-12-31", -126)]
+    # next statement is still open: the $90 owed plus 5 days of the card's usual $9 a day until it closes
+    assert led.autopays(date(2026, 12, 5)) == [("2026-12-31", -135)]
 
 
 def test_card_with_nothing_owed_after_a_skipped_cycle_projects_nothing(led):
