@@ -169,7 +169,8 @@ def test_returned_autopay_retry_then_issuer_skips_a_cycle(led):
     led.txn(CARD, date(2026, 12, 1), 800, AUTOPAY)  # it resumes; the gap doesn't break the series
     led.txn(CHK, date(2026, 12, 2), -800, "DIRECT DEBIT VISA EPAYMENT")
     led.db.execute("UPDATE balances SET balance='-90' WHERE account_id=?", (CARD,))
-    assert led.autopays(date(2026, 12, 5)) == [("2026-12-31", -90)]
+    # next statement is still open: the $90 owed plus 4 days of the card's usual $9 a day until it closes
+    assert led.autopays(date(2026, 12, 5)) == [("2026-12-31", -126)]
 
 
 def test_card_with_nothing_owed_after_a_skipped_cycle_projects_nothing(led):
@@ -177,6 +178,16 @@ def test_card_with_nothing_owed_after_a_skipped_cycle_projects_nothing(led):
                  (date(2026, 9, 1), 100, AUTOPAY)])
     assert led.autopays() == []                      # 56 days on, nothing owed: no draft
     assert led.autopays(date(2026, 12, 1)) == []     # and after two missed cycles the series is over anyway
+
+
+def test_open_statement_adds_the_usual_charges_until_it_closes(led):
+    """$20 charged every day, statement closes mid-month, autopay 15 days later. On 10/8 the statement that the 10/29
+    autopay pays is still open: $480 owed so far plus six more days of charges."""
+    start, today = date(2026, 7, 1), date(2026, 10, 8)
+    acts = [(start + timedelta(days=i), -20, "DAILY COFFEE") for i in range((today - start).days + 1)]
+    acts += [(date(2026, 7, 30), 300, AUTOPAY), (date(2026, 8, 30), 620, AUTOPAY), (date(2026, 9, 29), 600, AUTOPAY)]
+    led.card(-480, sorted(acts))
+    assert led.autopays(today) == [("2026-10-29", -600)]
 
 
 def test_rent_that_skipped_one_month_and_resumed_is_projected_as_an_estimate(led):

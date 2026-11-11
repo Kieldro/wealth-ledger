@@ -4,7 +4,8 @@
 Recurring debits and credits are found from history: the same description every 3-5 weeks (semi-monthly pay
 shows up as two monthly series). They're projected HORIZON days ahead from each checking account's latest balance.
 Card autopays come from the card side, where every attempt shows even when the bank bounced it. Each one is sized
-as the balance owed at the statement close minus payments made since. The close-to-payment lag is learned per card:
+as the balance owed at the statement close minus payments made since, or, while that statement is still open, what
+is owed now plus the card's recent daily charges until it closes. The close-to-payment lag is learned per card:
 the lag that explains the most of its past autopays (STATEMENT_LAG when none match). The draft is charged to the
 checking account that paid that card before.
 Rough by design: bills use their largest recent amount; pay uses its smallest recent amount, or the latest one once
@@ -46,6 +47,7 @@ MAX_RATIO = 1.33    # checking-side series: consecutive amounts within this fact
 SWEEPS = ("%CORE ACCOUNT%", "REINVESTMENT%")  # brokerage cash sweeps: internal, already inside the balance
 SKIP_TOL = 4        # a gap counts as "one period skipped" when half of it is within this many days of the usual spacing
 SAME_PAY = 0.01     # a payer's last two deposits "agree" within this fraction
+SPEND_DAYS = 60     # a card's recent charge rate is taken over this many days
 UNCOUNTED_DAYS, UNCOUNTED_MIN = 60, 3  # unprojected income worth naming: this many deposits from one payer in the window
 
 
@@ -139,6 +141,15 @@ def _paid_between(con, card: dict, d: date, before: date | None = None) -> float
                        (card["account_id"], d.isoformat(), (before or date.max).isoformat())).fetchone()[0]
 
 
+def _daily_charges(con, card: dict, today: date) -> float:
+    """What the card has been charged per day lately (purchases net of refunds, no payments)."""
+    since = today - timedelta(SPEND_DAYS)
+    net = con.execute("SELECT COALESCE(SUM(amt),0) FROM v_ledger WHERE account_id=? AND class<>'card_payment' "
+                      "AND pending=0 AND date>? AND date<=?",
+                      (card["account_id"], since.isoformat(), today.isoformat())).fetchone()[0]
+    return max(0.0, -net / SPEND_DAYS)
+
+
 def statement_lag(con, card: dict, pays: list[tuple[date, float]]) -> int:
     """Days from statement close to autopay: the lag that explains the most past autopays.
 
@@ -223,11 +234,15 @@ def forecast(con: sqlite3.Connection, today: date | None = None, horizon: int = 
         for c in series:
             for d in upcoming(c, today, end, income=False, missed=1):
                 close = d - timedelta(lag)
+                cap = max(owed_now, 0.0)
                 if planned == 0 and close < today:
                     amt = _owed_at(con, card, close) - _paid_between(con, card, close)
+                elif planned == 0:  # statement still open: owed now plus the usual charges until it closes
+                    cap += _daily_charges(con, card, today) * (close - today).days
+                    amt = cap
                 else:  # later cycle: whatever is owed now beyond what's already planned
                     amt = owed_now - planned
-                amt = max(0.0, min(amt, max(owed_now, 0.0)))
+                amt = max(0.0, min(amt, cap))
                 planned += amt
                 if amt >= MIN_AMT:
                     accounts[fund]["events"].append({"date": d.isoformat(), "label": f"{card['account_name']} autopay",
