@@ -29,7 +29,7 @@ import sys
 import threading
 import time
 from collections import deque
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from html import escape as html_escape
 from urllib.parse import parse_qs, urlparse
@@ -46,6 +46,7 @@ DB = os.path.expanduser("~/.local/share/wealth-ledger/txns.db")
 STATUS = os.path.expanduser("~/.cache/wealth-ledger-status")
 NETWORTH = [os.path.join(ROOT, ".venv", "bin", "python"), os.path.join(ROOT, "networth.py"), "--json"]
 CACHE_TTL = 600
+STATUS_MAX_AGE_H = 36  # the sync runs daily; a last run older than this means it hung, died or isn't scheduled
 LEDGER_START = _DASH.get("ledger_start") or "1970-01-01"  # first day of complete transaction data
 # accounts networth.py counts as live lines (mirrors its EXTRA_KINDS; crypto/custodial are excluded there)
 NW_KINDS = ("credit", "retirement", "checking", "savings", "investment", "hsa", "loan")
@@ -122,14 +123,26 @@ def networth(refresh: bool = False) -> dict:
         return dict(_nw)
 
 
-def read_status() -> dict:
+def read_status(now: datetime | None = None) -> dict:
+    """The sync's status file, plus a problem of our own when no sync has finished lately: the file is only
+    rewritten at the end of a run, so a sync that hangs, is killed or stops being scheduled leaves an old
+    "rc=0" behind that would otherwise read as healthy."""
     try:
         lines = [l.rstrip() for l in open(STATUS) if l.strip()]
     except OSError as e:
         return {"last_run": None, "rc": None, "problems": [f"status file unreadable: {e.strerror}"]}
     m = re.match(r"last run (\S+) rc=(\d+)", lines[0]) if lines else None
-    return {"last_run": m.group(1) if m else None, "rc": int(m.group(2)) if m else None,
-            "problems": lines[1:] if m else lines}
+    out = {"last_run": m.group(1) if m else None, "rc": int(m.group(2)) if m else None,
+           "problems": lines[1:] if m else lines}
+    try:
+        age = (now or datetime.now(timezone.utc)) - datetime.fromisoformat(out["last_run"]).astimezone(timezone.utc)
+    except (TypeError, ValueError):  # no first line, or not a time
+        out["problems"].insert(0, "The status file doesn't say when the sync last finished")
+        return out
+    if age > timedelta(hours=STATUS_MAX_AGE_H):
+        out["problems"].insert(0, f"No sync has finished since {out['last_run'][:10]} ({age.days} "
+                                  f"day{'s' if age.days != 1 else ''} ago): the numbers here may be that old")
+    return out
 
 
 def synced_series() -> list[dict]:

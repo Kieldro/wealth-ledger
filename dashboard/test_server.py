@@ -334,3 +334,31 @@ def test_crypto_lists_transfers_newest_first_with_usd(dbfile):
     con.close()
     t = server.api_crypto({})["transfers"]
     assert [(x["txid"], x["usd_value"], x["memo"]) for x in t] == [("t2", 8000.0, "gift"), ("t1", 40000.0, "")]
+
+
+def test_status_flags_a_sync_that_stopped_finishing(tmp_path, monkeypatch):
+    """The status file is rewritten only when a sync finishes, so an old "rc=0" must not read as healthy."""
+    from datetime import datetime, timezone
+    f = tmp_path / "status"
+    monkeypatch.setattr(server, "STATUS", str(f))
+    now = datetime(2026, 11, 11, 20, 0, tzinfo=timezone.utc)
+
+    f.write_text("last run 2026-11-11T08:15:02-06:00 rc=0\nOverdraft risk: Checking has $5\n")
+    assert server.read_status(now) == {"last_run": "2026-11-11T08:15:02-06:00", "rc": 0,
+                                       "problems": ["Overdraft risk: Checking has $5"]}
+    f.write_text("last run 2026-11-10T08:15:02-06:00 rc=0\n")       # yesterday morning, 30 hours ago: still fine
+    assert server.read_status(now)["problems"] == []
+    f.write_text("last run 2026-11-06T08:15:02-06:00 rc=0\nOverdraft risk: Checking has $5\n")
+    st = server.read_status(now)
+    assert st["rc"] == 0 and len(st["problems"]) == 2
+    assert st["problems"][0].startswith("No sync has finished since 2026-11-06 (5 days ago)")
+    f.write_text("last run 2026-11-06T08:15:02 rc=0\n")             # no UTC offset: read as local time
+    assert server.read_status(now)["problems"][0].startswith("No sync has finished since 2026-11-06")
+    f.write_text("")
+    assert server.read_status(now) == {"last_run": None, "rc": None,
+                                       "problems": ["The status file doesn't say when the sync last finished"]}
+    f.write_text("something unexpected\n")
+    assert server.read_status(now)["problems"] == ["The status file doesn't say when the sync last finished",
+                                                   "something unexpected"]
+    f.unlink()
+    assert server.read_status(now)["problems"][0].startswith("status file unreadable")

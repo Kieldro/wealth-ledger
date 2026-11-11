@@ -24,6 +24,8 @@ DAYS=${WEALTH_LEDGER_DAYS:-14}   # re-pull 2 weeks so pending -> posted updates 
 STATUS=${WEALTH_LEDGER_STATUS:-$HOME/.cache/wealth-ledger-status}
 problems=()
 problem() { problems+=("$1"); echo "PROBLEM: $1"; }
+# whole file or nothing: the dashboard and the finances skill may read it at any moment
+write_status() { { echo "last run $(date -Is) rc=$1"; printf '%s\n' "${problems[@]}"; } > "$STATUS.tmp" && mv -f "$STATUS.tmp" "$STATUS"; }
 
 if [[ ${1:-} == claim ]]; then
   [[ -n ${2:-} ]] || { echo "usage: wealth-ledger-sync claim <setup-token>" >&2; exit 2; }
@@ -33,7 +35,14 @@ fi
 [[ ${1:-} == --days ]] && DAYS=$2
 
 exec 9>"$LOCK"
-flock -n 9 || { echo "$(date -Is) another sync is running"; exit 0; }
+if ! flock -n 9; then
+  # A sync that hangs never reaches its own status line, and every later run would stop here in silence with
+  # the old "rc=0" still on file. Say so; if the other run is healthy it overwrites this when it finishes.
+  echo "$(date -Is) another sync is running"
+  problem "Sync skipped: an earlier sync is still running or stuck (holds $LOCK)"
+  write_status 1
+  exit 0
+fi
 
 echo "=== $(date -Is)"
 if [[ ! -f $ACCESS ]]; then
@@ -89,5 +98,5 @@ else while IFS= read -r w; do [[ -n $w ]] && problem "$w"; done <<<"$oout"; fi
 bout=$("$ROOT/bin/wealth-ledger-backup" 2>&1) || problem "Backup failed: $(tail -1 <<<"$bout")"
 echo "$bout"
 
-{ echo "last run $(date -Is) rc=$rc"; printf '%s\n' "${problems[@]}"; } > "$STATUS"
+write_status "$rc"
 exit $rc
