@@ -202,6 +202,7 @@ def api_summary(params) -> dict:
            "cache_ttl_s": CACHE_TTL}
     if not data:
         return res
+    res["status"]["problems"] += data.get("warnings") or []  # things that may make the total wrong (networth.py)
     cats = {k: {"key": k, "label": lbl, "type": t, "value": 0.0, "live": 0.0, "est": 0.0, "sheet": 0.0, "lines": []}
             for k, lbl, t in CATEGORIES}
     for l in data["lines"]:

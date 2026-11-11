@@ -362,3 +362,14 @@ def test_status_flags_a_sync_that_stopped_finishing(tmp_path, monkeypatch):
                                                    "something unexpected"]
     f.unlink()
     assert server.read_status(now)["problems"][0].startswith("status file unreadable")
+
+
+def test_summary_shows_networth_warnings_with_the_sync_problems(tmp_path, monkeypatch):
+    f = tmp_path / "status"
+    f.write_text(f"last run {TODAY}T08:15:02+00:00 rc=0\n")
+    monkeypatch.setattr(server, "STATUS", str(f))
+    data = {"lines": [], "assets": 0, "liabilities": 0, "net_worth": 0, "sheet_net_worth": 0,
+            "warnings": ["Net worth: Savings (1111) was last updated 2026-01-01 and is still counted"]}
+    monkeypatch.setattr(server, "networth", lambda refresh=False: {"data": data, "error": None, "fetched": 0.0})
+    monkeypatch.setattr(server, "synced_series", lambda: [])
+    assert server.api_summary({})["status"]["problems"] == data["warnings"]

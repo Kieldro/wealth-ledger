@@ -19,6 +19,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -38,6 +39,7 @@ ASSET_ROWS: set[str] = set(personal.require("networth", "asset_rows"))
 LIAB_ROWS: set[str] = set(personal.require("networth", "liab_rows"))
 # extra synced accounts with no sheet row (kind custodial is never the owner's money)
 EXTRA_KINDS = ("credit", "retirement", "checking", "savings", "investment", "hsa", "loan")
+STALE_DAYS = 7  # a counted account this far behind the freshest one is named in "warnings" (closed? feed broken?)
 
 
 def sheet_rows() -> dict[str, float]:
@@ -55,22 +57,24 @@ def sheet_rows() -> dict[str, float]:
 
 
 def compute() -> dict:
-    """{assets, liabilities, net_worth, sheet_net_worth, lines}; each line says where its number came from."""
+    """{assets, liabilities, net_worth, sheet_net_worth, lines, warnings}; each line says where its number came
+    from. warnings name what may make the total wrong without failing: a synced row that no longer matches any
+    account, a counted balance that stopped updating, an account whose feed sent no balance."""
     sheet = sheet_rows()
     db = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
-    accts = db.execute("SELECT account_id, account_name, balance, kind, as_of FROM v_accounts").fetchall()
+    accts = db.execute("SELECT account_id, account_name, balance, kind, snapshot_date FROM v_accounts").fetchall()
     # estimates from valuations/ (metals at spot, crypto wallets, home/car AVMs) replace the sheet's manual numbers
     try:
         vals = {a: (v, src, d) for a, v, src, d in db.execute(
             "SELECT asset, value, source, snapshot_date FROM v_valuations_latest")}
     except sqlite3.OperationalError:  # DB predates the valuations table
         vals = {}
-    used_ids, lines = set(), []
+    used_ids, lines, warnings = set(), [], []
 
     def live(patterns):
         hits = [a for a in accts if any(db.execute("SELECT ? LIKE ?", (a[1], p)).fetchone()[0] for p in patterns)]
         used_ids.update(a[0] for a in hits)
-        return sum(a[2] for a in hits) if hits else None
+        return sum(a[2] or 0.0 for a in hits) if hits else None
 
     for label in list(ASSET_ROWS) + list(LIAB_ROWS):
         key = label.rstrip("*")
@@ -83,6 +87,9 @@ def compute() -> dict:
             lval = -lval  # liabilities are stored negative; the sheet lists them positive
         value = lval if lval is not None else (sval or 0.0)
         src = "live" if lval is not None else "sheet"
+        if lval is None and key in SYNCED:
+            warnings.append(f"Net worth: no synced account matches the \"{key}\" row any more, so its typed-in sheet "
+                            f"value is used. If the account was renamed it is also counted on its own line.")
         if lval is None and key in vals:
             lval, vsrc, vdate = vals[key]
             value, src = lval, f"estimate ({vsrc}, {vdate})"
@@ -91,17 +98,28 @@ def compute() -> dict:
         lines.append({"line": key, "type": "liability" if is_liab else "asset", "sheet": sval,
                       "live": lval, "used": value, "from": src})
 
-    for aid, name, bal, kind, as_of in accts:
+    for aid, name, bal, kind, snap in accts:
         if aid in used_ids or kind not in EXTRA_KINDS or abs(bal or 0) < 0.01:
             continue
+        used_ids.add(aid)
         liab = kind in ("credit", "loan")
         lines.append({"line": name, "type": "liability" if liab else "asset", "sheet": None,
                       "live": -bal if liab else bal, "used": -bal if liab else bal, "from": "live (no sheet row)"})
 
+    newest = max((a[4] for a in accts if a[4]), default=None)
+    for aid, name, bal, kind, snap in accts:
+        if aid not in used_ids:
+            continue
+        if bal is None:
+            warnings.append(f"Net worth: {name} has no balance from its feed and is counted as 0.")
+        elif snap and abs(bal) >= 0.01 and (date.fromisoformat(newest) - date.fromisoformat(snap)).days > STALE_DAYS:
+            warnings.append(f"Net worth: {name} was last updated {snap} and is still counted at that balance "
+                            f"(closed, re-linked under a new name, or its feed stopped?).")
+
     assets = sum(l["used"] for l in lines if l["type"] == "asset")
     liabs = sum(l["used"] for l in lines if l["type"] == "liability")
     result = {"assets": round(assets, 2), "liabilities": round(liabs, 2), "net_worth": round(assets - liabs, 2),
-              "sheet_net_worth": sheet.get("Total Equity"), "lines": lines}
+              "sheet_net_worth": sheet.get("Total Equity"), "lines": lines, "warnings": warnings}
     return result
 
 
@@ -117,6 +135,8 @@ def main() -> int:
         print(f"{l['line'][:42]:42} {l['type']:9} {f(l['sheet']):>12} {f(l['live']):>12} {f(l['used']):>12}  {l['from']}")
     print(f"\nassets {result['assets']:,.0f}  liabilities {result['liabilities']:,.0f}  NET WORTH {result['net_worth']:,.0f}"
           f"   (sheet's own Total Equity: {result['sheet_net_worth'] or 0:,.0f})")
+    for w in result["warnings"]:
+        print("WARNING: " + w)
     return 0
 
 
