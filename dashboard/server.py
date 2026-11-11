@@ -189,9 +189,17 @@ def period_changes(series: list[dict]) -> dict:
 
 # ---------- endpoints ----------
 def line_source(line: dict) -> str:
-    """live = synced balance; est = priced by valuations/ (spot, on-chain, exchange APIs, AVMs); sheet = typed in."""
+    """live = synced balance, or read today straight from an exchange or blockchain; est = modelled or priced
+    from typed-in amounts by valuations/ (metals at spot, home/car models, crypto with sheet quantities), or a
+    reading from an earlier day; sheet = typed in. networth.valuation_from decides between the first two."""
     f = line["from"]
     return "live" if f.startswith("live") else "est" if f.startswith("estimate") else "sheet"
+
+
+def in_synced_series(line: dict) -> bool:
+    """True when the line is a SimpleFIN/Plaid account balance, i.e. already inside synced_series(). A valuation
+    read live from an exchange is not: it has no daily account snapshots, so the trend carries it as a constant."""
+    return line["synced"] if "synced" in line else line["from"].startswith("live")
 
 
 def api_summary(params) -> dict:
@@ -219,7 +227,7 @@ def api_summary(params) -> dict:
         for k in ("value", "live", "est", "sheet"):
             c[k] = round(c[k], 2)
     sheet_const = round(sum((l["used"] if l["type"] == "asset" else -l["used"])
-                            for l in data["lines"] if not l["from"].startswith("live")), 2)
+                            for l in data["lines"] if not in_synced_series(l)), 2)
     changes = period_changes(synced_series())
     res.update(net_worth=data["net_worth"], assets=data["assets"], liabilities=data["liabilities"],
                sheet_net_worth=data.get("sheet_net_worth"), sheet_only_total=sheet_const,
@@ -233,7 +241,7 @@ def api_trend(params) -> dict:
     sheet_const = None
     if nw["data"]:
         sheet_const = round(sum((l["used"] if l["type"] == "asset" else -l["used"])
-                                for l in nw["data"]["lines"] if not l["from"].startswith("live")), 2)
+                                for l in nw["data"]["lines"] if not in_synced_series(l)), 2)
     for s in series:
         s["total"] = round(s["synced"] + sheet_const, 2) if sheet_const is not None else None
     first_daily = series[0]["date"] if series else None

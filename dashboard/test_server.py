@@ -273,8 +273,27 @@ def test_trend_benchmarks_are_overlays_not_units(dbfile, monkeypatch):
 
 def test_line_source_live_estimate_sheet():
     assert server.line_source({"from": "live (2 accounts)"}) == "live"
+    assert server.line_source({"from": "live reading (exchange-api USD balance)"}) == "live"
     assert server.line_source({"from": "estimate (spot)"}) == "est"
+    assert server.line_source({"from": "estimate (exchange-api USD balance, 2026-01-01)"}) == "est"
     assert server.line_source({"from": "sheet"}) == "sheet"
+
+
+def test_live_exchange_reading_stays_in_the_trend_constant(dbfile, monkeypatch):
+    """A valuation read live from an exchange gets the live badge, but it isn't a synced account: the trend's
+    daily series doesn't contain it, so it must stay in the constant added on top."""
+    lines = [{"line": "Checking", "type": "asset", "used": 1000.0, "from": "live", "synced": True},
+             {"line": "Exchange", "type": "asset", "used": 50.0, "from": "live reading (exchange-api USD balance)",
+              "synced": False},
+             {"line": "Home", "type": "asset", "used": 300.0, "from": "estimate (avm, 2026-01-01)", "synced": False},
+             {"line": "Loan", "type": "liability", "used": 20.0, "from": "sheet", "synced": False},
+             {"line": "Old cache", "type": "asset", "used": 7.0, "from": "live (no sheet row)"}]  # no key: by prefix
+    data = {"lines": lines, "assets": 1357.0, "liabilities": 20.0, "net_worth": 1337.0}
+    monkeypatch.setattr(server, "networth", lambda refresh=False: {"data": data, "error": None, "fetched": 0.0})
+    monkeypatch.setattr(server, "synced_series", lambda: [])
+    monkeypatch.setattr(server, "STATUS", "/nonexistent")
+    assert server.api_summary({})["sheet_only_total"] == 330.0
+    assert server.api_trend({})["sheet_only_total"] == 330.0
 
 
 def test_crypto_groups_by_wallet_and_coin(dbfile):

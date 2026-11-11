@@ -39,6 +39,8 @@ ASSET_ROWS: set[str] = set(personal.require("networth", "asset_rows"))
 LIAB_ROWS: set[str] = set(personal.require("networth", "liab_rows"))
 # extra synced accounts with no sheet row (kind custodial is never the owner's money)
 EXTRA_KINDS = ("credit", "retirement", "checking", "savings", "investment", "hsa", "loan")
+# where a crypto quantity can be read from directly (valuations/crypto.py qty sources); "sheet" is typed in
+READ_QTY = {"onchain", "exchange-api", "simplefin"}
 STALE_DAYS = 7  # a counted account this far behind the freshest one is named in "warnings" (closed? feed broken?)
 
 
@@ -56,11 +58,28 @@ def sheet_rows() -> dict[str, float]:
     return rows
 
 
-def compute() -> dict:
+def valuation_from(source: str, snapshot_date: str, today: str) -> str:
+    """Where a valuations/ number comes from, for a line's "from": "live reading (...)" when it was read today
+    straight from where the money is, else "estimate (...)".
+
+    A reading is an exchange's own USD balance, or a crypto total whose every counted quantity came from a
+    blockchain or an exchange API (priced at the day's market price, as a brokerage balance is). It is an
+    estimate when anything in it is modelled or typed in: metals at spot times ounces from the sheet, home and
+    car value models, a crypto total with any quantity from the sheet. A reading from an earlier day is an
+    estimate too, with its date: the provider didn't run or failed today."""
+    read = source.startswith("exchange-api")
+    if source.startswith("qty: "):
+        qty = [q.strip() for q in source[5:].split(";")[0].split("/")]
+        read = all(q in READ_QTY for q in qty)
+    return f"live reading ({source})" if read and snapshot_date == today else f"estimate ({source}, {snapshot_date})"
+
+
+def compute(today: str | None = None) -> dict:
     """{assets, liabilities, net_worth, sheet_net_worth, lines, warnings}; each line says where its number came
     from. warnings name what may make the total wrong without failing: a synced row that no longer matches any
     account, a counted balance that stopped updating, an account whose feed sent no balance."""
     sheet = sheet_rows()
+    today = today or date.today().isoformat()
     db = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
     accts = db.execute("SELECT account_id, account_name, balance, kind, snapshot_date FROM v_accounts").fetchall()
     # estimates from valuations/ (metals at spot, crypto wallets, home/car AVMs) replace the sheet's manual numbers
@@ -90,13 +109,15 @@ def compute() -> dict:
         if lval is None and key in SYNCED:
             warnings.append(f"Net worth: no synced account matches the \"{key}\" row any more, so its typed-in sheet "
                             f"value is used. If the account was renamed it is also counted on its own line.")
+        synced = lval is not None
         if lval is None and key in vals:
             lval, vsrc, vdate = vals[key]
-            value, src = lval, f"estimate ({vsrc}, {vdate})"
+            value, src = lval, valuation_from(vsrc, vdate, today)
         if key in SHEET_EXCLUDED:
             value, src = 0.0, "sheet, excluded by sheet's own total"
+        # "synced" = a SimpleFIN/Plaid account balance, which the daily series in the dashboard trend already has
         lines.append({"line": key, "type": "liability" if is_liab else "asset", "sheet": sval,
-                      "live": lval, "used": value, "from": src})
+                      "live": lval, "used": value, "from": src, "synced": synced})
 
     for aid, name, bal, kind, snap in accts:
         if aid in used_ids or kind not in EXTRA_KINDS or abs(bal or 0) < 0.01:
@@ -104,7 +125,8 @@ def compute() -> dict:
         used_ids.add(aid)
         liab = kind in ("credit", "loan")
         lines.append({"line": name, "type": "liability" if liab else "asset", "sheet": None,
-                      "live": -bal if liab else bal, "used": -bal if liab else bal, "from": "live (no sheet row)"})
+                      "live": -bal if liab else bal, "used": -bal if liab else bal, "from": "live (no sheet row)",
+                      "synced": True})
 
     newest = max((a[4] for a in accts if a[4]), default=None)
     for aid, name, bal, kind, snap in accts:

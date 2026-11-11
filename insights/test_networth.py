@@ -40,6 +40,32 @@ def used(result):
     return {l["line"]: (l["type"], l["used"], l["from"].split(" (")[0]) for l in result["lines"]}
 
 
+def test_valuation_is_live_only_when_read_today_with_nothing_typed_in():
+    f, today = networth.valuation_from, "2026-10-27"
+    assert f("exchange-api USD balance", today, today) == "live reading (exchange-api USD balance)"
+    assert f("exchange-api USD balance", "2026-10-26", today) == "estimate (exchange-api USD balance, 2026-10-26)"
+    assert f("qty: onchain/exchange-api; prices: coingecko, par", today, today).startswith("live reading (")
+    assert f("qty: onchain/exchange-api/sheet; prices: coingecko", today, today).startswith("estimate (")
+    assert f("qty: onchain; prices: coingecko", "2026-10-20", today).startswith("estimate (")
+    for modelled in ("spot: swissquote", "comehome_avm+zillow_zestimate", "autotempest-comps"):
+        assert f(modelled, today, today) == f"estimate ({modelled}, {today})"
+
+
+def test_exchange_cash_read_today_is_a_live_line_but_not_a_synced_account(nw, monkeypatch):
+    monkeypatch.setattr(networth, "ASSET_ROWS", networth.ASSET_ROWS | {"Exchange A", "Exchange B"})
+    monkeypatch.setattr(networth, "sheet_rows", lambda: dict(SHEET, **{"Exchange A": 10.0, "Exchange B": 20.0}))
+    nw.execute("INSERT INTO valuations VALUES (?,?,?,?,?,?)", (DAY, "Exchange A", 55.0, "exchange-api USD balance", None, DAY))
+    nw.execute("INSERT INTO valuations VALUES (?,?,?,?,?,?)",
+               ("2026-10-20", "Exchange B", 66.0, "exchange-api USD balance", None, "2026-10-20"))
+    nw.commit()
+    lines = {l["line"]: l for l in networth.compute(today=DAY)["lines"]}
+    assert (lines["Exchange A"]["used"], lines["Exchange A"]["from"]) == (55.0, "live reading (exchange-api USD balance)")
+    assert (lines["Exchange B"]["used"], lines["Exchange B"]["from"]) == (66.0, "estimate (exchange-api USD balance, 2026-10-20)")
+    assert lines["Home"]["from"].startswith("estimate (avm")
+    assert {l["line"] for l in lines.values() if l["synced"]} == {
+        "Checking", "Savings", "Brokerage", "Roth IRA", "Mortgage", "Credit card", "Other Card (6666)"}
+
+
 def test_live_balances_replace_sheet_rows_and_the_rest_keeps_its_source(nw):
     r = networth.compute()
     assert used(r) == {
