@@ -118,6 +118,10 @@
  "plaid": {"client_user_id": "wealth-ledger-user"},
  "networth_history": {"_help": "insights/nw_history.py (dashboard trend before the daily snapshots): Drive name of your yearly balance-sheet spreadsheets, each named '<name_query> YYYY' with a 'balance sheet' tab (dated columns, a 'Total Equity' row).", "name_query": "Financial Statements"},
  "zelle_memos": {"_help": "insights/zelle_memos.py: Gmail search for your bank's Zelle emails (default: zelle)", "query": "zelle"},
+ "overdraft": {
+  "_help": "insights/overdraft.py. ends: a recurring bill's last possible draft day (description LIKE pattern -> YYYY-MM-DD), e.g. the end of a lease; nothing is projected for it after that day.",
+  "ends": {"%EXAMPLE PROPERTY MGMT%": "2099-12-31"}
+ },
  "backup": {
   "_help": "bin/wealth-ledger-backup (run after each daily sync): gzipped copy of the database into dir, which should be on a different disk and must already exist. Keeps keep_days of dailies plus every 1st-of-month copy. Leave out to turn backups off.",
   "dir": "/mnt/other-disk/backups/wealth-ledger",

@@ -1024,7 +1024,7 @@ function renderDrafts(d) {
   const rows = d.accounts.flatMap(a => a.events.map(e => ({...e, acct: stripNum(a.account)}))).sort((x, y) => x.date.localeCompare(y.date));
   if (!rows.length) { $("drafts").innerHTML = '<tr><td class="note">Nothing recurring found.</td></tr>'; return; }
   let h = `<thead><tr><th>Date</th><th>Item</th><th>Account</th><th class="r">Amount</th><th class="r">Balance after</th></tr></thead><tbody>`;
-  for (const r of rows) h += `<tr><td class="note">${esc(r.date.slice(5))}</td><td class="name" title="${esc(r.label)}">${esc(stripNum(r.label))}${r.estimate ? ' <span class="note">est.</span>' : ""}</td>
+  for (const r of rows) h += `<tr><td class="note">${esc(r.date.slice(5))}</td><td class="name" title="${esc(r.label)}">${esc(stripNum(r.label))}${r.estimate ? ' <span class="note">est.' + (r.note ? " · " + esc(r.note) : "") + '</span>' : ""}</td>
     <td class="note">${esc(r.acct)}</td><td class="r ${r.amount > 0 ? "amt-pos" : ""}">${f2(r.amount)}</td><td class="r ${r.balance_after < 0 ? "neg" : ""}">${f2(r.balance_after)}</td></tr>`;
   $("drafts").innerHTML = h + "</tbody>";
 }

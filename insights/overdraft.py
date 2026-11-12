@@ -9,9 +9,12 @@ is owed now plus the card's recent daily charges until it closes. The close-to-p
 the lag that explains the most of its past autopays (STATEMENT_LAG when none match). The draft is charged to the
 checking account that paid that card before.
 Rough by design: bills use their largest recent amount; pay uses its smallest recent amount, or the latest one once
-the payer's last two deposits agree; pay needs 3 occurrences and is dropped once it misses its date; a bill is
-dropped once it misses a whole cycle (paid some other way, or cancelled) and comes back, as an estimate, when it
-resumes on its usual day. A card autopay survives one missed cycle: issuers skip a draft when the statement was
+the payer's last two deposits agree; pay needs 3 occurrences and is dropped once it misses its date. A bill seen
+three times that misses a cycle is still projected for the next one, flagged "missed last cycle": it may have been
+paid another way that month (rent by check) or have ended, and the history can't tell which, so the forecast errs
+on the side of the debit. After two missed cycles, or with fewer than three occurrences, it is dropped. A bill
+with a known last day goes in personal.json "overdraft": {"ends": {"<description LIKE pattern>": "YYYY-MM-DD"}}:
+nothing is projected for it after that date. A bill that resumes on its usual day is one series again. A card autopay survives one missed cycle: issuers skip a draft when the statement was
 already paid by hand, and resume. Frequent deposits with no monthly rhythm (many small payouts from one payer) are
 never projected; they're listed per account as `uncounted_income` and named in the warning.
 
@@ -35,6 +38,9 @@ from collections import defaultdict
 from datetime import date, timedelta
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import personal  # noqa: E402
+
 DB = Path(os.environ.get("WEALTH_LEDGER_DB") or Path.home() / ".local/share/wealth-ledger/txns.db")
 HORIZON = 31        # days ahead to project
 BUFFER = 250.0      # warn when the projected low point drops under this
@@ -45,6 +51,8 @@ LOOKBACK = 120      # days of history to learn the series from
 MIN_AMT = 5.0
 MAX_RATIO = 1.33    # checking-side series: consecutive amounts within this factor (keeps bonus pay out of payroll)
 SWEEPS = ("%CORE ACCOUNT%", "REINVESTMENT%")  # brokerage cash sweeps: internal, already inside the balance
+ESTABLISHED = 3     # a bill seen this many times is still expected after one missed cycle
+MISSED_NOTE = "missed last cycle"
 SKIP_TOL = 4        # a gap counts as "one period skipped" when half of it is within this many days of the usual spacing
 SAME_PAY = 0.01     # a payer's last two deposits "agree" within this fraction
 SPEND_DAYS = 60     # a card's recent charge rate is taken over this many days
@@ -123,6 +131,19 @@ def upcoming(chain, today: date, end: date, income: bool, missed: int = 0) -> li
     return out
 
 
+def missed_cycle(chain, today: date) -> bool:
+    """True when the series' last occurrence is more than one cycle back (see `upcoming(missed=1)`)."""
+    interval = max(MIN_GAP, round(statistics.median(_gaps(chain))))
+    return (today - chain[-1][0]).days > max(interval, MAX_GAP) + GRACE
+
+
+def bill_ends(con, description: str, ends: dict[str, str]) -> date | None:
+    """The last day a bill can be drafted, from personal.json "overdraft.ends" (description LIKE pattern -> date)."""
+    hits = [date.fromisoformat(d) for pat, d in ends.items()
+            if not pat.startswith("_") and con.execute("SELECT ? LIKE ?", (description, pat)).fetchone()[0]]
+    return min(hits) if hits else None
+
+
 def _rows(con, sql, args=()):
     return [dict(r) for r in con.execute(sql, args)]
 
@@ -183,7 +204,13 @@ def _funding_account(con, card_id: str) -> str | None:
     return r[0] if r else None
 
 
-def forecast(con: sqlite3.Connection, today: date | None = None, horizon: int = HORIZON) -> list[dict]:
+def forecast(con: sqlite3.Connection, today: date | None = None, horizon: int = HORIZON,
+             ends: dict[str, str] | None = None) -> list[dict]:
+    if ends is None:
+        try:
+            ends = personal.section("overdraft").get("ends") or {}
+        except personal.PersonalConfigError:  # no personal.json: nothing is known to end
+            ends = {}
     con.row_factory = sqlite3.Row
     today = today or date.today()
     end = today + timedelta(horizon)
@@ -210,13 +237,21 @@ def forecast(con: sqlite3.Connection, today: date | None = None, horizon: int = 
         last2 = [a for _, a in sorted(p for c in series for p in c)[-2:]] if income else []
         settled = len(last2) == 2 and abs(last2[0] - last2[1]) <= SAME_PAY * max(last2)
         projected = False
+        last_day = None if income else bill_ends(con, max(occ)[2], ends)
         for c in series:
             recent = [a for _, a in c[-3:]]
             amt = last2[-1] if settled else min(recent)
-            for d in upcoming(c, today, end, income):
+            # an established bill that just missed a cycle: paid another way this once, or over? Keep it, flagged.
+            missed = not income and len(c) >= ESTABLISHED and missed_cycle(c, today)
+            for d in upcoming(c, today, end, income, missed=1 if missed else 0):
+                if last_day and d > last_day:
+                    continue
                 projected = True
-                accounts[acct]["events"].append({"date": d.isoformat(), "label": name, "amount": round(amt, 2),
-                                                 "estimate": len(set(recent)) > 1 or skipped(c)})
+                ev = {"date": d.isoformat(), "label": name, "amount": round(amt, 2),
+                      "estimate": len(set(recent)) > 1 or skipped(c) or missed}
+                if missed:
+                    ev["note"] = MISSED_NOTE
+                accounts[acct]["events"].append(ev)
         late = [a for d, a, _, cls in occ if d >= window and cls == "income"]
         if income and not projected and len(late) >= UNCOUNTED_MIN:
             accounts[acct]["uncounted"].append({"label": name, "count": len(late), "days": UNCOUNTED_DAYS,
@@ -287,7 +322,8 @@ def warnings(fc: list[dict], buffer: float = BUFFER) -> list[str]:
             continue
         upto = a["first_short"] or a["low_date"]
         big = sorted((e for e in a["events"] if e["amount"] < 0 and e["date"] <= upto), key=lambda e: e["amount"])[:3]
-        drafts = ", ".join(f"{e['label']} ~${-e['amount']:,.0f} {_md(e['date'])}" for e in big)
+        drafts = ", ".join(f"{e['label']} ~${-e['amount']:,.0f} {_md(e['date'])}"
+                           f"{', ' + e['note'] if e.get('note') else ''}" for e in big)
         if a["first_short"]:
             line = (f"Overdraft risk: {a['account']} has {_usd(a['balance'])}, projected {_usd(a['low'])} by "
                     f"{_md(a['low_date'])} ({drafts}). Move money in before {_md(a['first_short'])}.")
@@ -326,7 +362,7 @@ def main(argv=None) -> int:
                   f"low ${a['low']:,.2f}{' on ' + a['low_date'] if a['low_date'] else ''}")
             for e in a["events"]:
                 print(f"  {e['date']}  {e['amount']:>10,.2f}  {e['balance_after']:>10,.2f}  "
-                      f"{e['label']}{' (est.)' if e['estimate'] else ''}")
+                      f"{e['label']}{' (est.)' if e['estimate'] else ''}{' (' + e['note'] + ')' if e.get('note') else ''}")
             for u in a["uncounted_income"]:
                 print(f"  not counted: {u['label']}, {u['count']} irregular deposits in {u['days']} days "
                       f"(~{_usd(u['monthly'])}/mo)")

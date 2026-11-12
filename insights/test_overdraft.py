@@ -88,13 +88,41 @@ def test_late_draft_counts_as_due_today_and_stopped_series_drops(led):
     assert not any("OLD SUB" in e["label"] for e in ev)
 
 
-def test_bill_that_skipped_a_whole_cycle_drops(led):
-    led.account(CHK, "Checking", "checking", 1000)
+def test_established_bill_that_missed_a_cycle_stays_as_a_flagged_estimate(led):
+    """Rent drafted three months running, then nothing in October (paid another way, or the lease is over: the
+    ledger can't say). It is still projected for November, flagged, so a real debit can't vanish silently."""
+    led.account(CHK, "Checking (1111)", "checking", 1000)
     led.monthly(CHK, date(2026, 7, 12), 3, -2100, "DIRECT DEBIT LANDLORD RENT")  # 9/12, then no 10/12 debit
     led.monthly(CHK, date(2026, 7, 20), 3, -60, "DIRECT DEBIT POWER CO")       # 9/20 + 31 days: 10/21, late but still due
-    ev = led.forecast()[CHK]["events"]
-    assert not any("LANDLORD" in e["label"] for e in ev)
-    assert [e["date"] for e in ev if "POWER" in e["label"]] == ["2026-11-21"]
+    fc = led.forecast()[CHK]
+    rent = [e for e in fc["events"] if "LANDLORD" in e["label"]]
+    assert rent == [{"date": "2026-11-13", "label": "LANDLORD RENT", "amount": -2100, "estimate": True,
+                     "note": "missed last cycle", "balance_after": -1100}]
+    power = [e for e in fc["events"] if "POWER" in e["label"]]
+    assert [e["date"] for e in power] == ["2026-11-21"] and "note" not in power[0]
+    (w,) = overdraft.warnings([fc])
+    assert "LANDLORD RENT ~$2,100 11/13, missed last cycle" in w
+
+
+def test_bill_that_missed_two_cycles_or_was_never_established_drops(led):
+    led.account(CHK, "Checking", "checking", 1000)
+    led.monthly(CHK, date(2026, 6, 12), 3, -2100, "DIRECT DEBIT LANDLORD RENT")  # last 8/12: two cycles missed
+    led.monthly(CHK, date(2026, 8, 14), 2, -45, "DIRECT DEBIT TRIAL BOX")        # only twice, then one missed
+    assert led.forecast()[CHK]["events"] == []
+
+
+def test_bill_with_a_known_last_day_is_not_projected_past_it(led):
+    led.account(CHK, "Checking", "checking", 5000)
+    led.monthly(CHK, date(2026, 7, 3), 4, -2100, "DIRECT DEBIT LANDLORD RENT")   # next 11/3
+    led.monthly(CHK, date(2026, 7, 5), 4, -60, "DIRECT DEBIT POWER CO")
+    led.db.commit()
+    dates = lambda ends: [e["date"] for e in overdraft.forecast(led.db, today=TODAY, ends=ends)[0]["events"]
+                          if "LANDLORD" in e["label"]]
+    assert dates({}) == ["2026-11-03"]
+    assert dates({"%LANDLORD%": "2026-11-03"}) == ["2026-11-03"]   # the last day itself still counts
+    assert dates({"%LANDLORD%": "2026-10-31", "_note": "lease"}) == []
+    assert dates({"%OTHER TENANT%": "2026-10-31"}) == ["2026-11-03"]
+    assert len(led.forecast()[CHK]["events"]) == 2  # personal.example.json's own "ends" matches neither
 
 
 def test_sweeps_and_idle_accounts_ignored(led):
