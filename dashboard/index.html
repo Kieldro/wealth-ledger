@@ -506,7 +506,9 @@ function renderSummary(s) {
     const c = s.changes[n], lbl = CHG_LABEL[n] || n + "d";
     if (!c || c.delta == null) return CHG_LABEL[n] ? "" : `<span class="chip" title="${esc(c ? c.note : "")}">${lbl} <b>n/a</b></span>`;
     const cls = c.delta > 0 ? "up" : c.delta < 0 ? "down" : "";
-    return `<span class="chip" title="vs ${esc(c.vs)}">${lbl} <b class="${cls}">${signed(c.delta)}</b></span>`;
+    // like for like: accounts linked after the period began are left out (their opening balance isn't a gain)
+    const left = c.excluded ? ` · leaves out ${c.excluded} account${c.excluded > 1 ? "s" : ""} linked since then (${f0(c.excluded_total)} today); money moved into them from older accounts shows as a drop` : "";
+    return `<span class="chip" title="vs ${esc(c.vs)}${esc(left)}">${lbl} <b class="${cls}">${signed(c.delta)}</b>${c.excluded ? ' <span class="note">partial</span>' : ""}</span>`;
   }).join("");
   const missing = ["7", "30"].filter(n => s.changes[n] && s.changes[n].delta == null);
   $("nwnote").textContent = (missing.length ? (s.changes[missing[0]].note || "") + ", so " + missing.join("/") + "-day change is n/a. " : "") +

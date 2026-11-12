@@ -89,6 +89,29 @@ def test_period_changes_mtd_ytd():
     assert ch["1"]["delta"] is None and ch["30"]["delta"] is None
 
 
+def test_period_changes_leave_out_accounts_linked_during_the_period():
+    """A brokerage account linked on 3/1 with $50,000 already in it is not a $50,000 gain for the month."""
+    s = [{"date": "2026-02-27", "synced": 1000.0, "accounts": {"chk": 1000.0}},
+         {"date": "2026-03-01", "synced": 51100.0, "accounts": {"chk": 1100.0, "brk": 50000.0, "empty": 0.0}},
+         {"date": "2026-03-02", "synced": 51800.0, "accounts": {"chk": 1300.0, "brk": 50500.0, "empty": 0.0}}]
+    ch = server.period_changes(s)
+    assert ch["mtd"] == {"delta": 300.0, "vs": "2026-02-27", "excluded": 1, "excluded_total": 50500.0}
+    assert ch["1"] == {"delta": 700.0, "vs": "2026-03-01"}  # both accounts existed yesterday: nothing left out
+
+
+def test_synced_series_carries_per_account_balances_and_the_trend_does_not_send_them(dbfile, monkeypatch):
+    con = ctdb.connect(dbfile)
+    con.execute("INSERT INTO account_kind VALUES ('s1','savings',NULL)")
+    con.execute(ctdb.UPSERT_BALANCE, ("2026-01-05", "test", "c1", "Test c1 (1234)", "Bank", "-200.00", None, "USD", None))
+    con.execute(ctdb.UPSERT_BALANCE, ("2026-01-06", "test", "s1", "Savings (9)", "Bank", "900.00", None, "USD", None))
+    con.commit()
+    series = server.synced_series()
+    assert series[0] == {"date": "2026-01-05", "synced": -200.0, "accounts": {"c1": -200.0}}
+    assert series[1] == {"date": "2026-01-06", "synced": 700.0, "accounts": {"c1": -200.0, "s1": 900.0}}
+    monkeypatch.setattr(server, "networth", lambda refresh=False: {"data": None, "error": "x"})
+    assert all(set(p) <= {"date", "synced", "total"} for p in server.api_trend({})["series"])
+
+
 def test_period_changes_short_history():
     ch = server.period_changes([{"date": "2026-10-16", "synced": 1.0}, {"date": "2026-10-27", "synced": 3.0}])
     assert ch["mtd"]["delta"] is None and ch["ytd"]["delta"] is None

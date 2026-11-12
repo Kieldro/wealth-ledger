@@ -146,7 +146,8 @@ def read_status(now: datetime | None = None) -> dict:
 
 
 def synced_series() -> list[dict]:
-    """Daily sum of synced balances networth.py counts (non-custodial/crypto, non-superseded), carried forward."""
+    """Daily sum of synced balances networth.py counts (non-custodial/crypto, non-superseded), carried forward.
+    Each day also has "accounts" (account_id -> balance that day) so period_changes can compare like with like."""
     rows = q(f"""SELECT b.snapshot_date d, b.account_id a, CAST(b.balance AS REAL) bal FROM balances b
                  JOIN account_kind k USING (account_id)
                  WHERE k.kind IN ({','.join('?' * len(NW_KINDS))})
@@ -160,29 +161,44 @@ def synced_series() -> list[dict]:
     for d in dates:
         for r in by_date[d]:
             last[r["a"]] = r["bal"] or 0.0
-        out.append({"date": d, "synced": round(sum(last.values()), 2)})
+        out.append({"date": d, "synced": round(sum(last.values()), 2), "accounts": dict(last)})
     return out
 
 
 def period_changes(series: list[dict]) -> dict:
     """Change in the synced total vs 1/7/30 days ago (that exact day's snapshot) and month/year to date (the last
-    snapshot on or before the previous month-end / year-end). The sheet-only total is constant, so it cancels out."""
+    snapshot on or before the previous month-end / year-end). The sheet-only total is constant, so it cancels out.
+
+    Like with like: only accounts that already had a balance at the start of the period count. An account linked
+    since then would add its whole opening balance as a "gain" (the money existed before, it just wasn't
+    synced), so it is left out and reported: "excluded" (how many) and "excluded_total" (their balance today)."""
     changes = {}
     if not series:
         return changes
     cur_synced = series[-1]["synced"]
+    now = series[-1].get("accounts")
+
+    def change(base: dict) -> dict:
+        then = base.get("accounts")
+        if now is None or then is None:  # totals only
+            return {"delta": round(cur_synced - base["synced"], 2), "vs": base["date"]}
+        new = [a for a, bal in now.items() if a not in then and abs(bal) >= 0.005]
+        out = {"delta": round(sum(now.get(a, 0.0) - bal for a, bal in then.items()), 2), "vs": base["date"]}
+        if new:
+            out.update(excluded=len(new), excluded_total=round(sum(now[a] for a in new), 2))
+        return out
     latest = date.fromisoformat(series[-1]["date"])
     note = f"history starts {series[0]['date']}"
     for n in (1, 7, 30):
         target = (latest - timedelta(days=n)).isoformat()
         past = [s for s in series if s["date"] <= target]
         if past and past[-1]["date"] == target:
-            changes[str(n)] = {"delta": round(cur_synced - past[-1]["synced"], 2), "vs": target}
+            changes[str(n)] = change(past[-1])
         else:
             changes[str(n)] = {"delta": None, "vs": target, "note": note}
     for key, base in (("mtd", latest.replace(day=1) - timedelta(days=1)), ("ytd", date(latest.year - 1, 12, 31))):
         past = [s for s in series if s["date"] <= base.isoformat()]
-        changes[key] = ({"delta": round(cur_synced - past[-1]["synced"], 2), "vs": past[-1]["date"]} if past
+        changes[key] = (change(past[-1]) if past
                         else {"delta": None, "vs": base.isoformat(), "note": note})
     return changes
 
@@ -237,7 +253,7 @@ def api_summary(params) -> dict:
 
 def api_trend(params) -> dict:
     nw = networth()
-    series = synced_series()
+    series = [{"date": s["date"], "synced": s["synced"]} for s in synced_series()]
     sheet_const = None
     if nw["data"]:
         sheet_const = round(sum((l["used"] if l["type"] == "asset" else -l["used"])
