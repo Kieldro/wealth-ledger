@@ -323,7 +323,7 @@ footer code { font-size: 11.5px; }
 
     <section class="card span-4" id="cardscard" data-nav="Cards">
       <h2>Credit cards</h2>
-      <p class="sub" id="cardsub">Balance owed per card against its credit limit, utilization, and the next projected autopay.</p>
+      <p class="sub" id="cardsub">Balance owed per card against its credit limit, utilization, and the next projected autopay. Click a card to see its transactions.</p>
       <div class="tw"><table id="cards"></table></div>
     </section>
 
@@ -960,7 +960,10 @@ function renderAccounts(a) {
   if (stale) h += `<tr><td colspan="5" class="note"><span class="badge b-stale">stale</span>${stale} feed${stale > 1 ? "s" : ""} with no new balance in over ${a.stale_days} days; the amount shown is the last one the bank sent.</td></tr>`;
   if (hidden) h += `<tr><td colspan="5" class="note">${hidden} zero-balance account${hidden > 1 ? "s" : ""} hidden</td></tr>`;
   $("accts").innerHTML = h + "</tbody>";
-  for (const tr of $("accts").querySelectorAll("tr.acct")) {
+  wireAccts("accts");
+}
+function wireAccts(id) {  // rows that open one account's transactions
+  for (const tr of $(id).querySelectorAll("tr.acct")) {
     tr.onclick = () => showAccount(tr.dataset.id);
     tr.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); tr.onclick(); } };
   }
@@ -968,7 +971,7 @@ function renderAccounts(a) {
 
 let acctView = null;  // {account, txns, ...} while one account's transactions are shown
 async function showAccount(id) {
-  const name = stripNum(data.accounts?.accounts.find(r => r.account_id === id)?.account_name || "account");
+  const name = stripNum([...(data.accounts?.accounts || []), ...(data.cards?.cards || [])].find(r => r.account_id === id)?.account_name || "account");
   $("acctbar").hidden = false; $("acctinfo").textContent = `Loading ${name}…`;
   goSec("txcard");
   try {
@@ -1114,7 +1117,7 @@ function renderCards(c) {
   let h = `<thead><tr><th>Card</th><th class="r">Owed / limit</th><th class="r" title="Utilization: balance owed / credit limit">Used</th></tr></thead><tbody>`;
   for (const r of c.cards) {
     const p = nextPay[r.account_name];
-    h += `<tr><td class="name" title="${esc(r.account_name)}">${esc(stripNum(r.account_name).replace(/ Card \d{4}$/, ""))}
+    h += `<tr class="acct" data-id="${esc(r.account_id)}" tabindex="0" role="button" aria-label="Show transactions for ${esc(stripNum(r.account_name))}"><td class="name" title="${esc(r.account_name)}">${esc(stripNum(r.account_name).replace(/ Card \d{4}$/, ""))}
       <div class="note">${esc(r.institution)} · ${esc((r.account_name.match(/\((\d{4})\)$/) || [, ""])[1])} · ${asOf(r)}${r.limit_basis === "manual"
         ? ' <span class="badge b-sheet" title="Credit limit entered by hand in personal.json (credit_limits)">manual limit</span>' : ""}</div>
       ${p ? `<div class="note" title="Projected from history; amount is the statement estimate">Autopay ${esc(p.date.slice(5))} · ${f0(-p.amount)} est.</div>` : ""}</td>
@@ -1125,6 +1128,7 @@ function renderCards(c) {
   h += `<tr class="total"><td>Total</td><td class="r">${owedCell(c.total)}${c.limit != null ? `<div class="note" title="Sum of known limits${esc(partial)}">/ ${f0(c.limit)} limit</div>` : ""}${c.available != null ? `<div class="note">${f0(c.available)} avail.</div>` : ""}</td>
     <td class="r">${c.util_pct != null ? `<span title="Overall utilization: owed / total limit across cards with a known limit${esc(partial)}">${c.util_pct.toFixed(0)}%</span>` : ""}</td></tr>`;
   $("cards").innerHTML = h + "</tbody>";
+  wireAccts("cards");
   kf("cardscard", `${f0(c.total)} owed` + (c.util_pct != null ? ` · ${c.util_pct.toFixed(0)}% used` : ""));
 }
 

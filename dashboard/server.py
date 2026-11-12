@@ -496,7 +496,7 @@ def api_cards(params) -> dict:
     approximated as owed + the feed's available credit (SimpleFIN reports 0 for cards it has no figure for, so 0
     counts as unknown; pending charges can make the estimate a little off). limit_basis says which:
     plaid/simplefin (feed), manual, or estimate."""
-    rows = q("""SELECT b.account_name, b.institution, b.source, ROUND(-b.bal,2) owed, b.available, b.as_of,
+    rows = q("""SELECT b.account_id, b.account_name, b.institution, b.source, ROUND(-b.bal,2) owed, b.available, b.as_of,
                        b.snapshot_date, a.credit_limit, a.credit_limit_source
                 FROM v_balances_latest b JOIN v_accounts a USING (account_id, source)
                 WHERE b.kind='credit' ORDER BY b.bal""")
