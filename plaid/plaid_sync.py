@@ -278,6 +278,10 @@ def sync(cfg: dict, db_path: Path) -> None:
                 if "investments" in products:
                     print(f"{label}: holdings={sync_holdings(cfg, item, db)}")
             except PlaidError as e:
+                # /accounts/get answers from Plaid's cache even when the item is broken (login expired), and its
+                # balances are written before the step that fails. Drop them, or the next commit would store
+                # stale balances under today's date and the account would read as fresh everywhere.
+                db.rollback()
                 failed += 1
                 print(f"error: {label}: {e}", file=sys.stderr)
         for dup, orig in ctdb.flag_late_duplicates(db):
