@@ -100,6 +100,16 @@ def test_balance_that_stopped_updating_is_counted_but_named(nw):
     assert w.startswith("Net worth: Example Bank Savings (1111) was last updated 2026-09-30 and is still counted")
 
 
+def test_each_line_says_what_day_its_number_is_from(nw):
+    nw.execute("UPDATE balances SET as_of='2026-10-25T07:00:00' WHERE account_id='chk'")      # the bank's own date wins
+    nw.execute("UPDATE balances SET snapshot_date='2026-10-24' WHERE account_id IN ('sav', 'cc2')")
+    nw.commit()
+    as_of = {l["line"]: l["as_of"] for l in networth.compute(today=DAY)["lines"]}
+    assert as_of == {"Checking": "2026-10-25", "Savings": "2026-10-24", "Brokerage": DAY, "Roth IRA": DAY,
+                     "Mortgage": DAY, "Credit card": DAY, "Other Card (6666)": "2026-10-24",
+                     "Home": DAY, "Cash": None, "Total metals value": None}
+
+
 def test_account_without_a_balance_does_not_break_the_total(nw):
     nw.execute("UPDATE balances SET balance=NULL WHERE account_id IN ('chk', 'cc2')")
     nw.commit()

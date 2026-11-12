@@ -229,7 +229,7 @@ footer code { font-size: 11.5px; }
 
   <section class="hero" id="hero">
     <div class="card"><div class="label">Net worth</div>
-      <div class="big" id="nw">—</div><div class="nwunit num" id="nwunit"></div><div class="chips" id="chg"></div><div class="note" id="nwnote" style="margin-top:6px"></div></div>
+      <div class="big" id="nw">—</div><div class="nwunit num" id="nwunit"></div><div class="chips" id="chg"></div><div class="note" id="nwage" style="margin-top:6px"></div><div class="note" id="nwnote" style="margin-top:6px"></div></div>
     <div class="card"><div class="label">Assets</div><div class="mid num" id="assets">—</div><div class="note" id="assetsnote"></div></div>
     <div class="card"><div class="label">Liabilities</div><div class="mid num" id="liabs">—</div><div class="note" id="liabsnote"></div></div>
   </section>
@@ -510,6 +510,10 @@ function renderSummary(s) {
     const left = c.excluded ? ` · leaves out ${c.excluded} account${c.excluded > 1 ? "s" : ""} linked since then (${f0(c.excluded_total)} today); money moved into them from older accounts shows as a drop` : "";
     return `<span class="chip" title="vs ${esc(c.vs)}${esc(left)}">${lbl} <b class="${cls}">${signed(c.delta)}</b>${c.excluded ? ' <span class="note">partial</span>' : ""}</span>`;
   }).join("");
+  // how old the headline's inputs are, when not all from today (typed-in sheet values have no date)
+  const ages = s.input_ages || {}, day = iso => new Date(iso + "T12:00").toLocaleDateString("en-US", {month: "short", day: "numeric"});
+  const agePart = (a, what) => a ? `${a.old} of ${a.of} ${what} from before today, oldest ${stripNum(a.line)} (${day(a.oldest)}, ${a.age_days} day${a.age_days === 1 ? "" : "s"})` : "";
+  $("nwage").textContent = [agePart(ages.live, "live balances"), agePart(ages.est, "estimates")].filter(Boolean).join(" · ");
   const missing = ["7", "30"].filter(n => s.changes[n] && s.changes[n].delta == null);
   $("nwnote").textContent = (missing.length ? (s.changes[missing[0]].note || "") + ", so " + missing.join("/") + "-day change is n/a. " : "") +
     (s.sheet_net_worth ? `Sheet's own total: ${f0(s.sheet_net_worth)}.` : "");

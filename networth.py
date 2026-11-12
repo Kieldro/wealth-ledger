@@ -76,12 +76,14 @@ def valuation_from(source: str, snapshot_date: str, today: str) -> str:
 
 def compute(today: str | None = None) -> dict:
     """{assets, liabilities, net_worth, sheet_net_worth, lines, warnings}; each line says where its number came
-    from. warnings name what may make the total wrong without failing: a synced row that no longer matches any
+    from and, as "as_of", the day it is from (the oldest of its accounts; None for a typed-in sheet value). warnings name what may make the total wrong without failing: a synced row that no longer matches any
     account, a counted balance that stopped updating, an account whose feed sent no balance."""
     sheet = sheet_rows()
     today = today or date.today().isoformat()
     db = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
-    accts = db.execute("SELECT account_id, account_name, balance, kind, snapshot_date FROM v_accounts").fetchall()
+    accts = db.execute("SELECT account_id, account_name, balance, kind, snapshot_date, as_of FROM v_accounts").fetchall()
+    # the day each balance is from: the bank's own date when the feed gives one, else the day the sync saw it
+    seen = {a[0]: (a[5] or a[4] or "")[:10] or None for a in accts}
     # estimates from valuations/ (metals at spot, crypto wallets, home/car AVMs) replace the sheet's manual numbers
     try:
         vals = {a: (v, src, d) for a, v, src, d in db.execute(
@@ -93,7 +95,8 @@ def compute(today: str | None = None) -> dict:
     def live(patterns):
         hits = [a for a in accts if any(db.execute("SELECT ? LIKE ?", (a[1], p)).fetchone()[0] for p in patterns)]
         used_ids.update(a[0] for a in hits)
-        return sum(a[2] or 0.0 for a in hits) if hits else None
+        dates = [seen[a[0]] for a in hits if seen[a[0]] and abs(a[2] or 0) >= 0.01]
+        return (sum(a[2] or 0.0 for a in hits), min(dates, default=None)) if hits else (None, None)
 
     for label in list(ASSET_ROWS) + list(LIAB_ROWS):
         key = label.rstrip("*")
@@ -101,7 +104,7 @@ def compute(today: str | None = None) -> dict:
             continue
         is_liab = label in LIAB_ROWS
         sval = sheet.get(key)
-        lval = live(SYNCED[key]) if key in SYNCED else None
+        lval, as_of = live(SYNCED[key]) if key in SYNCED else (None, None)
         if lval is not None and is_liab:
             lval = -lval  # liabilities are stored negative; the sheet lists them positive
         value = lval if lval is not None else (sval or 0.0)
@@ -112,24 +115,24 @@ def compute(today: str | None = None) -> dict:
         synced = lval is not None
         if lval is None and key in vals:
             lval, vsrc, vdate = vals[key]
-            value, src = lval, valuation_from(vsrc, vdate, today)
+            value, src, as_of = lval, valuation_from(vsrc, vdate, today), vdate
         if key in SHEET_EXCLUDED:
-            value, src = 0.0, "sheet, excluded by sheet's own total"
+            value, src, as_of = 0.0, "sheet, excluded by sheet's own total", None
         # "synced" = a SimpleFIN/Plaid account balance, which the daily series in the dashboard trend already has
         lines.append({"line": key, "type": "liability" if is_liab else "asset", "sheet": sval,
-                      "live": lval, "used": value, "from": src, "synced": synced})
+                      "live": lval, "used": value, "from": src, "synced": synced, "as_of": as_of})
 
-    for aid, name, bal, kind, snap in accts:
+    for aid, name, bal, kind, snap, _ in accts:
         if aid in used_ids or kind not in EXTRA_KINDS or abs(bal or 0) < 0.01:
             continue
         used_ids.add(aid)
         liab = kind in ("credit", "loan")
         lines.append({"line": name, "type": "liability" if liab else "asset", "sheet": None,
                       "live": -bal if liab else bal, "used": -bal if liab else bal, "from": "live (no sheet row)",
-                      "synced": True})
+                      "synced": True, "as_of": seen[aid]})
 
     newest = max((a[4] for a in accts if a[4]), default=None)
-    for aid, name, bal, kind, snap in accts:
+    for aid, name, bal, kind, snap, _ in accts:
         if aid not in used_ids:
             continue
         if bal is None:

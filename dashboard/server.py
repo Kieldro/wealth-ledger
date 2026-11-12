@@ -212,6 +212,22 @@ def line_source(line: dict) -> str:
     return "live" if f.startswith("live") else "est" if f.startswith("estimate") else "sheet"
 
 
+def input_ages(lines: list[dict], today: date | None = None) -> dict:
+    """How old the headline's inputs are, for the note beside it: per source ("live", "est"), how many counted
+    lines are from before today and the oldest of them. Empty when everything dated is from today. Typed-in sheet
+    values carry no date and are not counted here (their badge already says so)."""
+    today = today or date.today()
+    out = {}
+    for src in ("live", "est"):
+        dated = [(l["as_of"][:10], l["line"]) for l in lines
+                 if l.get("as_of") and abs(l.get("used") or 0) >= 0.005 and line_source(l) == src]
+        old = sorted(x for x in dated if x[0] < today.isoformat())
+        if old:
+            out[src] = {"old": len(old), "of": len(dated), "oldest": old[0][0], "line": old[0][1],
+                        "age_days": (today - date.fromisoformat(old[0][0])).days}
+    return out
+
+
 def in_synced_series(line: dict) -> bool:
     """True when the line is a SimpleFIN/Plaid account balance, i.e. already inside synced_series(). A valuation
     read live from an exchange is not: it has no daily account snapshots, so the trend carries it as a constant."""
@@ -247,7 +263,7 @@ def api_summary(params) -> dict:
     changes = period_changes(synced_series())
     res.update(net_worth=data["net_worth"], assets=data["assets"], liabilities=data["liabilities"],
                sheet_net_worth=data.get("sheet_net_worth"), sheet_only_total=sheet_const,
-               changes=changes, categories=list(cats.values()))
+               changes=changes, categories=list(cats.values()), input_ages=input_ages(data["lines"]))
     return res
 
 

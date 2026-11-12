@@ -425,3 +425,20 @@ def test_page_reloads_itself_and_says_when_numbers_are_old():
                    'addEventListener("pageshow"', "data.summary?.cache_ttl_s", "function agePill(s)",
                    'id="unrefreshed"', 'id="loaderrors"'):
         assert needle in html, needle
+
+
+def test_input_ages_names_the_oldest_live_balance_and_estimate():
+    today = date(2026, 10, 27)
+    lines = [{"line": "Checking", "used": 1000.0, "from": "live", "as_of": "2026-10-27"},
+             {"line": "Savings", "used": 500.0, "from": "live", "as_of": "2026-10-20T08:00:00"},
+             {"line": "Card", "used": 50.0, "from": "live (no sheet row)", "as_of": "2026-10-26"},
+             {"line": "Closed", "used": 0.0, "from": "live", "as_of": "2026-01-01"},           # nothing counted
+             {"line": "Exchange", "used": 9.0, "from": "live reading (exchange-api USD balance)", "as_of": "2026-10-27"},
+             {"line": "Home", "used": 300.0, "from": "estimate (avm, 2026-10-08)", "as_of": "2026-10-08"},
+             {"line": "Metals", "used": 80.0, "from": "estimate (spot, 2026-10-27)", "as_of": "2026-10-27"},
+             {"line": "Cash", "used": 20.0, "from": "sheet", "as_of": None}]
+    assert server.input_ages(lines, today) == {
+        "live": {"old": 2, "of": 4, "oldest": "2026-10-20", "line": "Savings", "age_days": 7},
+        "est": {"old": 1, "of": 2, "oldest": "2026-10-08", "line": "Home", "age_days": 19}}
+    assert server.input_ages([l for l in lines if l["as_of"] in ("2026-10-27", None)], today) == {}
+    assert server.input_ages([{"line": "Old cache", "used": 5.0, "from": "live"}], today) == {}  # no as_of key
