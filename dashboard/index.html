@@ -59,6 +59,40 @@ button:disabled { opacity: .6; cursor: progress; }
 .problems:empty { display: none; }
 .alert { background: color-mix(in srgb, var(--neg) 14%, var(--surface)); color: var(--neg); border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
 .alert:empty { display: none; }
+.alert .al + .al { margin-top: 6px; padding-top: 6px; border-top: 1px solid color-mix(in srgb, var(--neg) 25%, transparent); }
+.alert a { color: inherit; text-decoration: none; }
+.alert details { display: inline; }
+.alert details[open] { display: block; margin-top: 4px; font-size: 12px; }
+.alert summary, .problems summary { cursor: pointer; }
+.alert summary { display: inline-block; text-decoration: underline; text-underline-offset: 2px; font-size: 12px; padding: 8px 8px; margin: -8px 0 -8px -2px; }
+.problems summary { padding: 7px 0; margin: -7px 0; }
+.alert summary::-webkit-details-marker, .alert summary::marker { display: none; content: ""; }
+.problems details:not([open]) summary { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.problems details[open] .first { display: none; }
+.problems details > div { margin-top: 4px; }
+.show-sm { display: none; }
+/* section heads: tap to fold a section; the figure on the right is its one-line conclusion */
+.sechd { display: flex; align-items: baseline; gap: 10px; cursor: pointer; margin: -4px -6px 2px; padding: 4px 6px; border-radius: 8px; }
+.sechd:focus-visible { outline: 2px solid var(--accent); }
+.sechd h2 { margin: 0; flex: none; }
+.sechd .kf { margin-left: auto; font-size: 12.5px; color: var(--text-2); text-align: right; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.sechd::after { content: "▾"; color: var(--muted); font-size: 11px; flex: none; }
+.collapsed > .sechd::after { content: "▸"; }
+.collapsed > .sechd { margin-bottom: -4px; }
+.collapsed > .secbody { display: none; }
+.secbody > .hd:first-child { justify-content: flex-end; margin-bottom: 4px; }
+section.card { scroll-margin-top: 52px; }
+.jump { position: sticky; top: 0; z-index: 5; display: flex; gap: 6px; overflow-x: auto; padding: 8px 0; margin: -4px 0 6px; background: var(--bg); scrollbar-width: none; }
+.jump button { flex: none; color: var(--text-2); }
+#agebar { margin-bottom: 10px; }
+#agebar:empty { display: none; }
+#totop { position: fixed; right: 10px; bottom: 12px; z-index: 6; box-shadow: 0 2px 10px rgb(0 0 0 / .25); opacity: .92; }
+table:empty::before { content: "Loading…"; font-size: 12px; color: var(--muted); }  /* until its section's data arrives */
+#totop[hidden] { display: none; }
+tr.short td { background: color-mix(in srgb, var(--neg) 9%, transparent); }
+#drafts td.name .note { display: block; overflow: hidden; text-overflow: ellipsis; }
+#drafts td.when { white-space: nowrap; color: var(--text-2); }
+#draftsum .chip { white-space: normal; }
 
 .grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 12px; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px; min-width: 0; }
@@ -123,6 +157,7 @@ tr.cat td:first-child::before { content: "▸"; display: inline-block; width: 12
 tr.cat[aria-expanded="true"] td:first-child::before { content: "▾"; }
 #cards td.name .note { white-space: normal; }
 #cards td.name { max-width: 180px; }
+#drafts td.name { max-width: 420px; }
 @media (max-width: 640px) { .filters input, .filters select { font-size: 16px; } .filters input { max-width: none; } }
 .cls { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 5px; background: var(--surface-2); color: var(--text-2); white-space: nowrap; }
 .cls.spend { color: var(--neg); } .cls.income, .cls.refund { color: var(--pos); }
@@ -189,10 +224,29 @@ footer { margin: 18px 0 8px; font-size: 12px; color: var(--muted); line-height: 
 footer code { font-size: 11.5px; }
 .err { color: var(--neg); font-size: 13px; }
 
+@media (min-width: 1001px) {  /* wide screens keep allocation and trend on top; drafts sit beside the cards they pay */
+  #alloccard, #trendcard { order: -1; }
+}
 @media (max-width: 1000px) {
   .span-7, .span-5, .span-6, .span-4, .span-8 { grid-column: span 12; }
 }
+@media (pointer: coarse) {  /* fingers: nothing tappable under ~36px */
+  button, .unitpick select { min-height: 36px; padding-left: 12px; padding-right: 12px; }
+  .rng button, .bench button { min-height: 34px; min-width: 40px; }
+  .toggle { min-height: 36px; }
+  .toggle input { width: 18px; height: 18px; }
+}
 @media (max-width: 640px) {
+  .show-sm { display: block; }
+  .card p.sub { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; cursor: pointer; }
+  .card p.sub.open { display: block; }
+  .sechd { padding: 6px; }
+  #accts td.name, #drafts td.name, #recent td.name, #cards td.name { max-width: 0; width: 99%; }
+  header.top { flex-wrap: nowrap; gap: 8px; margin-bottom: 10px; }
+  .hdr-r { flex-wrap: nowrap; gap: 6px; min-width: 0; }
+  .status { flex-wrap: nowrap; gap: 6px; }
+  .unitpick select { max-width: 112px; }
+  .pill.old { white-space: normal; }
   .wrap { padding: 12px 12px 16px; }
   .hero { grid-template-columns: 1fr 1fr; gap: 8px; }
   .hero .card:first-child { grid-column: span 2; }
@@ -218,11 +272,13 @@ footer code { font-size: 11.5px; }
   <header class="top">
     <h1>Finances</h1>
     <div class="hdr-r">
-      <label class="unitpick" id="unitpick" hidden>Values in <select id="unitsel" aria-label="Show every value in"></select><span class="note num" id="unitprice"></span></label>
+      <label class="unitpick" id="unitpick" hidden><span class="hide-sm">Values in </span><select id="unitsel" aria-label="Show every value in"></select><span class="note num hide-sm" id="unitprice"></span></label>
       <div class="status" id="status"><span class="pill">Loading…</span></div>
-      <form method="post" action="/logout" class="logout"><button type="submit" title="Sign out of this device">Log out</button></form>
+      <form method="post" action="/logout" class="logout hide-sm"><button type="submit" title="Sign out of this device">Log out</button></form>
     </div>
   </header>
+  <nav class="jump hide-sm" id="jump" aria-label="Jump to a section"></nav>
+  <div class="status" id="agebar"></div>
   <div class="alert" id="odwarn" role="alert"></div>
   <div class="problems" id="problems"></div>
   <div class="problems" id="loaderrors"></div>
@@ -235,7 +291,15 @@ footer code { font-size: 11.5px; }
   </section>
 
   <div class="grid" style="margin-top:12px">
-    <section class="card span-7">
+    <section class="card span-8" id="draftscard" data-nav="Drafts">
+      <h2>Upcoming drafts &amp; pay</h2>
+      <div class="chips" id="draftsum"></div>
+      <div class="tw" style="margin-top:8px"><table id="drafts"></table></div>
+      <p class="note" style="margin-top:8px"><button id="moredrafts" hidden>Show all</button></p>
+      <p class="sub" id="draftsub" style="margin:8px 0 0">Recurring bills, card autopays and pay projected from history.</p>
+    </section>
+
+    <section class="card span-7" id="alloccard" data-nav="Allocation">
       <div class="hd"><h2>Allocation</h2><span class="note">tap a row for its line items</span></div>
       <p class="sub">Every balance-sheet line, grouped. <span class="badge b-live">live</span> = synced from the bank, or read today straight from an exchange or blockchain; <span class="badge b-est">est</span> = modelled or priced from typed-in amounts (metals at spot, home/car estimates, crypto when any amount comes from the sheet), or a reading from an earlier day; <span class="badge b-sheet">sheet</span> = as of the last manual update.</p>
       <div class="alloc">
@@ -244,7 +308,7 @@ footer code { font-size: 11.5px; }
       </div>
     </section>
 
-    <section class="card span-5">
+    <section class="card span-5" id="trendcard" data-nav="Trend">
       <div class="hd"><h2>Net worth trend</h2>
         <div class="seg rng" id="trendrng" role="group" aria-label="Trend date range"><button type="button" data-r="1M" aria-pressed="false" title="Last month">1M</button><button type="button" data-r="3M" aria-pressed="false" title="Last 3 months">3M</button><button type="button" data-r="6M" aria-pressed="false" title="Last 6 months">6M</button><button type="button" data-r="YTD" aria-pressed="false" title="Year to date">YTD</button><button type="button" data-r="1Y" aria-pressed="false" title="Last year">1Y</button><button type="button" data-r="3Y" aria-pressed="false" title="Last 3 years">3Y</button><button type="button" data-r="All" aria-pressed="false" title="All history">All</button></div></div>
       <div class="trendchg num" id="trendchg"></div>
@@ -257,20 +321,54 @@ footer code { font-size: 11.5px; }
       <p class="note" id="trendnote"></p>
     </section>
 
-    <section class="card span-6">
+    <section class="card span-4" id="cardscard" data-nav="Cards">
+      <h2>Credit cards</h2>
+      <p class="sub" id="cardsub">Balance owed per card against its credit limit, utilization, and the next projected autopay.</p>
+      <div class="tw"><table id="cards"></table></div>
+    </section>
+
+    <section class="card span-6" id="acctscard" data-nav="Accounts">
       <div class="hd"><h2>Accounts</h2><label class="toggle"><input type="checkbox" id="showzero"> show zero balances</label></div>
       <p class="sub">Synced accounts only (latest snapshot). Click an account to see all its transactions. Custodial accounts are shown but not counted in net worth. Crypto exchange wallets are counted once, inside the Crypto total (priced live), not as separate lines.</p>
       <div class="tw"><table id="accts"></table></div>
     </section>
 
-    <section class="card span-6">
+    <section class="card span-6" id="holdscard" data-nav="Holdings">
       <h2>Top holdings</h2>
       <p class="sub" id="holdsub">Same symbol combined across accounts.</p>
       <div class="tw"><table id="holds"></table></div>
       <p class="note" style="margin-top:8px"><button id="moreholds">Show all</button></p>
     </section>
 
-    <section class="card span-12" id="cryptocard">
+    <section class="card span-12" id="spendcard" data-nav="Spending">
+      <h2>Spending</h2>
+      <p class="sub" id="spendsub"></p>
+      <div class="chartbox sm"><canvas id="spend" aria-label="Monthly spending" role="img"></canvas></div>
+      <div class="cols2" style="margin-top:12px">
+        <div><h2 id="tm-h">This month</h2><div class="tw"><table id="tm"></table></div></div>
+        <div><h2 id="lm-h">Last month</h2><div class="tw"><table id="lm"></table></div></div>
+      </div>
+    </section>
+
+    <section class="card span-12" id="budget" data-nav="Budget">
+      <div class="hd"><h2>Budget vs actual</h2><span class="seg" id="bud-seg"></span></div>
+      <p class="sub" id="budsub">Monthly budget from the sheet against posted spending.</p>
+      <div class="chips" id="budchips"></div>
+      <div class="tw" style="margin-top:10px"><table id="budtbl"></table></div>
+      <p class="note" id="budnote" style="margin-top:8px"></p>
+    </section>
+
+    <section class="card span-12" id="subscard" data-nav="Subscriptions">
+      <h2>Subscriptions &amp; unusual charges</h2>
+      <p class="sub" id="subsub">Recurring card and checking charges found from history.</p>
+      <div class="chips" id="subtot"></div>
+      <div class="cols2" style="margin-top:12px">
+        <div><h2>Recurring charges</h2><div class="tw"><table id="subs"></table></div></div>
+        <div><h2 id="unus-h">Unusual charges</h2><div class="tw"><table id="unusual"></table></div><p class="note" id="unusnote"></p></div>
+      </div>
+    </section>
+
+    <section class="card span-12" id="cryptocard" data-nav="Crypto">
       <div class="hd"><h2>Crypto</h2><span class="note" id="cryptonote"></span></div>
       <p class="sub" id="cryptosub"></p>
       <div id="btcwhere">
@@ -290,7 +388,7 @@ footer code { font-size: 11.5px; }
       <p class="note" style="margin-top:8px"><button id="morectx">Show all</button></p>
     </section>
 
-    <section class="card span-12" id="ira">
+    <section class="card span-12" id="ira" data-nav="IRA">
       <div class="hd"><h2>Inherited IRA · 10-year rule</h2><span class="note">estimates, not tax advice</span></div>
       <p class="sub" id="irasub">Loading…</p>
       <div class="problems" id="iramiss"></div>
@@ -314,37 +412,7 @@ footer code { font-size: 11.5px; }
       <p class="note" id="iranotes" style="margin-top:12px"></p>
     </section>
 
-    <section class="card span-4">
-      <h2>Credit cards</h2>
-      <p class="sub" id="cardsub">Balance owed per card against its credit limit, utilization, and the next projected autopay.</p>
-      <div class="tw"><table id="cards"></table></div>
-    </section>
-
-    <section class="card span-8">
-      <h2>Spending</h2>
-      <p class="sub" id="spendsub"></p>
-      <div class="chartbox sm"><canvas id="spend" aria-label="Monthly spending" role="img"></canvas></div>
-      <div class="cols2" style="margin-top:12px">
-        <div><h2 id="tm-h">This month</h2><div class="tw"><table id="tm"></table></div></div>
-        <div><h2 id="lm-h">Last month</h2><div class="tw"><table id="lm"></table></div></div>
-      </div>
-    </section>
-
-    <section class="card span-12" id="budget">
-      <div class="hd"><h2>Budget vs actual</h2><span class="seg" id="bud-seg"></span></div>
-      <p class="sub" id="budsub">Monthly budget from the sheet against posted spending.</p>
-      <div class="chips" id="budchips"></div>
-      <div class="tw" style="margin-top:10px"><table id="budtbl"></table></div>
-      <p class="note" id="budnote" style="margin-top:8px"></p>
-    </section>
-
-    <section class="card span-12">
-      <h2>Upcoming auto-drafts</h2>
-      <p class="sub" id="draftsub">Recurring bills, card autopays and pay projected from history.</p>
-      <div class="tw"><table id="drafts"></table></div>
-    </section>
-
-    <section class="card span-12" id="rentalcard">
+    <section class="card span-12" id="rentalcard" data-nav="Rental">
       <div class="hd"><h2 id="rental-h">Rental P&amp;L</h2><span class="note">cash basis, by month</span></div>
       <p class="sub" id="rentalsub">Booking payouts, tenant rent and the property's expenses.</p>
       <div class="chips" id="rentalchips"></div>
@@ -363,17 +431,7 @@ footer code { font-size: 11.5px; }
       <p class="note" id="rentalnote" style="margin-top:8px"></p>
     </section>
 
-    <section class="card span-12">
-      <h2>Subscriptions &amp; unusual charges</h2>
-      <p class="sub" id="subsub">Recurring card and checking charges found from history.</p>
-      <div class="chips" id="subtot"></div>
-      <div class="cols2" style="margin-top:12px">
-        <div><h2>Recurring charges</h2><div class="tw"><table id="subs"></table></div></div>
-        <div><h2 id="unus-h">Unusual charges</h2><div class="tw"><table id="unusual"></table></div><p class="note" id="unusnote"></p></div>
-      </div>
-    </section>
-
-    <section class="card span-12" id="txcard">
+    <section class="card span-12" id="txcard" data-nav="Transactions">
       <h2 id="txh">Recent transactions</h2>
       <div class="acctbar" id="acctbar" hidden><span id="acctinfo"></span><button type="button" id="acctclear">Show all accounts</button></div>
       <p class="sub" id="recentsub">Latest 30 across all accounts. Pending rows are dimmed.</p>
@@ -385,6 +443,8 @@ footer code { font-size: 11.5px; }
     </section>
   </div>
 
+  <form method="post" action="/logout" class="logout show-sm" style="margin-top:14px"><button type="submit" title="Sign out of this device">Log out</button></form>
+  <button type="button" id="totop" class="show-sm" hidden aria-label="Back to top">↑ Top</button>
   <footer id="footer">
     <b>Sources:</b> synced balances, holdings and transactions from <code>~/.local/share/wealth-ledger/txns.db</code> (read-only;
     SimpleFIN and Plaid), refreshed by the daily sync.
@@ -449,6 +509,10 @@ const signed = v => v == null ? "—" : (v > 0 ? "+" : v < 0 ? "−" : "") + f0(
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const monthName = m => new Date(m + "-15").toLocaleString("en-US", {month: "short", year: "numeric"});
 const fmtTime = iso => { if (!iso) return "—"; const d = new Date(iso); return isNaN(d) ? iso : d.toLocaleString("en-US", {month: "short", day: "numeric", hour: "numeric", minute: "2-digit"}); };
+// time alone for today, date alone for another day: the short form for the header pill
+const fmtShort = iso => { if (!iso) return "—"; const d = new Date(iso); if (isNaN(d)) return iso;
+  return d.toDateString() === new Date().toDateString() ? d.toLocaleTimeString("en-US", {hour: "numeric", minute: "2-digit"}) : d.toLocaleDateString("en-US", {month: "short", day: "numeric"}); };
+const md = iso => `${+iso.slice(5, 7)}/${+iso.slice(8, 10)}`;
 const stripNum = s => String(s || "").replace(/\s*\([0-9a-f-]+\)$/, "");
 async function get(path, opts = {}) {
   const r = await fetch(path, {cache: "no-store", credentials: "same-origin", ...opts});
@@ -461,6 +525,42 @@ const charts = {};
 const KIND_LABEL = {hsa: "HSA", loan: "Loans", credit: "Credit cards", checking: "Checking", savings: "Savings", investment: "Taxable investment",
   retirement: "Retirement", crypto: "Crypto exchange", custodial: "Custodial", unclassified: "Unclassified"};
 let data = {};
+
+// Sections fold. On a phone all but the first two start folded, so the page is a short list of headings, each with
+// its conclusion (the key figure) on the right; a choice made by tapping is remembered on this device.
+const SEC_KEY = "wl.sections", PHONE = matchMedia("(max-width: 640px)"), PHONE_OPEN = ["draftscard", "trendcard"];
+let secState = {};
+try { const v = JSON.parse(localStorage.getItem(SEC_KEY) || "{}"); if (v && typeof v === "object") secState = v; } catch { /* storage blocked */ }
+function setOpen(sec, open, save = false) {
+  sec.classList.toggle("collapsed", !open);
+  sec.querySelector(".sechd").setAttribute("aria-expanded", String(open));
+  if (save) { secState[sec.id] = open; try { localStorage.setItem(SEC_KEY, JSON.stringify(secState)); } catch { /* storage blocked */ } }
+  if (open) window.dispatchEvent(new Event("resize"));  // charts drawn while hidden take their size now
+}
+function goSec(id) {
+  const sec = $(id);
+  if (sec.classList.contains("collapsed")) setOpen(sec, true);
+  sec.scrollIntoView({behavior: "smooth", block: "start"});
+}
+const kf = (id, html) => { const el = $("kf-" + id); if (el) el.innerHTML = html; };
+for (const sec of document.querySelectorAll(".grid > section.card")) {
+  const h2 = sec.querySelector("h2"), body = document.createElement("div"), hd = document.createElement("div"), fig = document.createElement("span");
+  body.className = "secbody";
+  while (sec.firstChild) body.appendChild(sec.firstChild);
+  hd.className = "sechd"; hd.tabIndex = 0; hd.setAttribute("role", "button"); hd.setAttribute("aria-controls", sec.id);
+  fig.className = "kf"; fig.id = "kf-" + sec.id;
+  hd.append(h2, fig); sec.append(hd, body);
+  hd.addEventListener("click", () => setOpen(sec, sec.classList.contains("collapsed"), true));
+  hd.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); hd.click(); } });
+  setOpen(sec, secState[sec.id] ?? (!PHONE.matches || PHONE_OPEN.includes(sec.id)));
+  const b = document.createElement("button");
+  b.type = "button"; b.textContent = sec.dataset.nav; b.addEventListener("click", () => goSec(sec.id));
+  $("jump").append(b);
+}
+$("odwarn").addEventListener("click", e => { if (e.target.closest("a")) { e.preventDefault(); goSec("draftscard"); } });
+document.addEventListener("click", e => { const p = e.target.closest(".card p.sub"); if (p && PHONE.matches) p.classList.toggle("open"); });
+$("totop").addEventListener("click", () => scrollTo({top: 0, behavior: "smooth"}));
+addEventListener("scroll", () => { $("totop").hidden = scrollY < 700; }, {passive: true});
 
 function srcBadge(c) {
   const parts = ["live", "est", "sheet"].filter(k => c[k]);
@@ -482,18 +582,23 @@ function renderSummary(s) {
   const st = s.status || {};
   const sync = (st.problems || []).filter(p => !OD_LINE.test(p));  // overdraft lines get their own banner
   const bad = (st.rc && st.rc !== 0) || sync.length;
-  $("status").innerHTML = agePill(s) +
-    `<span class="pill"><span class="dot ${bad ? "bad" : ""}"></span>Synced ${esc(fmtTime(st.last_run))}${st.rc ? " (rc=" + st.rc + ")" : ""}</span>` +
+  $("agebar").innerHTML = agePill(s);
+  $("status").innerHTML =
+    `<span class="pill" title="Last finished sync: ${esc(fmtTime(st.last_run))}"><span class="dot ${bad ? "bad" : ""}"></span><span class="hide-sm">Synced </span>${esc(fmtShort(st.last_run))}${st.rc ? " (rc=" + st.rc + ")" : ""}</span>` +
     `<button id="refresh" title="Re-read the balance sheet (networth.py); does not call the banks">Refresh</button>`;
   $("refresh").onclick = () => load(true);
   const probs = [...sync];
   if (s.networth_error) probs.push(s.networth_error);
-  $("problems").innerHTML = probs.length ? "<b>Sync problems:</b> " + probs.map(esc).join("<br>") : "";
+  // one line, the rest on tap: the banner used to push the net worth off a phone's first screen
+  $("problems").innerHTML = !probs.length ? "" : `<details${probs.length === 1 && probs[0].length < 90 ? " open" : ""}><summary><b>${probs.length} data warning${probs.length > 1 ? "s" : ""}</b><span class="first"> · ${esc(probs[0])}</span></summary>${probs.map(p => `<div>${esc(p)}</div>`).join("")}</details>`;
   $("fetched").textContent = s.networth_fetched ? "sheet read " + fmtTime(s.networth_fetched) : "sheet not read yet";
   renderNW(s);
   if (s.net_worth == null) return;
 
   $("assets").textContent = f0(s.assets);
+  kf("alloccard", `${compact(s.assets)} assets · ${compact(s.liabilities)} owed`);
+  const wk = s.changes?.["7"] || s.changes?.["1"];
+  kf("trendcard", wk && wk.delta != null ? `<b class="${wk.delta > 0 ? "up" : wk.delta < 0 ? "down" : ""}">${signed(wk.delta)}</b> ${s.changes["7"] === wk ? "this week" : "today"}` : "");
   $("liabs").textContent = f0(s.liabilities);
   const cats = s.categories;
   const assetCats = cats.filter(c => c.type === "asset"), sumOf = k => assetCats.reduce((a, c) => a + (c[k] || 0), 0);
@@ -847,10 +952,11 @@ function renderAccounts(a) {
     const tag = k === "crypto" ? ' <span class="badge b-muted">in Crypto total</span>' : (!rs[0].counted ? ' <span class="badge b-muted">not counted</span>' : "");
     h += `<tr class="group"><td colspan="2">${esc(KIND_LABEL[k] || k)}${tag}</td><td class="r">${f0(tot)}</td><td colspan="2" class="hide-sm"></td></tr>`;
     for (const r of rs) h += `<tr class="acct ${r.counted || k === "crypto" ? "" : "dim"}" data-id="${esc(r.account_id)}" tabindex="0" role="button" aria-label="Show transactions for ${esc(stripNum(r.account_name))}"><td class="name" title="${esc(r.account_name)}">${esc(stripNum(r.account_name))} <span class="note">${esc((r.account_name.match(/\((\d{4})\)$/) || [, ""])[1])}</span></td>
-      <td class="hide-sm name">${esc(r.institution)}</td><td class="r ${r.balance < 0 ? "down" : ""}">${f2(r.balance)}</td>
+      <td class="hide-sm name">${esc(r.institution)}</td><td class="r ${r.balance < 0 ? "down" : ""}" title="${esc(f2(r.balance))}">${f0(r.balance)}</td>
       <td class="r note">${asOf(r)}</td><td class="r hide-sm note">${esc(r.source)}</td></tr>`;
   }
   const stale = a.accounts.filter(r => r.stale && (showZero || Math.abs(r.balance) >= 0.01)).length;
+  kf("acctscard", `${a.accounts.length - hidden} accounts` + (stale ? ` · <b class="down">${stale} stale</b>` : ""));
   if (stale) h += `<tr><td colspan="5" class="note"><span class="badge b-stale">stale</span>${stale} feed${stale > 1 ? "s" : ""} with no new balance in over ${a.stale_days} days; the amount shown is the last one the bank sent.</td></tr>`;
   if (hidden) h += `<tr><td colspan="5" class="note">${hidden} zero-balance account${hidden > 1 ? "s" : ""} hidden</td></tr>`;
   $("accts").innerHTML = h + "</tbody>";
@@ -864,7 +970,7 @@ let acctView = null;  // {account, txns, ...} while one account's transactions a
 async function showAccount(id) {
   const name = stripNum(data.accounts?.accounts.find(r => r.account_id === id)?.account_name || "account");
   $("acctbar").hidden = false; $("acctinfo").textContent = `Loading ${name}…`;
-  $("txcard").scrollIntoView({behavior: "smooth", block: "start"});
+  goSec("txcard");
   try {
     const d = await get("/api/account_txns?id=" + encodeURIComponent(id));
     if (d.error) throw new Error(d.error);
@@ -879,6 +985,7 @@ function clearAccount() {
 
 let holdLimit = 15;
 function renderHoldings(hd) {
+  kf("holdscard", `${hd.count} positions · ${compact(hd.total)}`);
   $("holdsub").textContent = `${hd.count} positions, ${f0(hd.total)} total. ${hd.note}`;
   const max = hd.holdings[0]?.value || 1;
   let h = `<thead><tr><th>Symbol</th><th class="r">Value</th><th class="r">%</th><th class="bart hide-sm"></th><th>Accounts</th></tr></thead><tbody>`;
@@ -899,6 +1006,7 @@ const QTY_SRC = {onchain: ["on-chain", "b-live", "Amount read from the blockchai
   sheet: ["sheet", "b-sheet", "Amount typed in the crypto tab of the sheet"]};
 function renderCrypto(c) {
   if (c.total == null) { $("cryptosub").textContent = "No crypto valuation yet (valuations/crypto.py runs in the daily sync)."; return; }
+  kf("cryptocard", f0(c.total));
   $("cryptonote").textContent = `priced ${fmtTime(c.fetched_at)}`;
   $("cryptosub").textContent = `${f0(c.total)} across ${c.wallets.length} wallets` +
     (c.sheet_total ? ` (sheet says ${f0(c.sheet_total)}).` : ".") +
@@ -1017,20 +1125,39 @@ function renderCards(c) {
   h += `<tr class="total"><td>Total</td><td class="r">${owedCell(c.total)}${c.limit != null ? `<div class="note" title="Sum of known limits${esc(partial)}">/ ${f0(c.limit)} limit</div>` : ""}${c.available != null ? `<div class="note">${f0(c.available)} avail.</div>` : ""}</td>
     <td class="r">${c.util_pct != null ? `<span title="Overall utilization: owed / total limit across cards with a known limit${esc(partial)}">${c.util_pct.toFixed(0)}%</span>` : ""}</td></tr>`;
   $("cards").innerHTML = h + "</tbody>";
+  kf("cardscard", `${f0(c.total)} owed` + (c.util_pct != null ? ` · ${c.util_pct.toFixed(0)}% used` : ""));
 }
 
 const OD_LINE = /^(Overdraft risk|Low balance):/;
+const DRAFT_ROWS = 10;
+let draftLimit = DRAFT_ROWS;
 function renderDrafts(d) {
-  $("odwarn").innerHTML = d.warnings.length ? d.warnings.map(esc).join("<br>") : "";
+  // the conclusion first (which account, how short, by when); the drafts behind it on tap. Same accounts, in the
+  // same order, as the warning lines the server wrote.
+  const risky = d.accounts.filter(a => a.low_date && a.low < d.buffer);
+  $("odwarn").innerHTML = risky.map((a, i) => `<div class="al"><a href="#draftscard"><b>${a.first_short ? "Overdraft risk" : "Low balance"}</b> · ${esc(stripNum(a.account))}: ${f0(a.balance)} now, <b>${f0(a.low)}</b> by ${md(a.low_date)}.` +
+    (a.first_short ? ` Move ${f0(-a.low)} in before ${md(a.first_short)}.` : "") + `</a>` +
+    (d.warnings[i] ? `<details><summary>Why</summary>${esc(d.warnings[i])}</details>` : "") + `</div>`).join("") ||
+    d.warnings.map(esc).join("<br>");
   if (data.cards) renderCards(data.cards);  // adds each card's next autopay
-  $("draftsub").textContent = `Next ${d.horizon_days} days, projected from history (bills at their largest recent amount, card autopays from the statement estimate, pay only when regular). ` +
-    d.accounts.map(a => `${stripNum(a.account)}: ${f0(a.balance)} now, low ${f0(a.low)}${a.low_date ? " on " + a.low_date.slice(5) : ""}.`).join(" ");
-  const rows = d.accounts.flatMap(a => a.events.map(e => ({...e, acct: stripNum(a.account)}))).sort((x, y) => x.date.localeCompare(y.date));
-  if (!rows.length) { $("drafts").innerHTML = '<tr><td class="note">Nothing recurring found.</td></tr>'; return; }
-  let h = `<thead><tr><th>Date</th><th>Item</th><th>Account</th><th class="r">Amount</th><th class="r">Balance after</th></tr></thead><tbody>`;
-  for (const r of rows) h += `<tr><td class="note">${esc(r.date.slice(5))}</td><td class="name" title="${esc(r.label)}">${esc(stripNum(r.label))}${r.estimate ? ' <span class="note">est.' + (r.note ? " · " + esc(r.note) : "") + '</span>' : ""}</td>
-    <td class="note">${esc(r.acct)}</td><td class="r ${r.amount > 0 ? "amt-pos" : ""}">${f2(r.amount)}</td><td class="r ${r.balance_after < 0 ? "neg" : ""}">${f2(r.balance_after)}</td></tr>`;
+  const worst = risky.slice().sort((x, y) => x.low - y.low)[0];
+  const rows = d.accounts.flatMap(a => { let hit = false; return a.events.map(e => {
+    const first = !hit && e.balance_after < 0; hit ||= first;
+    return {...e, acct: stripNum(a.account), first}; }); }).sort((x, y) => x.date.localeCompare(y.date));
+  kf("draftscard", worst ? `<b class="down">low ${f0(worst.low)} on ${md(worst.low_date)}</b>` : `${rows.length} in ${d.horizon_days} days`);
+  // each account's answer first: what it has now and how low it gets
+  $("draftsum").innerHTML = d.accounts.filter(a => a.low_date).map(a => `<span class="chip">${esc(stripNum(a.account))} <b>${f0(a.balance)}</b> now · low <b class="${a.low < 0 ? "down" : ""}">${f0(a.low)}</b>${a.low_date ? " on " + md(a.low_date) : ""}</span>`).join("");
+  $("draftsub").textContent = `Next ${d.horizon_days} days, projected from history: bills at their largest recent amount, card autopays from the statement estimate, pay only when it is regular. Amounts are rounded to the dollar.`;
+  if (!rows.length) { $("drafts").innerHTML = '<tr><td class="note">Nothing recurring found.</td></tr>'; $("moredrafts").hidden = true; return; }
+  const wd = iso => new Date(iso + "T12:00").toLocaleDateString("en-US", {weekday: "short"});
+  let h = `<thead><tr><th>Date</th><th>Item</th><th class="r">Amount</th><th class="r">Balance after</th></tr></thead><tbody>`;
+  for (const r of rows.slice(0, draftLimit)) h += `<tr class="${r.first ? "short" : ""}"><td class="when">${wd(r.date)} ${md(r.date)}</td>
+    <td class="name" title="${esc(r.label)}">${esc(stripNum(r.label))}<span class="note">${esc(r.acct)}${r.estimate ? " · est." + (r.note ? " · " + esc(r.note) : "") : ""}</span></td>
+    <td class="r ${r.amount > 0 ? "amt-pos" : ""}" title="${esc(f2(r.amount))}">${r.amount > 0 ? "+" : ""}${f0(r.amount)}</td><td class="r ${r.balance_after < 0 ? "neg" : ""}" title="${esc(f2(r.balance_after))}">${f0(r.balance_after)}</td></tr>`;
   $("drafts").innerHTML = h + "</tbody>";
+  $("moredrafts").hidden = rows.length <= DRAFT_ROWS;
+  $("moredrafts").textContent = draftLimit < rows.length ? `Show all ${rows.length}` : `Show next ${DRAFT_ROWS}`;
+  $("moredrafts").onclick = () => { draftLimit = draftLimit < rows.length ? 999 : DRAFT_ROWS; renderDrafts(d); };
 }
 
 const SUB_GROUP = {subscription: "Subscriptions", bill: "Bills & utilities", person: "To people"};
@@ -1040,6 +1167,7 @@ function renderSubscriptions(s) {
   $("subsub").textContent = `Same merchant every month (26–36 days) or year (350–380 days) at a similar price, still active. ` +
     `Bills and transfers to people are listed but totalled apart, so the subscriptions total is what you could cancel. ` +
     `“New” = first charged in the last ${s.new_days} days.`;
+  kf("subscard", t.subscription?.count ? `${f0(t.subscription.monthly)}/mo` + (nUp ? ` · <b class="down">${nUp} up</b>` : "") : "");
   $("subtot").innerHTML = Object.keys(SUB_GROUP).filter(k => t[k].count).map(k =>
     `<span class="chip">${esc(SUB_GROUP[k])} <b>${f0(t[k].monthly)}/mo</b> · ${f0(t[k].yearly)}/yr · ${t[k].count}</span>`).join("") +
     (nNew ? `<span class="chip"><b class="up">${nNew} new</b></span>` : "") +
@@ -1088,6 +1216,7 @@ function renderRental(r) {
   const dash = '<span class="note">—</span>';
   const est = c => c.principal_basis && c.principal_basis !== "measured" ? ` <span class="note" title="principal ${esc(c.principal_basis)}">est.</span>` : "";
   $("rental-h").textContent = r.label + " P&L";
+  kf("rentalcard", t3 ? `<b class="${cls(t3.net)}">${signed(t3.net)}</b> last 3 mo` : "");
   $("rentalchips").innerHTML = [t3, ytd].map(p => `<span class="chip" style="white-space:normal" title="${esc(p.since)} to ${esc(p.through)}">${esc(p.label)} (from ${esc(mdy(p.since))}): net <b class="${cls(p.net)}">${signed(p.net)}</b>` +
     (p.months >= 1 ? ` · ${signed(p.net / p.months)}/mo` : "") +
     (p.net_ex_principal != null ? ` · excl. principal <b class="${cls(p.net_ex_principal)}">${signed(p.net_ex_principal)}</b>` : "") + "</span>").join("");
@@ -1153,6 +1282,7 @@ function renderInherited(r) {
   if (!a) { $("irasub").textContent = "No inherited IRA account found."; return; }
   $("irasub").textContent = `${stripNum(a.account_name)} ${(a.account_name.match(/\((\d{4})\)$/) || [, ""])[1]} · ${a.institution || ""}, as of ${(a.as_of || a.snapshot_date || "").slice(0, 10)}. ${r.assumptions}`;
   const d = r.deadline, p = r.plan, t = r.trend || {}, ty = r.this_year, rmd = r.rmd;
+  kf("ira", (a.balance != null ? f0(a.balance) : "") + (d && !d.passed ? ` · empty by ${d.date.slice(0, 4)}` : ""));
   const trendNote = t.since ? `${signed(t.change)} (${t.change_pct >= 0 ? "+" : ""}${t.change_pct}%) since ${t.since.slice(5)}` : "no snapshots yet";
   let s = d ? stat("Must be empty by", esc(mdY(d.date)), d.passed ? "deadline has passed" : `${d.years_left} year${d.years_left === 1 ? "" : "s"} after this one · ${d.distribution_years_left} tax years left incl. ${r.year}`, d.passed ? "down" : "")
             : stat("Must be empty by", "—", "set death_year in personal.json");
@@ -1220,6 +1350,7 @@ function renderSpending(sp) {
   const cur = sp.monthly.find(m => m.month === sp.this_month);
   $("spendsub").textContent = `Monthly class='spend', posted only, since ${sp.since} (complete data starts then, so the first month is partial; this month is to date). ` +
     (cur ? `This month so far: ${f0(cur.spent)} over ${cur.n} transactions.` : "");
+  kf("spendcard", cur ? `${f0(cur.spent)} this month` : "");
   $("tm-h").textContent = "Top merchants · " + monthName(sp.this_month) + " (to date)";
   $("lm-h").textContent = "Top merchants · " + monthName(sp.last_month);
   merchTable("tm", sp.top[sp.this_month]); merchTable("lm", sp.top[sp.last_month]);
@@ -1300,6 +1431,7 @@ function renderBudget(b) {
     `<b>Categorization is pattern-based</b>: merchant text is matched to budget lines by rules, so it is approximate; spending no rule matches is “Other (unmapped)”.` +
     (b.error ? ` <span class="err">${esc(b.error)} (showing the last good copy)</span>` : "");
   const left = m.remaining, ahead = m.actual - m.expected;
+  kf("budget", `<b class="${m.actual > m.budget ? "down" : ""}">${f0(m.actual)}</b> of ${f0(m.budget)}`);
   $("budchips").innerHTML = [
     `Budget <b>${f0(m.budget)}</b>`,
     `Spent <b class="${m.actual > m.budget ? "down" : ""}">${f0(m.actual)}</b>`,
@@ -1363,7 +1495,7 @@ async function load(refresh = false) {
     $("loaderrors").innerHTML = failed.join("");
     const b = $("refresh"); if (b) { b.disabled = false; b.textContent = "Refresh"; }
     if (summaryOk) loadedAt = Date.now();
-    else if (loadedAt && !$("unrefreshed")) $("status").insertAdjacentHTML("afterbegin",
+    else if (loadedAt && !$("unrefreshed")) $("agebar").insertAdjacentHTML("afterbegin",
       `<span class="pill old" id="unrefreshed">Couldn't refresh · showing numbers loaded ${esc(fmtTime(new Date(loadedAt).toISOString()))}</span>`);
     document.body.dataset.ready = "1";
   }

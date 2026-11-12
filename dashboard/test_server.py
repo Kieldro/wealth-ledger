@@ -442,3 +442,20 @@ def test_input_ages_names_the_oldest_live_balance_and_estimate():
         "est": {"old": 1, "of": 2, "oldest": "2026-10-08", "line": "Home", "age_days": 19}}
     assert server.input_ages([l for l in lines if l["as_of"] in ("2026-10-27", None)], today) == {}
     assert server.input_ages([{"line": "Old cache", "used": 5.0, "from": "live"}], today) == {}  # no as_of key
+
+
+def test_page_sections_fold_have_a_nav_label_and_a_key_figure_slot():
+    """Guard on the page source (behaviour is checked in a browser by hand): every section can be jumped to and
+    folded, the drafts come first, and the alert and warnings stay one line until opened."""
+    import re
+    html = open(server.os.path.join(server.os.path.dirname(server.__file__), "index.html")).read()
+    grid = html[html.index('<div class="grid"'):html.index('id="totop"')]
+    heads = re.findall(r'<section class="card span-\d+" id="(\w+)" data-nav="([\w ]+)">', grid)
+    assert len(heads) == grid.count("<section") == 13 and heads[0] == ("draftscard", "Drafts")
+    assert len({i for i, _ in heads}) == 13
+    for needle in ('const SEC_KEY = "wl.sections"', 'fig.id = "kf-" + sec.id', 'id="jump"', 'goSec("draftscard")',
+                   "data warning", '<details><summary>Why</summary>', 'id="moredrafts"'):
+        assert needle in html, needle
+    for sid in ("draftscard", "alloccard", "trendcard", "acctscard", "holdscard", "cardscard", "spendcard", "budget",
+                "subscard", "cryptocard", "ira", "rentalcard"):
+        assert f'kf("{sid}"' in html, sid
