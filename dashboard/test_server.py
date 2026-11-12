@@ -1,6 +1,6 @@
 """Dashboard API helpers against a small synthetic database (no real data)."""
 import json
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -151,6 +151,28 @@ def test_revoked_session_is_not_renewed(auth, monkeypatch):
     assert auth.renew(cookie) is None
 
 
+def test_running_balance_skips_sweeps_and_accounts_it_cannot_follow(dbfile):
+    con = ctdb.connect(dbfile)
+    con.execute("INSERT INTO account_kind VALUES ('k1','checking',NULL)")
+    con.execute(ctdb.UPSERT_BALANCE, (TODAY, "simplefin", "k1", "Test k1 (1234)", "Bank", "1000.00", None, "USD", None))
+    later = (date.fromisoformat(TODAY) + timedelta(days=1)).isoformat()
+    for i, (aid, d, amt, desc) in enumerate([("k1", "2026-09-01", "500.00", "DIRECT DEPOSIT ACME"),
+                                             ("k1", "2026-09-02", "-500.00", "PURCHASE INTO CORE ACCOUNT FDIC"),
+                                             ("k1", "2026-09-03", "-200.00", "DIRECT DEBIT RENT"),
+                                             ("k1", later, "-50.00", "NOT IN THE BALANCE YET"),
+                                             ("x1", "2026-09-03", "-5.00", "YOU BOUGHT BTC")]):
+        con.execute(ctdb.upsert_sql("txns"), (f"r{i}", aid, aid, "Bank", d, None, amt, desc, None, None, 0,
+                                              "USD", "x", "x", "test"))
+    con.commit()
+    con.close()
+    got = {t["description"]: t["balance_after"] for t in server.api_account_txns({"id": ["k1"]})["txns"]}
+    assert got == {"NOT IN THE BALANCE YET": None, "DIRECT DEBIT RENT": 1000, "PURCHASE INTO CORE ACCOUNT FDIC": 1200,
+                   "DIRECT DEPOSIT ACME": 1200}  # the sweep moved nothing
+    assert server.api_account_txns({"id": ["x1"]})["txns"][0]["balance_after"] is None  # market-valued account
+    recent = {t["description"]: t["balance_after"] for t in server.api_spending({})["recent"]}
+    assert recent["DIRECT DEBIT RENT"] == 1000 and recent["YOU BOUGHT BTC"] is None
+
+
 def test_account_txns_lists_only_that_account(dbfile):
     con = ctdb.connect(dbfile)
     for i, (aid, d, amt, desc, pending) in enumerate([("c1", "2026-09-01", "-20.00", "COFFEE #12", 0),
@@ -165,6 +187,7 @@ def test_account_txns_lists_only_that_account(dbfile):
     assert [t["date"] for t in r["txns"]] == ["2026-09-05", "2026-09-03", "2026-09-01"]
     assert r["account"]["account_id"] == "c1" and r["first"] == "2026-09-01" and not r["truncated"]
     assert r["money_in"] == 100 and r["money_out"] == -20  # pending excluded from totals
+    assert [t["balance_after"] for t in r["txns"]] == [None, -250, -350]  # walked back from -250; pending has none
     assert server.api_account_txns({"id": ["nope"]})["error"] == "unknown account"
     assert all("account_id" in a for a in server.api_accounts({})["accounts"])
 

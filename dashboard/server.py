@@ -574,15 +574,44 @@ RECENT_LIMIT = 200  # recent transactions sent to the page (it shows 30 until yo
 ACCOUNT_TXN_LIMIT = 5000  # one account's full history (clicked on the page); more than any account has today
 
 
+RUNBAL_KINDS = ("checking", "savings", "credit")  # balances that move only by their transactions
+
+
+def running_balances(account_id: str | None = None) -> dict:
+    """txn_id -> the account's balance right after that transaction, walked back from its latest synced balance.
+
+    Posted rows of cash and card accounts only: a pending row is not in the balance yet, and an investment
+    balance moves with the market. Brokerage cash sweeps leave the balance where it was. A transaction dated
+    after the balance snapshot is not in that balance, so it gets none.
+    """
+    sweep = " OR ".join("l.description LIKE ?" for _ in overdraft.SWEEPS)
+    rows = q(f"""SELECT l.txn_id, l.account_id, l.amt, ({sweep}) sweep, a.balance FROM v_ledger l
+                 JOIN v_accounts a USING (account_id)
+                 WHERE l.pending=0 AND l.kind IN ({",".join("?" * len(RUNBAL_KINDS))}) AND l.date<=a.snapshot_date
+                   AND (? IS NULL OR l.account_id=?)
+                 ORDER BY l.account_id, l.date DESC, l.first_seen DESC, l.txn_id""",
+             (*overdraft.SWEEPS, *RUNBAL_KINDS, account_id, account_id))
+    out, acct, later = {}, None, 0.0
+    for r in rows:
+        if r["account_id"] != acct:
+            acct, later = r["account_id"], 0.0
+        out[r["txn_id"]] = round(r["balance"] - later, 2)
+        if not r["sweep"]:
+            later += r["amt"]
+    return out
+
+
 def api_account_txns(params) -> dict:
     aid = (params.get("id") or [""])[0]
     acct = q("SELECT account_id, account_name, institution, kind, ROUND(balance,2) balance FROM v_accounts "
              "WHERE account_id=?", (aid,))
     if not acct:
         return {"error": "unknown account", "txns": []}
-    txns = q("""SELECT date, ROUND(amt,2) amt, description, payee, memo, class, pending FROM v_ledger WHERE account_id=?
-                ORDER BY date DESC, first_seen DESC, txn_id LIMIT ?""", (aid, ACCOUNT_TXN_LIMIT + 1))
+    txns = q("""SELECT txn_id, date, ROUND(amt,2) amt, description, payee, memo, class, pending FROM v_ledger
+                WHERE account_id=? ORDER BY date DESC, first_seen DESC, txn_id LIMIT ?""", (aid, ACCOUNT_TXN_LIMIT + 1))
+    bal = running_balances(aid)
     for r in txns:
+        r["balance_after"] = bal.get(r.pop("txn_id"))
         r["merchant"] = merchant(r["description"], r["payee"])
         r["account_name"] = re.sub(r"\s*\([0-9a-f-]+\)$", "", acct[0]["account_name"] or "")
     posted = [r for r in txns[:ACCOUNT_TXN_LIMIT] if not r["pending"]]
@@ -652,9 +681,11 @@ def api_spending(params) -> dict:
             a[1] += 1
         tops[m] = [{"merchant": k, "spent": round(v[0], 2), "n": v[1]}
                    for k, v in sorted(agg.items(), key=lambda kv: -kv[1][0])[:10]]
-    recent = q("""SELECT date, account_name, ROUND(amt,2) amt, description, payee, memo, class, pending FROM v_ledger
-                  ORDER BY date DESC, first_seen DESC, txn_id LIMIT ?""", (RECENT_LIMIT,))
+    recent = q("""SELECT txn_id, date, account_name, ROUND(amt,2) amt, description, payee, memo, class, pending
+                  FROM v_ledger ORDER BY date DESC, first_seen DESC, txn_id LIMIT ?""", (RECENT_LIMIT,))
+    bal = running_balances()
     for r in recent:
+        r["balance_after"] = bal.get(r.pop("txn_id"))
         r["merchant"] = merchant(r["description"], r["payee"])
         r["account_name"] = re.sub(r"\s*\([0-9a-f-]+\)$", "", r["account_name"] or "")
     return {"monthly": monthly, "this_month": this_m, "last_month": last_m, "top": tops, "recent": recent,
