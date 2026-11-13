@@ -77,6 +77,7 @@ DEFAULT_RULES = [
 ]
 CRYPTO_LINE = "Total cryptocurrency (USD)"  # networth.py line and valuations asset holding every coin
 CRYPTO_CASH_ROWS = set(personal.section("crypto").get("exchange_rows") or [])  # wallets with their own cash row
+READ_QTY = {"onchain", "exchange-api", "simplefin"}  # amounts read from a chain or exchange (mirrors networth.py)
 EXACT: dict[str, str] = dict(_DASH.get("exact") or {})
 RULES: list[tuple[str, str]] = [tuple(r) for r in _DASH["rules"]] if _DASH.get("rules") else DEFAULT_RULES
 
@@ -239,14 +240,18 @@ def in_synced_series(line: dict) -> bool:
 def crypto_wallet_lines(line: dict, src: str) -> list[dict]:
     """The crypto total split into one allocation line per wallet, when the latest valuation is the number in use
     (so the parts add up to it); otherwise nothing. A wallet's dollar cash has its own balance-sheet row, so that
-    row is relabelled "<wallet> cash" to tell it from the wallet's coins."""
-    wallets = {w["wallet"]: w["value"] for w in api_crypto({})["wallets"] if abs(w["value"]) >= 0.005} \
-        if line["line"] in (CRYPTO_LINE, *CRYPTO_CASH_ROWS) else {}
+    row is relabelled "<wallet> cash" to tell it from the wallet's coins. Each wallet is marked on its own: live
+    when today's run read every counted amount in it from a chain or the exchange, even if another wallet's
+    typed-in amount makes the total an estimate."""
+    crypto = api_crypto({}) if line["line"] in (CRYPTO_LINE, *CRYPTO_CASH_ROWS) else {"wallets": []}
+    wallets = {w["wallet"]: w["value"] for w in crypto["wallets"] if abs(w["value"]) >= 0.005}
+    read = {w["wallet"] for w in crypto["wallets"] if crypto.get("as_of") == date.today().isoformat()
+            and all(h["qty_source"] in READ_QTY for h in w["holdings"] if h["counted"])}
     if line["line"] in CRYPTO_CASH_ROWS and line["line"] in wallets:
         return [{"line": f"{line['line']} cash", "value": round(line["used"], 2), "source": src}]
     if line["line"] != CRYPTO_LINE or abs(sum(wallets.values()) - line["used"]) >= 0.01 * max(len(wallets), 1):
         return []
-    return [{"line": w, "value": v, "source": src} for w, v in wallets.items()]
+    return [{"line": w, "value": v, "source": "live" if w in read else src} for w, v in wallets.items()]
 
 
 def api_summary(params) -> dict:
