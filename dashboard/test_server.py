@@ -576,3 +576,12 @@ def test_spending_daily_pace_this_month_and_last(dbfile, monkeypatch):
     last, this = sp["daily"]["2026-10"], sp["daily"]["2026-11"]
     assert len(last) == 31 and last[0] is None and last[1] == 15 and last[30] == 20 and sum(last[1:]) == 35
     assert this == [0, 30, 0]  # through today only; pending not counted
+
+
+def test_page_has_privacy_mode_pace_and_per_day_hooks():
+    """Guard on the page source (behaviour is checked in a headless browser): privacy mode is remembered and masks
+    through the formatters and a text pass; spending has the pace chart and savings chips; budget rows show per day."""
+    html = open(server.os.path.join(server.os.path.dirname(server.__file__), "index.html")).read()
+    for needle in ('id="privbtn"', 'const PRIV_KEY = "wl.privacy"', "if (privacy) return masked(u);", "new MutationObserver",
+                   'id="pace"', "function renderPace(sp)", 'id="savechips"', "function renderIncome(sp)", "perDay(c.remaining)"):
+        assert needle in html, needle
