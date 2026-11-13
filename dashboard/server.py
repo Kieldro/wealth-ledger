@@ -75,6 +75,8 @@ DEFAULT_RULES = [
     (r"car\b|truck|vehicle", "vehicles"),
     (r"brokerage|individual|taxable", "taxable"),
 ]
+CRYPTO_LINE = "Total cryptocurrency (USD)"  # networth.py line and valuations asset holding every coin
+CRYPTO_CASH_ROWS = set(personal.section("crypto").get("exchange_rows") or [])  # wallets with their own cash row
 EXACT: dict[str, str] = dict(_DASH.get("exact") or {})
 RULES: list[tuple[str, str]] = [tuple(r) for r in _DASH["rules"]] if _DASH.get("rules") else DEFAULT_RULES
 
@@ -234,6 +236,19 @@ def in_synced_series(line: dict) -> bool:
     return line["synced"] if "synced" in line else line["from"].startswith("live")
 
 
+def crypto_wallet_lines(line: dict, src: str) -> list[dict]:
+    """The crypto total split into one allocation line per wallet, when the latest valuation is the number in use
+    (so the parts add up to it); otherwise nothing. A wallet's dollar cash has its own balance-sheet row, so that
+    row is relabelled "<wallet> cash" to tell it from the wallet's coins."""
+    wallets = {w["wallet"]: w["value"] for w in api_crypto({})["wallets"] if abs(w["value"]) >= 0.005} \
+        if line["line"] in (CRYPTO_LINE, *CRYPTO_CASH_ROWS) else {}
+    if line["line"] in CRYPTO_CASH_ROWS and line["line"] in wallets:
+        return [{"line": f"{line['line']} cash", "value": round(line["used"], 2), "source": src}]
+    if line["line"] != CRYPTO_LINE or abs(sum(wallets.values()) - line["used"]) >= 0.01 * max(len(wallets), 1):
+        return []
+    return [{"line": w, "value": v, "source": src} for w, v in wallets.items()]
+
+
 def api_summary(params) -> dict:
     nw = networth(refresh="refresh" in params)
     data = nw["data"]
@@ -253,7 +268,7 @@ def api_summary(params) -> dict:
         src = line_source(l)
         c["value"] += signed
         c[src] += signed
-        c["lines"].append({"line": l["line"], "value": round(signed, 2), "source": src})
+        c["lines"] += crypto_wallet_lines(l, src) or [{"line": l["line"], "value": round(signed, 2), "source": src}]
     for c in cats.values():
         c["lines"].sort(key=lambda x: -abs(x["value"]))
         for k in ("value", "live", "est", "sheet"):
@@ -286,7 +301,7 @@ def api_trend(params) -> dict:
 
 
 # where the valuations providers keep today's spot (valuations/crypto.py, valuations/metals.py detail JSON)
-SPOT_VALUATIONS = {"BTC": ("Total cryptocurrency (USD)", "$.prices.BTC.usd", "$.prices.BTC.source"),
+SPOT_VALUATIONS = {"BTC": (CRYPTO_LINE, "$.prices.BTC.usd", "$.prices.BTC.source"),
                    "XAU": ("Total metals value", "$.metals.gold.spot", "$.metals.gold.source"),
                    "XAG": ("Total metals value", "$.metals.silver.spot", "$.metals.silver.source"),
                    "XPT": ("Total metals value", "$.metals.platinum.spot", "$.metals.platinum.source")}
@@ -413,7 +428,7 @@ def api_holdings(params) -> dict:
 def api_crypto(params) -> dict:
     """Every crypto holding from the latest valuations/crypto.py run, grouped by wallet and by coin."""
     rows = q("SELECT snapshot_date, value, detail, fetched_at FROM v_valuations_latest "
-             "WHERE asset = 'Total cryptocurrency (USD)'")
+             "WHERE asset = ?", (CRYPTO_LINE,))
     if not rows:
         return {"total": None, "wallets": [], "coins": [], "transfers": crypto_transfers()}
     r = rows[0]

@@ -483,3 +483,33 @@ def test_page_sections_fold_have_a_nav_label_and_a_key_figure_slot():
     for sid in ("draftscard", "alloccard", "trendcard", "acctscard", "holdscard", "cardscard", "spendcard", "budget",
                 "subscard", "cryptocard", "ira", "rentalcard"):
         assert f'kf("{sid}"' in html, sid
+
+
+def test_allocation_splits_the_crypto_total_by_wallet(dbfile, monkeypatch):
+    """The crypto total drills down to one line per wallet; an exchange's own cash row is labelled as cash. When
+    the valuation isn't the number in use, the total stays one line."""
+    detail = {"holdings": [
+        {"wallet": "W1", "coin": "BTC", "qty": 0.5, "price": 80000.0, "value": 40000.0, "counted": True},
+        {"wallet": "W2", "coin": "BTC", "qty": 0.25, "price": 80000.0, "value": 20000.0, "counted": True},
+        {"wallet": "W2", "coin": "USD", "qty": 50.0, "price": 1.0, "value": 50.0, "counted": False}]}
+    con = ctdb.connect(dbfile)
+    con.execute("INSERT INTO valuations VALUES (?,?,?,?,?,?)",
+                (TODAY, server.CRYPTO_LINE, 60000.0, "estimate", json.dumps(detail), TODAY))
+    con.commit()
+    con.close()
+    lines = [{"line": server.CRYPTO_LINE, "type": "asset", "used": 60000.0, "from": "estimate (x)", "synced": False},
+             {"line": "W2", "type": "asset", "used": 50.0, "from": "live reading (exchange-api USD balance)",
+              "synced": False}]
+    data = {"lines": lines, "assets": 60050.0, "liabilities": 0, "net_worth": 60050.0}
+    monkeypatch.setattr(server, "networth", lambda refresh=False: {"data": data, "error": None, "fetched": 0.0})
+    monkeypatch.setattr(server, "synced_series", lambda: [])
+    monkeypatch.setattr(server, "STATUS", "/nonexistent")
+    monkeypatch.setattr(server, "CRYPTO_CASH_ROWS", {"W2"})
+    monkeypatch.setattr(server, "EXACT", {"W2": "crypto"})
+
+    def crypto():
+        c = next(c for c in server.api_summary({})["categories"] if c["key"] == "crypto")
+        return c["value"], [(l["line"], l["value"]) for l in c["lines"]]
+    assert crypto() == (60050.0, [("W1", 40000.0), ("W2", 20000.0), ("W2 cash", 50.0)])
+    lines[0]["used"] = 59000.0  # fell back to the sheet's figure
+    assert crypto() == (59050.0, [(server.CRYPTO_LINE, 59000.0), ("W2 cash", 50.0)])
