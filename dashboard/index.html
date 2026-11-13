@@ -199,6 +199,12 @@ td.neg { color: var(--neg); font-weight: 600; }
 /* display unit picker ($, BTC, metals, rial, dinar): one choice converts every value on the page */
 .unitpick { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-2); flex-wrap: wrap; }
 .unitpick[hidden] { display: none; }
+/* privacy mode: every money amount is masked (formatters return •••; a text pass catches amounts in server notes) */
+.privbtn { display: inline-flex; align-items: center; gap: 5px; }
+.privbtn svg { flex: none; }
+.privbtn .slash { display: none; }
+.privbtn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.privbtn[aria-pressed="true"] .slash { display: inline; }
 .unitpick select { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; max-width: 220px; }
 .big.long { font-size: 24px; overflow-wrap: anywhere; }
 .big .u { font-size: .5em; font-weight: 600; color: var(--text-2); letter-spacing: 0; margin-left: .25em; }
@@ -221,6 +227,10 @@ td.neg { color: var(--neg); font-weight: 600; }
 #budtbl td:first-child { text-transform: capitalize; }
 #budtbl tr.sub td:first-child { text-transform: none; }
 #budtbl td.bart { vertical-align: middle; }
+.perday { display: block; font-size: 11.5px; color: var(--muted); font-weight: 400; }
+.pacehd { font-size: 13px; color: var(--text-2); margin: 2px 0 6px; min-height: 18px; }
+.pacehd b { font-weight: 600; color: var(--text); }
+#savechips .chip { white-space: normal; }
 footer { margin: 18px 0 8px; font-size: 12px; color: var(--muted); line-height: 1.6; }
 footer code { font-size: 11.5px; }
 .err { color: var(--neg); font-size: 13px; }
@@ -246,7 +256,8 @@ footer code { font-size: 11.5px; }
   header.top { flex-wrap: nowrap; gap: 8px; margin-bottom: 10px; }
   .hdr-r { flex-wrap: nowrap; gap: 6px; min-width: 0; }
   .status { flex-wrap: nowrap; gap: 6px; }
-  .unitpick select { max-width: 112px; }
+  .unitpick select { max-width: 100px; }
+  .privbtn { padding-left: 9px; padding-right: 9px; }
   .pill.old { white-space: normal; }
   .wrap { padding: 12px 12px 16px; }
   .hero { grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -264,6 +275,7 @@ footer code { font-size: 11.5px; }
   .desc { max-width: 120px; }
   td { padding: 6px 4px; } th { padding: 5px 4px; }
   .bart { width: 50px; }
+  #budtbl td.bart { min-width: 40px; }
   table { font-size: 12.5px; }
 }
 </style>
@@ -273,6 +285,7 @@ footer code { font-size: 11.5px; }
   <header class="top">
     <h1>Finances</h1>
     <div class="hdr-r">
+      <button type="button" id="privbtn" class="privbtn" aria-pressed="false" title="Hide amounts (privacy mode)"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/><path class="slash" d="M4 4l16 16"/></svg><span class="hide-sm" id="privlbl">Hide amounts</span></button>
       <label class="unitpick" id="unitpick" hidden><span class="hide-sm">Values in </span><select id="unitsel" aria-label="Show every value in"></select><span class="note num hide-sm" id="unitprice"></span></label>
       <div class="status" id="status"><span class="pill">Loading…</span></div>
       <form method="post" action="/logout" class="logout hide-sm"><button type="submit" title="Sign out of this device">Log out</button></form>
@@ -344,7 +357,22 @@ footer code { font-size: 11.5px; }
     <section class="card span-12" id="spendcard" data-nav="Spending">
       <h2>Spending</h2>
       <p class="sub" id="spendsub"></p>
-      <div class="chartbox sm"><canvas id="spend" aria-label="Monthly spending" role="img"></canvas></div>
+      <div class="cols2">
+        <div>
+          <h2 id="pace-h">Spending pace</h2>
+          <div class="pacehd num" id="pacehd"></div>
+          <div class="chartbox sm"><canvas id="pace" aria-label="This month's cumulative spending by day against last month" role="img"></canvas></div>
+          <div class="legend" id="pacelegend"></div>
+        </div>
+        <div>
+          <h2>Income vs spending</h2>
+          <div class="chips" id="savechips" style="margin:4px 0 6px"></div>
+          <div class="chartbox sm"><canvas id="spend" aria-label="Monthly income and spending" role="img"></canvas></div>
+          <div class="legend"><span><span class="sw" style="background:var(--s3)"></span>Income</span><span><span class="sw" style="background:var(--s2)"></span>Spending</span><span class="note">lighter = partial month</span></div>
+        </div>
+      </div>
+      <div class="tw" style="margin-top:10px"><table id="inctbl"></table></div>
+      <p class="note" id="incnote" style="margin-top:6px"></p>
       <div class="cols2" style="margin-top:12px">
         <div><h2 id="tm-h">This month</h2><div class="tw"><table id="tm"></table></div></div>
         <div><h2 id="lm-h">Last month</h2><div class="tw"><table id="lm"></table></div></div>
@@ -474,7 +502,7 @@ const UNITS = {
   IRR: {label: "Iranian rial (huge numbers)", suf: "rial", per: "/rial", long: "Iranian rials", spotOnly: true},
   KWD: {label: "Kuwaiti dinar (small numbers)", pre: "KD ", per: "/dinar", long: "Kuwaiti dinars", spotOnly: true},
 };
-const usdF0 = v => v == null ? "—" : usd0.format(v);
+const usdF0 = v => v == null ? "—" : privacy ? "$" + MASK : usd0.format(v);
 const compactNum = new Intl.NumberFormat("en-US", {notation: "compact", maximumSignificantDigits: 3});
 let unitSpot = null;  // USD per unit of the display unit, set by syncUnit(); null = dollars
 const dispUnit = () => unitSpot ? curUnit() : "USD";
@@ -488,13 +516,24 @@ function unitNum(a) {
 }
 const withUnit = (sg, num, u) => sg + (UNITS[u].pre || "") + num + (UNITS[u].suf ? " " + UNITS[u].suf : "");
 // x is already in unit u (dollars when u is USD); cents only matter for dollars
+// Privacy mode (eye button, remembered per browser): every money amount and coin quantity prints as MASK; percentages
+// stay. Formatters check it, so new content and chart axes/tooltips are masked too; maskMoney() catches the
+// dollar amounts inside text the server writes (warnings, notes).
+const PRIV_KEY = "wl.privacy", MASK = "•••";
+let privacy = false;
+try { privacy = localStorage.getItem(PRIV_KEY) === "1"; } catch { /* storage blocked */ }
+const MONEY_RE = /[+−-]?\s?(?:US)?\$\s?\d[\d,]*(?:\.\d+)?(?:\s?[kKMB](?![a-z]))?/g;
+const maskMoney = s => privacy ? String(s).replace(MONEY_RE, "$" + MASK) : s;
+const masked = u => u === "USD" ? "$" + MASK : withUnit("", MASK, u);
 function fmtIn(x, u = dispUnit(), cents = false) {
   if (x == null || !isFinite(x)) return "—";
+  if (privacy) return masked(u);
   if (u === "USD") return (cents ? usd2 : usd0).format(x);
   return withUnit(x < 0 ? "−" : "", unitNum(Math.abs(x)), u);
 }
 function compactIn(x, u = dispUnit()) {
   if (x == null || !isFinite(x)) return "—";
+  if (privacy) return masked(u);
   const a = Math.abs(x), sg = x < 0 ? "−" : "";
   if (u === "USD") {
     if (a >= 1e6) return sg + "$" + (a / 1e6).toFixed(2) + "M";
@@ -506,7 +545,7 @@ function compactIn(x, u = dispUnit()) {
 const f0 = v => fmtIn(conv(v));
 const f2 = v => fmtIn(conv(v), dispUnit(), true);
 const compact = v => compactIn(conv(v));
-const signed = v => v == null ? "—" : (v > 0 ? "+" : v < 0 ? "−" : "") + f0(Math.abs(v));
+const signed = v => v == null ? "—" : (privacy ? "" : v > 0 ? "+" : v < 0 ? "−" : "") + f0(Math.abs(v));
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const monthName = m => new Date(m + "-15").toLocaleString("en-US", {month: "short", year: "numeric"});
 const fmtTime = iso => { if (!iso) return "—"; const d = new Date(iso); return isNaN(d) ? iso : d.toLocaleString("en-US", {month: "short", day: "numeric", hour: "numeric", minute: "2-digit"}); };
@@ -703,6 +742,36 @@ function renderAll() {
   if (data.trend) renderTrend(data.trend);
   for (const [k, fn] of Object.entries(RENDER)) if (data[k]) try { fn(data[k]); } catch (e) { console.error(k, e); }
 }
+// privacy mode: re-render from the loaded data so every formatter masks (or unmasks); the observer masks dollar
+// amounts in text that isn't built by a formatter (server warnings and notes), including content added later
+function maskTree(root) {
+  const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let n = walk.nextNode(); n; n = walk.nextNode()) { const v = maskMoney(n.nodeValue); if (v !== n.nodeValue) n.nodeValue = v; }
+  for (const el of root.querySelectorAll?.("[title],[aria-label]") || []) for (const k of ["title", "aria-label"]) {
+    const a = el.getAttribute(k); if (a != null) { const v = maskMoney(a); if (v !== a) el.setAttribute(k, v); } }
+}
+new MutationObserver(ms => { if (!privacy) return;
+  for (const m of ms) { const t = m.target; if (m.type === "characterData") { const v = maskMoney(t.nodeValue); if (v !== t.nodeValue) t.nodeValue = v; }
+    else if (m.type === "attributes") { const a = t.getAttribute(m.attributeName); if (a != null) { const v = maskMoney(a); if (v !== a) t.setAttribute(m.attributeName, v); } }
+    else for (const n of m.addedNodes) if (n.nodeType === 3) { const v = maskMoney(n.nodeValue); if (v !== n.nodeValue) n.nodeValue = v; } else if (n.nodeType === 1) maskTree(n); }
+}).observe(document.querySelector(".wrap"), {subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["title", "aria-label"]});
+function syncPrivacy() {
+  const b = $("privbtn");
+  b.setAttribute("aria-pressed", String(privacy));
+  b.title = privacy ? "Show amounts" : "Hide amounts (privacy mode)";
+  b.setAttribute("aria-label", b.title);
+  $("privlbl").textContent = privacy ? "Show amounts" : "Hide amounts";
+}
+$("privbtn").onclick = () => {
+  privacy = !privacy;
+  try { localStorage.setItem(PRIV_KEY, privacy ? "1" : "0"); } catch { /* storage blocked */ }
+  syncPrivacy();
+  renderAll();
+  if (acctView) renderRecent(data.spending?.recent || []);
+  if (privacy) maskTree(document.querySelector(".wrap"));
+};
+syncPrivacy();
+if (privacy) maskTree(document.querySelector(".wrap"));
 $("unitsel").onchange = () => {
   if (!unitAvail($("unitsel").value, data.trend)) return;
   nwUnit = $("unitsel").value;
@@ -720,7 +789,7 @@ function renderNW(s = data.summary) {
   el.classList.remove("long");
   if (u === "USD") { el.textContent = f0(s.net_worth); return; }
   const sp = data.trend.spot[u], v = s.net_worth / sp.usd, x = UNITS[u];
-  const num = (v < 0 ? "−" : "") + (x.pre || "") + unitNum(Math.abs(v));
+  const num = privacy ? (x.pre || "") + MASK : (v < 0 ? "−" : "") + (x.pre || "") + unitNum(Math.abs(v));
   el.classList.toggle("long", num.length > 11);  // a rial net worth runs to 13 digits
   el.innerHTML = esc(num) + (x.suf ? `<span class="u">${esc(x.suf)}</span>` : "");
   sub.textContent = `${usdF0(s.net_worth)} at ${priceAt(sp.usd, u)}${sp.date ? ", " + fmtShortDay(sp.date) : ""}`;
@@ -910,7 +979,7 @@ function renderTrend(t) {
       scales: {x: {...ax, type: "linear", min: xmin, max: xmax, grid: {display: false},
                    afterBuildTicks: sc => { sc.ticks = timeTicks(sc.min, sc.max, w < 420 ? 5 : 7).map(value => ({value})); },
                    ticks: {...ax.ticks, maxRotation: 0, autoSkip: false, callback: tickFmt}},
-               y: {...ax, grace: "5%", ticks: {...ax.ticks, maxTicksLimit: 5, callback(v, i, t) { const step = t.length > 1 ? Math.abs(t[1].value - t[0].value) : 1e3;
+               y: {...ax, grace: "5%", ticks: {...ax.ticks, maxTicksLimit: 5, callback(v, i, t) { if (privacy) return masked(u); const step = t.length > 1 ? Math.abs(t[1].value - t[0].value) : 1e3;
                  if (u !== "USD") { const top = Math.max(...t.map(x => Math.abs(x.value)));  // same decimals on every tick
                    if (top >= 1e4) return compactIn(v, u);
                    const d = Math.max(0, Math.min(6, Math.ceil(-Math.log10(step || 1))));
@@ -1006,7 +1075,7 @@ function renderHoldings(hd) {
 }
 
 // coin amounts: more decimals the smaller the amount (0.75001309 BTC, 307.94 USDT, 4,213 DOGE)
-const qtyFmt = q => q == null ? "—" : q.toLocaleString("en-US", {maximumFractionDigits: q < 1 ? 8 : q < 1000 ? 4 : 0});
+const qtyFmt = q => q == null ? "—" : privacy ? MASK : q.toLocaleString("en-US", {maximumFractionDigits: q < 1 ? 8 : q < 1000 ? 4 : 0});
 const priceFmt = p => p == null ? "no price" : p < 1 ? "$" + p.toLocaleString("en-US", {maximumSignificantDigits: 4}) : (p < 100 ? usd2 : usd0).format(p);
 const QTY_SRC = {onchain: ["on-chain", "b-live", "Amount read from the blockchain"],
   "exchange-api": ["exchange", "b-live", "Amount read from the exchange's API"],
@@ -1047,7 +1116,7 @@ const BTC_TYPES = {"self-custody": ["Self-custody", "var(--s3)", "You hold the k
 function renderBtcWhere(b) {
   $("btcwhere").hidden = !b || !b.locations.length;
   if (!b || !b.locations.length) return;
-  const btc = q => q == null ? "—" : q.toLocaleString("en-US", {minimumFractionDigits: 4, maximumFractionDigits: q < 0.01 ? 8 : 4});
+  const btc = q => q == null ? "—" : privacy ? MASK : q.toLocaleString("en-US", {minimumFractionDigits: 4, maximumFractionDigits: q < 0.01 ? 8 : 4});
   const sum = (xs, k) => xs.reduce((a, x) => a + (x[k] || 0), 0);
   // coins Ian owns (wallets + exchanges) vs bitcoin fund shares: funds are exposure, not bitcoin he holds
   const coins = b.locations.filter(x => x.type !== "fund" && x.value >= 1), funds = b.locations.filter(x => x.type === "fund");
@@ -1354,6 +1423,9 @@ function merchTable(id, rows) {
     <td class="bart"><div class="bar" style="width:${(100 * r.spent / max).toFixed(1)}%;background:var(--s2)"></div></td><td class="r">${f0(r.spent)}</td></tr>`).join("");
 }
 
+const mon = m => new Date(m + "-15").toLocaleString("en-US", {month: "short"});
+const daysIn = m => new Date(+m.slice(0, 4), +m.slice(5, 7), 0).getDate();
+const pct0 = p => (p < 0 ? "−" : "") + Math.abs(p).toFixed(0) + "%";
 function renderSpending(sp) {
   const cur = sp.monthly.find(m => m.month === sp.this_month);
   $("spendsub").textContent = `Monthly class='spend', posted only, since ${sp.since} (complete data starts then, so the first month is partial; this month is to date). ` +
@@ -1362,23 +1434,92 @@ function renderSpending(sp) {
   $("tm-h").textContent = "Top merchants · " + monthName(sp.this_month) + " (to date)";
   $("lm-h").textContent = "Top merchants · " + monthName(sp.last_month);
   merchTable("tm", sp.top[sp.this_month]); merchTable("lm", sp.top[sp.last_month]);
+  renderPace(sp);
+  renderIncome(sp);
   if (window.Chart) {
     const labels = sp.monthly.map(m => {
-      const n = new Date(m.month + "-15").toLocaleString("en-US", {month: "short"});
-      return m.month === sp.since.slice(0, 7) ? n + " (from " + Number(sp.since.slice(8)) + "th)" : m.month === sp.this_month ? n + " (MTD)" : n;
+      const n = mon(m.month);
+      return m.month === sp.since.slice(0, 7) && m.partial ? [n, "from " + Number(sp.since.slice(8)) + "th"] : m.month === sp.this_month ? [n, "MTD"] : n;
     });
     charts.spend?.destroy();
-    const ax = axisOpts();
+    const ax = axisOpts(), fade = (c, m) => m.partial ? c + "88" : c;
     charts.spend = new Chart($("spend"), {
       type: "bar",
-      data: {labels, datasets: [{data: sp.monthly.map(m => conv(m.spent)), backgroundColor: sp.monthly.map(m => m.month === sp.this_month ? css("--s1") + "99" : css("--s1")),
-        borderRadius: {topLeft: 4, topRight: 4}, borderSkipped: "bottom", maxBarThickness: 44}]},
-      options: {responsive: true, maintainAspectRatio: false, animation: false,
-        scales: {x: {...ax, grid: {display: false}}, y: {...ax, beginAtZero: true, ticks: {...ax.ticks, maxTicksLimit: 5, callback: v => compactIn(v)}}},
-        plugins: {legend: {display: false}, tooltip: {callbacks: {label: ctx => ` ${fmtIn(ctx.raw)} · ${sp.monthly[ctx.dataIndex].n} txns`}}}}
+      data: {labels, datasets: [
+        {label: "Income", data: sp.monthly.map(m => conv(m.income)), backgroundColor: sp.monthly.map(m => fade(css("--s3"), m)),
+          borderRadius: {topLeft: 4, topRight: 4}, borderSkipped: "bottom", maxBarThickness: 30},
+        {label: "Spending", data: sp.monthly.map(m => conv(m.spent)), backgroundColor: sp.monthly.map(m => fade(css("--s2"), m)),
+          borderRadius: {topLeft: 4, topRight: 4}, borderSkipped: "bottom", maxBarThickness: 30}]},
+      options: {responsive: true, maintainAspectRatio: false, animation: false, interaction: {mode: "index", intersect: false},
+        scales: {x: {...ax, grid: {display: false}, ticks: {...ax.ticks, maxRotation: 0}}, y: {...ax, beginAtZero: true, ticks: {...ax.ticks, maxTicksLimit: 5, callback: v => compactIn(v)}}},
+        plugins: {legend: {display: false}, tooltip: {callbacks: {
+          title: items => items.length ? monthName(sp.monthly[items[0].dataIndex].month) + (sp.monthly[items[0].dataIndex].partial ? " (partial)" : "") : "",
+          label: ctx => { const m = sp.monthly[ctx.dataIndex]; return ` ${ctx.dataset.label}: ${fmtIn(ctx.raw)} · ${ctx.datasetIndex ? m.n : m.n_income} txns`; },
+          footer: items => { const m = sp.monthly[items[0].dataIndex]; return `Net ${signed(m.net)}${m.partial ? " (partial month)" : ""}`; }}}}}
     });
   }
   renderRecent(sp.recent);
+}
+
+// Month-to-date pace: this month's cumulative posted spend by day against last month's whole curve; the header
+// compares the same day-of-month span (Nov 1–13 vs Oct 1–13). Days before complete data starts are null.
+function renderPace(sp) {
+  const tm = sp.this_month, lm = sp.last_month, d = sp.daily || {}, cur = d[tm] || [], prev = d[lm] || [];
+  const cum = xs => { let a = 0, started = false; return xs.map(v => v == null && !started ? null : (started = true, a += v || 0)); };
+  const cThis = cum(cur), cPrev = cum(prev), n = cur.length;
+  const span = Math.min(n, prev.length), prevSpan = prev.slice(0, span);
+  const thisTot = cThis.at(-1) ?? 0;
+  let hd = `<b>${esc(mon(tm))} so far ${f0(thisTot)}</b>`;
+  if (span && prevSpan.some(v => v == null))
+    hd += ` · ${esc(mon(lm))} 1–${span} not comparable (complete data starts ${esc(fmtShortDay(sp.since))})`;
+  else if (span) {
+    const prevTot = prevSpan.reduce((a, v) => a + v, 0), diff = thisTot - prevTot;
+    hd += Math.abs(diff) < 1 ? ` · same as ${esc(mon(lm))} 1–${span}`
+      : ` · <b class="${diff > 0 ? "down" : "up"}">${f0(Math.abs(diff))} ${diff > 0 ? "more" : "less"}</b> than ${esc(mon(lm))} 1–${span}`;
+  }
+  $("pacehd").innerHTML = hd;
+  $("pace-h").textContent = `Spending pace · day ${n} of ${daysIn(tm)}`;
+  $("pacelegend").innerHTML = `<span><i></i>${esc(mon(tm))} (posted, cumulative)</span><span><i class="dash" style="border-color:var(--muted)"></i>${esc(mon(lm))}</span>`;
+  if (!window.Chart) return;
+  charts.pace?.destroy();
+  const ax = axisOpts(), len = Math.max(prev.length, daysIn(tm)), muted = css("--muted");
+  charts.pace = new Chart($("pace"), {
+    type: "line",
+    data: {labels: Array.from({length: len}, (_, i) => i + 1), datasets: [
+      {label: mon(tm), data: cThis.map(conv), borderColor: css("--s1"), backgroundColor: css("--s1"), borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, tension: 0},
+      {label: mon(lm), data: cPrev.map(conv), borderColor: muted, backgroundColor: muted, borderWidth: 1.5, borderDash: [5, 4], pointRadius: 0, pointHoverRadius: 3, tension: 0}]},
+    options: {responsive: true, maintainAspectRatio: false, animation: false, interaction: {mode: "index", intersect: false},
+      scales: {x: {...ax, grid: {display: false}, ticks: {...ax.ticks, maxRotation: 0, autoSkip: false, callback(v, i) { const day = i + 1; return day === 1 || day % 5 === 0 ? day : ""; }}},
+               y: {...ax, beginAtZero: true, ticks: {...ax.ticks, maxTicksLimit: 4, callback: v => compactIn(v)}}},
+      plugins: {legend: {display: false}, tooltip: {callbacks: {
+        title: items => items.length ? "Day " + items[0].label : "",
+        label: ctx => ` ${ctx.dataset.label} 1–${ctx.label}: ${fmtIn(ctx.raw)}`}}}}
+  });
+}
+
+// Income vs spending per month and the savings rate. Income = class 'income' only (transfers, card payments,
+// refunds and investment moves are left out on both sides). The latest full month and this month to date get a
+// chip each; a partial month is labelled and never ranked against full ones.
+function renderIncome(sp) {
+  const ms = sp.monthly, full = ms.filter(m => !m.partial), lastFull = full.at(-1), cur = ms.find(m => m.month === sp.this_month);
+  const rate = m => m.income > 0 ? 100 * m.net / m.income : null;
+  const chip = (m, label) => { const r = rate(m);
+    return `<span class="chip">${label}: ${m.net >= 0 ? "saved" : "spent"} <b class="${m.net >= 0 ? "up" : "down"}">${f0(Math.abs(m.net))}</b>` +
+      (m.net >= 0 ? (r != null ? ` (${pct0(r)})` : "") : " more than came in") + `</span>`; };
+  const day = Number(sp.today?.slice(8)) || null;
+  $("savechips").innerHTML = (lastFull ? chip(lastFull, esc(monthName(lastFull.month))) : "") +
+    (cur ? chip(cur, `${esc(mon(cur.month))} to date <span class="badge b-muted">partial · ${day ? day + " of " + daysIn(cur.month) + " days" : "MTD"}</span>`) : "");
+  let h = `<thead><tr><th>Month</th><th class="r">Income</th><th class="r">Spending</th><th class="r">Net</th><th class="r">Saved</th></tr></thead><tbody>`;
+  for (const m of ms.slice().reverse()) {
+    const r = rate(m), part = m.month === sp.this_month ? "to date" : m.partial ? `from ${fmtShortDay(sp.since)}` : "";
+    h += `<tr class="${m.partial ? "dim" : ""}"><td class="nowrap">${esc(monthName(m.month))}${part ? ` <span class="badge b-muted">${esc(part)}</span>` : ""}</td>
+      <td class="r">${f0(m.income)}</td><td class="r">${f0(m.spent)}</td><td class="r ${m.net >= 0 ? "up" : "down"}">${signed(m.net)}</td>
+      <td class="r">${m.partial ? '<span class="note" title="Partial month: not comparable with full months">partial</span>' : r == null ? "—" : pct0(r)}</td></tr>`;
+  }
+  $("inctbl").innerHTML = h + "</tbody>";
+  $("incnote").textContent = "Income = class 'income', posted (pay, rental payouts and rent, other deposits); spending = class 'spend'. " +
+    "Transfers between your own accounts, card payments, refunds and investment moves count on neither side. Saved = income − spending; % = of income. " +
+    "The Rental card's payouts and expenses are a slice of these same rows (already in both columns here), not extra money.";
 }
 
 const RECENT_SHOWN = 30;
@@ -1439,11 +1580,14 @@ function renderBudget(b) {
     `<b>Categorization is pattern-based</b>: merchant text is matched to budget lines by rules, so it is approximate; spending no rule matches is “Other (unmapped)”.` +
     (b.error ? ` <span class="err">${esc(b.error)} (showing the last good copy)</span>` : "");
   const left = m.remaining, ahead = m.actual - m.expected;
+  // what's left per remaining day (today counts as a day left); nothing for lines already over
+  const daysLeft = cur ? m.days - m.elapsed_days + 1 : 0;
+  const perDay = v => cur && daysLeft > 0 && v >= 1 ? `<span class="perday" title="${esc(f2(v))} left ÷ ${daysLeft} day${daysLeft > 1 ? "s" : ""} left this month">${v / daysLeft < 1 && !privacy ? "under $1" : f0(v / daysLeft)}/day<span class="hide-sm"> left</span></span>` : "";
   kf("budget", `<b class="${m.actual > m.budget ? "down" : ""}">${f0(m.actual)}</b> of ${f0(m.budget)}`);
   $("budchips").innerHTML = [
     `Budget <b>${f0(m.budget)}</b>`,
     `Spent <b class="${m.actual > m.budget ? "down" : ""}">${f0(m.actual)}</b>`,
-    `${left < 0 ? "Over" : "Left"} <b class="${left < 0 ? "down" : "up"}">${f0(Math.abs(left))}</b>`,
+    `${left < 0 ? "Over" : "Left"} <b class="${left < 0 ? "down" : "up"}">${f0(Math.abs(left))}</b>` + (perDay(left) ? ` · <b>${f0(left / daysLeft)}</b>/day for ${daysLeft} day${daysLeft > 1 ? "s" : ""}` : ""),
     cur ? `Expected by ${esc(asOf)} <b>${f0(m.expected)}</b> · <b class="${ahead > 0 ? "down" : "up"}">${f0(Math.abs(ahead))} ${ahead > 0 ? "ahead of" : "under"} pace</b>` : "",
     `Unmapped <b>${f0(m.unmapped)}</b>`,
   ].filter(Boolean).map(x => `<span class="chip">${x}</span>`).join("");
@@ -1453,19 +1597,20 @@ function renderBudget(b) {
     h += `<tr class="cat" data-k="b${i}"><td class="name" title="${esc(c.category)}">${esc(c.category)}${nSub ? ` <span class="note">${nSub}</span>` : ""}</td>
       <td class="r">${c.unmapped ? "—" : f0(c.budget)}</td><td class="r ${c.over ? "neg" : ""}">${f0(c.actual)}</td>
       <td class="bart">${budBar(c.actual, c.budget, cur ? frac : null)}</td>
-      <td class="r ${c.remaining < 0 ? "down" : ""}">${f0(c.remaining)}</td>${cur ? `<td class="r hide-sm">${budPace(c, cur)}</td>` : ""}</tr>`;
+      <td class="r ${c.remaining < 0 ? "down" : ""}">${f0(c.remaining)}${c.unmapped ? "" : perDay(c.remaining)}</td>${cur ? `<td class="r hide-sm">${budPace(c, cur)}</td>` : ""}</tr>`;
     const subs = c.unmapped
       ? c.merchants.map(x => `<tr class="sub" data-p="b${i}" hidden><td class="name" title="${esc(x.merchant)}">${esc(x.merchant)}${x.n > 1 ? ` <span class="note">×${x.n}</span>` : ""}</td><td></td><td class="r">${f0(x.spent)}</td><td class="bart"></td><td></td>${cur ? '<td class="hide-sm"></td>' : ""}</tr>`)
       : c.lines.map(l => `<tr class="sub" data-p="b${i}" hidden><td class="name" title="${esc(l.item + (l.merchants.length ? " · " + l.merchants.map(x => x.merchant).join(", ") : ""))}">${esc(l.item)}${l.has_rule ? "" : ' <span class="note">no rule</span>'}${l.merchants.length ? `<div class="note desc">${esc(l.merchants.map(x => x.merchant + (x.n > 1 ? " ×" + x.n : "")).join(", "))}</div>` : ""}</td>
           <td class="r">${f0(l.budget)}</td><td class="r ${l.actual > l.budget + 0.005 ? "neg" : ""}">${f0(l.actual)}</td>
-          <td class="bart">${budBar(l.actual, l.budget, null)}</td><td class="r ${l.remaining < 0 ? "down" : ""}">${f0(l.remaining)}</td>${cur ? '<td class="hide-sm"></td>' : ""}</tr>`);
+          <td class="bart">${budBar(l.actual, l.budget, null)}</td><td class="r ${l.remaining < 0 ? "down" : ""}">${f0(l.remaining)}${perDay(l.remaining)}</td>${cur ? '<td class="hide-sm"></td>' : ""}</tr>`);
     h += subs.join("");
   });
-  h += `<tr class="total"><td>Total</td><td class="r">${f0(m.budget)}</td><td class="r ${m.actual > m.budget ? "neg" : ""}">${f0(m.actual)}</td><td class="bart">${budBar(m.actual, m.budget, cur ? frac : null)}</td><td class="r ${left < 0 ? "down" : ""}">${f0(left)}</td>${cur ? `<td class="r hide-sm">${budPace(m, cur)}</td>` : ""}</tr></tbody>`;
+  h += `<tr class="total"><td>Total</td><td class="r">${f0(m.budget)}</td><td class="r ${m.actual > m.budget ? "neg" : ""}">${f0(m.actual)}</td><td class="bart">${budBar(m.actual, m.budget, cur ? frac : null)}</td><td class="r ${left < 0 ? "down" : ""}">${f0(left)}${perDay(left)}</td>${cur ? `<td class="r hide-sm">${budPace(m, cur)}</td>` : ""}</tr></tbody>`;
   $("budtbl").innerHTML = h;
   $("budtbl").querySelectorAll("tr.cat").forEach(tr => tr.onclick = () =>
     $("budtbl").querySelectorAll(`tr[data-p="${tr.dataset.k}"]`).forEach(x => x.hidden = !x.hidden));
   const notes = ["Tap a category for its lines and merchants (“no rule” = no pattern points at that line yet)."];
+  if (cur) notes.push(`Per day = what's left ÷ the ${daysLeft} day${daysLeft > 1 ? "s" : ""} left in the month, today included.`);
   if (cur) notes.push(`Pace = budget × ${m.elapsed_days}/${m.days} days (the tick on each bar); rent, mortgage and other lump bills post early, so pace runs ahead early in the month.`);
   notes.push("Yearly items are budgeted at 1/12 a month, so an annual bill shows over in the month it posts.");
   if (m.excluded.length) notes.push(`Not counted (saving, not spending): ${m.excluded.map(e => `${e.item} ${f0(e.budget)}`).join(", ")}.`);
