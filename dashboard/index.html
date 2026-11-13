@@ -147,6 +147,7 @@ tr.sub td:first-child { padding-left: 26px; }
 .filters input { flex: 1 1 200px; max-width: 320px; }
 .filters input:focus, .filters select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 tr.cat:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+img.ico { width: 16px; height: 16px; border-radius: 3px; vertical-align: -3px; margin-right: 6px; }
 tr.acct { cursor: pointer; }
 tr.acct:hover td { background: var(--surface-2); }
 tr.acct:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -513,6 +514,9 @@ const fmtTime = iso => { if (!iso) return "—"; const d = new Date(iso); return
 const fmtShort = iso => { if (!iso) return "—"; const d = new Date(iso); if (isNaN(d)) return iso;
   return d.toDateString() === new Date().toDateString() ? d.toLocaleTimeString("en-US", {hour: "numeric", minute: "2-digit"}) : d.toLocaleDateString("en-US", {month: "short", day: "numeric"}); };
 const md = iso => `${+iso.slice(5, 7)}/${+iso.slice(8, 10)}`;
+// Institution logo from ~/.config/wealth-ledger/icons/<slug>.png; removed again if there is no such file.
+const ico = inst => { const s = String(inst || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""); return s ? `<img class="ico" alt="" src="/icons/${s}.png">` : ""; };
+document.addEventListener("error", e => { if (e.target.matches?.("img.ico")) e.target.remove(); }, true);
 const stripNum = s => String(s || "").replace(/\s*\([0-9a-f-]+\)$/, "");
 async function get(path, opts = {}) {
   const r = await fetch(path, {cache: "no-store", credentials: "same-origin", ...opts});
@@ -951,7 +955,7 @@ function renderAccounts(a) {
     const tot = rs.reduce((x, r) => x + r.balance, 0);
     const tag = k === "crypto" ? ' <span class="badge b-muted">in Crypto total</span>' : (!rs[0].counted ? ' <span class="badge b-muted">not counted</span>' : "");
     h += `<tr class="group"><td colspan="2">${esc(KIND_LABEL[k] || k)}${tag}</td><td class="r">${f0(tot)}</td><td colspan="2" class="hide-sm"></td></tr>`;
-    for (const r of rs) h += `<tr class="acct ${r.counted || k === "crypto" ? "" : "dim"}" data-id="${esc(r.account_id)}" tabindex="0" role="button" aria-label="Show transactions for ${esc(stripNum(r.account_name))}"><td class="name" title="${esc(r.account_name)}">${esc(stripNum(r.account_name))} <span class="note">${esc((r.account_name.match(/\((\d{4})\)$/) || [, ""])[1])}</span></td>
+    for (const r of rs) h += `<tr class="acct ${r.counted || k === "crypto" ? "" : "dim"}" data-id="${esc(r.account_id)}" tabindex="0" role="button" aria-label="Show transactions for ${esc(stripNum(r.account_name))}"><td class="name" title="${esc(r.account_name)}">${ico(r.institution)}${esc(stripNum(r.account_name))} <span class="note">${esc((r.account_name.match(/\((\d{4})\)$/) || [, ""])[1])}</span></td>
       <td class="hide-sm name">${esc(r.institution)}</td><td class="r ${r.balance < 0 ? "down" : ""}" title="${esc(f2(r.balance))}">${f0(r.balance)}</td>
       <td class="r note">${asOf(r)}</td><td class="r hide-sm note">${esc(r.source)}</td></tr>`;
   }
@@ -1117,7 +1121,7 @@ function renderCards(c) {
   let h = `<thead><tr><th>Card</th><th class="r">Owed / limit</th><th class="r" title="Utilization: balance owed / credit limit">Used</th></tr></thead><tbody>`;
   for (const r of c.cards) {
     const p = nextPay[r.account_name];
-    h += `<tr class="acct" data-id="${esc(r.account_id)}" tabindex="0" role="button" aria-label="Show transactions for ${esc(stripNum(r.account_name))}"><td class="name" title="${esc(r.account_name)}">${esc(stripNum(r.account_name).replace(/ Card \d{4}$/, ""))}
+    h += `<tr class="acct" data-id="${esc(r.account_id)}" tabindex="0" role="button" aria-label="Show transactions for ${esc(stripNum(r.account_name))}"><td class="name" title="${esc(r.account_name)}">${ico(r.institution)}${esc(stripNum(r.account_name).replace(/ Card \d{4}$/, ""))}
       <div class="note">${esc(r.institution)} · ${esc((r.account_name.match(/\((\d{4})\)$/) || [, ""])[1])} · ${asOf(r)}${r.limit_basis === "manual"
         ? ' <span class="badge b-sheet" title="Credit limit entered by hand in personal.json (credit_limits)">manual limit</span>' : ""}</div>
       ${p ? `<div class="note" title="Projected from history; amount is the statement estimate">Autopay ${esc(p.date.slice(5))} · ${f0(-p.amount)} est.</div>` : ""}</td>

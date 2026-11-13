@@ -518,3 +518,12 @@ def test_allocation_splits_the_crypto_total_by_wallet(dbfile, monkeypatch):
     assert [l["source"] for l in c["lines"]] == ["est", "live", "live"]
     lines[0]["used"] = 59000.0  # fell back to the sheet's figure
     assert crypto() == (59050.0, [(server.CRYPTO_LINE, 59000.0), ("W2 cash", 50.0)])
+
+
+def test_icon_bytes_serves_only_png_files_from_the_icon_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "ICON_DIR", str(tmp_path))
+    (tmp_path / "test-bank.png").write_bytes(b"\x89PNG\r\n\x1a\nrest")
+    (tmp_path / "not-an-image.png").write_text("<html>")
+    assert server.icon_bytes("test-bank").startswith(b"\x89PNG")
+    assert server.icon_bytes("not-an-image") is None and server.icon_bytes("missing") is None
+    assert server.ICON_PATH.fullmatch("/icons/test-bank.png") and not server.ICON_PATH.fullmatch("/icons/../auth.png")
