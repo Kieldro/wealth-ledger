@@ -308,3 +308,21 @@ def test_regular_pay_is_not_listed_as_uncounted(led):
     led.monthly(CHK, date(2026, 7, 12), 4, -4000, "DIRECT DEBIT LANDLORD RENT")
     fc = led.forecast()[CHK]
     assert fc["uncounted_income"] == [] and "Not counted" not in overdraft.warnings([fc])[0]
+
+
+def test_transfer_sent_from_another_account_counts_until_it_lands_or_goes_stale(led):
+    led.account(CHK, "Checking (1111)", "checking", 1500)
+    led.account("sav", "Savings (2222)", "savings", 9000)
+    led.db.execute("INSERT INTO txn_rules VALUES (10, '%TRANSFER%', NULL, NULL, 'transfer', NULL)")
+    led.monthly(CHK, date(2026, 7, 3), 4, -2100, "DIRECT DEBIT LANDLORD RENT (Cash)")
+    led.txn("sav", TODAY - timedelta(days=1), -3000, "Requested transfer to Pat (BIG BANK Checking XXXXXX1111)")
+    a = led.forecast()[CHK]
+    assert a["events"][0] == {"date": TODAY.isoformat(), "label": "Transfer from sav", "amount": 3000.0,
+                              "estimate": True, "note": "in transit", "balance_after": 4500.0}
+    assert a["low"] == 1500 and overdraft.warnings([a]) == []
+    # still missing after TRANSIT_DAYS: no longer counted on
+    late = led.forecast(TODAY + timedelta(days=5))[CHK]
+    assert late["first_short"] and not any(e.get("note") for e in late["events"])
+    # landed: it is inside the balance already
+    led.txn(CHK, TODAY, 3000, "TRANSFER RECEIVED")
+    assert [e["label"] for e in led.forecast()[CHK]["events"]] == ["LANDLORD RENT"]

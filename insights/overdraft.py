@@ -17,6 +17,8 @@ with a known last day goes in personal.json "overdraft": {"ends": {"<description
 nothing is projected for it after that date. A bill that resumes on its usual day is one series again. A card autopay survives one missed cycle: issuers skip a draft when the statement was
 already paid by hand, and resume. Frequent deposits with no monthly rhythm (many small payouts from one payer) are
 never projected; they're listed per account as `uncounted_income` and named in the warning.
+A transfer that has left another of the owner's accounts but hasn't reached the checking account it names (by its
+last four digits) is counted as arriving today, flagged "in transit", for TRANSIT_DAYS; after that it is dropped.
 
   python -m insights.overdraft            forecast for every checking account
   python -m insights.overdraft --status   warning lines only (wealth-ledger-sync puts them in the status file)
@@ -56,6 +58,8 @@ MISSED_NOTE = "missed last cycle"
 SKIP_TOL = 4        # a gap counts as "one period skipped" when half of it is within this many days of the usual spacing
 SAME_PAY = 0.01     # a payer's last two deposits "agree" within this fraction
 SPEND_DAYS = 60     # a card's recent charge rate is taken over this many days
+TRANSIT_DAYS = 5    # a transfer sent between own accounts is expected to land within this many days
+TRANSIT_NOTE = "in transit"
 UNCOUNTED_DAYS, UNCOUNTED_MIN = 60, 3  # unprojected income worth naming: this many deposits from one payer in the window
 
 
@@ -142,6 +146,33 @@ def bill_ends(con, description: str, ends: dict[str, str]) -> date | None:
     hits = [date.fromisoformat(d) for pat, d in ends.items()
             if not pat.startswith("_") and con.execute("SELECT ? LIKE ?", (description, pat)).fetchone()[0]]
     return min(hits) if hits else None
+
+
+def in_transit(con, accounts: dict, today: date) -> list[tuple[str, dict]]:
+    """(checking account_id, event) for each transfer sent from another own account that hasn't arrived yet.
+    The destination is the checking account whose last four digits the sender's description names."""
+    last4 = {m.group(1): aid for aid, a in accounts.items()
+             if (m := re.search(r"\((\d{4})\)\s*$", a["account_name"] or ""))}
+    out, used = [], set()
+    for r in _rows(con, """SELECT account_id, account_name, date, amt, description FROM v_ledger
+                           WHERE class='transfer' AND amt<0 AND pending=0 AND date>=? AND date<=?
+                           ORDER BY date, txn_id""", ((today - timedelta(TRANSIT_DAYS)).isoformat(), today.isoformat())):
+        dest = {last4[d] for d in re.findall(r"(?<!\d)(\d{4})(?!\d)", r["description"] or "") if d in last4}
+        dest.discard(r["account_id"])
+        if len(dest) != 1:
+            continue
+        dest = dest.pop()
+        sent = date.fromisoformat(r["date"])
+        got = [t["txn_id"] for t in _rows(
+            con, "SELECT txn_id FROM v_ledger WHERE account_id=? AND pending=0 AND ABS(amt + ?) < 0.005 AND date>=? "
+                 "ORDER BY date, txn_id", (dest, r["amt"], (sent - timedelta(1)).isoformat()))
+               if t["txn_id"] not in used]
+        if got:
+            used.add(got[0])  # arrived: already inside the balance
+            continue
+        out.append((dest, {"date": today.isoformat(), "label": f"Transfer from {r['account_name']}",
+                           "amount": round(-r["amt"], 2), "estimate": True, "note": TRANSIT_NOTE}))
+    return out
 
 
 def _rows(con, sql, args=()):
@@ -256,6 +287,9 @@ def forecast(con: sqlite3.Connection, today: date | None = None, horizon: int = 
         if income and not projected and len(late) >= UNCOUNTED_MIN:
             accounts[acct]["uncounted"].append({"label": name, "count": len(late), "days": UNCOUNTED_DAYS,
                                                 "monthly": round(sum(late) * 30 / UNCOUNTED_DAYS, 2)})
+
+    for acct, ev in in_transit(con, accounts, today):
+        accounts[acct]["events"].append(ev)
 
     # card autopays, sized from the card's own statement estimate
     for card in _rows(con, "SELECT account_id, account_name, balance FROM v_accounts WHERE kind='credit'"):
