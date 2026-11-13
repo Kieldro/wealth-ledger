@@ -527,3 +527,52 @@ def test_icon_bytes_serves_only_png_files_from_the_icon_dir(tmp_path, monkeypatc
     assert server.icon_bytes("test-bank").startswith(b"\x89PNG")
     assert server.icon_bytes("not-an-image") is None and server.icon_bytes("missing") is None
     assert server.ICON_PATH.fullmatch("/icons/test-bank.png") and not server.ICON_PATH.fullmatch("/icons/../auth.png")
+
+
+def _txns(dbfile, rows):
+    con = ctdb.connect(dbfile)
+    con.execute("INSERT OR IGNORE INTO account_kind VALUES ('k1','checking',NULL)")
+    for i, (d, amt, desc, pending) in enumerate(rows):
+        con.execute(ctdb.upsert_sql("txns"), (f"s{i}", "k1", "k1", "Bank", d, None, amt, desc, None, None, pending,
+                                              "USD", "x", "x", "test"))
+    con.commit()
+    con.close()
+
+
+def test_spending_income_net_and_partial_months(dbfile, monkeypatch):
+    class Today(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 11, 13)
+    monkeypatch.setattr(server, "date", Today)
+    monkeypatch.setattr(server, "LEDGER_START", "2026-09-20")
+    _txns(dbfile, [("2026-09-10", "-999.00", "BEFORE THE LEDGER STARTS", 0),
+                   ("2026-09-25", "-100.00", "GROCER", 0), ("2026-09-30", "2000.00", "PAYROLL ACME", 0),
+                   ("2026-10-01", "-1500.00", "DIRECT DEBIT RENT", 0), ("2026-10-15", "3000.00", "PAYROLL ACME", 0),
+                   ("2026-10-16", "-500.00", "PURCHASE INTO CORE ACCOUNT FDIC", 0),  # a sweep: transfer, not spend
+                   ("2026-11-02", "-40.00", "GROCER", 0), ("2026-11-03", "-7.00", "PENDING COFFEE", 1)])
+    sp = server.api_spending({})
+    by = {m["month"]: m for m in sp["monthly"]}
+    assert list(by) == ["2026-09", "2026-10", "2026-11"]
+    assert (by["2026-09"]["spent"], by["2026-09"]["income"], by["2026-09"]["net"], by["2026-09"]["partial"]) == (100, 2000, 1900, True)
+    assert (by["2026-10"]["spent"], by["2026-10"]["income"], by["2026-10"]["net"], by["2026-10"]["partial"]) == (1500, 3000, 1500, False)
+    assert (by["2026-11"]["spent"], by["2026-11"]["income"], by["2026-11"]["partial"]) == (40, 0, True)  # pending left out
+    assert by["2026-10"]["n_income"] == 1 and by["2026-10"]["n"] == 1
+
+
+def test_spending_daily_pace_this_month_and_last(dbfile, monkeypatch):
+    class Today(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 11, 3)
+    monkeypatch.setattr(server, "date", Today)
+    monkeypatch.setattr(server, "LEDGER_START", "2026-10-02")
+    _txns(dbfile, [("2026-10-01", "-80.00", "BEFORE THE LEDGER STARTS", 0), ("2026-10-02", "-10.00", "A", 0),
+                   ("2026-10-02", "-5.00", "B", 0), ("2026-10-31", "-20.00", "C", 0), ("2026-10-31", "900.00", "PAY", 0),
+                   ("2026-11-02", "-30.00", "D", 0), ("2026-11-03", "-9.00", "PENDING", 1),
+                   ("2026-11-04", "-99.00", "AFTER TODAY", 0)])
+    sp = server.api_spending({})
+    assert sp["today"] == "2026-11-03"
+    last, this = sp["daily"]["2026-10"], sp["daily"]["2026-11"]
+    assert len(last) == 31 and last[0] is None and last[1] == 15 and last[30] == 20 and sum(last[1:]) == 35
+    assert this == [0, 30, 0]  # through today only; pending not counted

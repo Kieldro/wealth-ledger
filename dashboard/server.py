@@ -683,12 +683,37 @@ def merchant(desc: str, payee: str | None) -> str:
     return re.sub(r"\s+", " ", s).strip().title() or "(unknown)"
 
 
+def daily_spend(month: str, through: date) -> list:
+    """Posted spend per day of `month` ("YYYY-MM"), index 0 = the 1st, up to `through` or the month's end.
+    Days before LEDGER_START are None (no complete data), not 0."""
+    first = date.fromisoformat(month + "-01")
+    end = min(through, (first + timedelta(days=32)).replace(day=1) - timedelta(days=1))
+    by_day = {r["date"]: r["spent"] for r in q(
+        """SELECT date, ROUND(-SUM(amt),2) spent FROM v_ledger WHERE class='spend' AND pending=0
+           AND date BETWEEN ? AND ? AND date >= ? GROUP BY date""", (first.isoformat(), end.isoformat(), LEDGER_START))}
+    days = [first + timedelta(days=i) for i in range((end - first).days + 1)]
+    return [None if d.isoformat() < LEDGER_START else by_day.get(d.isoformat(), 0.0) for d in days]
+
+
 def api_spending(params) -> dict:
-    monthly = q("""SELECT strftime('%Y-%m', date) month, ROUND(-SUM(amt),2) spent, COUNT(*) n FROM v_ledger
-                   WHERE class='spend' AND pending=0 AND date >= ? GROUP BY month ORDER BY month""", (LEDGER_START,))
     today = date.today()
     this_m = today.strftime("%Y-%m")
     last_m = (today.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+    # spend and income per month (income = class 'income' only: transfers, card payments, refunds and investment
+    # moves are not income). A month is partial when complete data starts inside it, or it is this month.
+    rows = q("""SELECT strftime('%Y-%m', date) month, class, ROUND(SUM(amt),2) total, COUNT(*) n FROM v_ledger
+                WHERE class IN ('spend','income') AND pending=0 AND date >= ? GROUP BY month, class""", (LEDGER_START,))
+    by_m: dict[str, dict] = {}
+    for r in rows:
+        m = by_m.setdefault(r["month"], {"month": r["month"], "spent": 0.0, "n": 0, "income": 0.0, "n_income": 0})
+        if r["class"] == "spend":
+            m["spent"], m["n"] = -r["total"], r["n"]
+        else:
+            m["income"], m["n_income"] = r["total"], r["n"]
+    monthly = [by_m[k] for k in sorted(by_m)]
+    for m in monthly:
+        m["net"] = round(m["income"] - m["spent"], 2)
+        m["partial"] = m["month"] == this_m or (m["month"] == LEDGER_START[:7] and LEDGER_START[8:] != "01")
     tops = {}
     for m in (this_m, last_m):
         rows = q("""SELECT description, payee, amt FROM v_ledger WHERE class='spend' AND pending=0
@@ -709,7 +734,8 @@ def api_spending(params) -> dict:
         r["merchant"] = merchant(r["description"], r["payee"])
         r["account_name"] = re.sub(r"\s*\([0-9a-f-]+\)$", "", r["account_name"] or "")
     return {"monthly": monthly, "this_month": this_m, "last_month": last_m, "top": tops, "recent": recent,
-            "since": LEDGER_START,
+            "since": LEDGER_START, "today": today.isoformat(),
+            "daily": {this_m: daily_spend(this_m, today), last_m: daily_spend(last_m, today)},
             "note": f"class='spend', posted only, since {LEDGER_START} (complete data starts then; that month is partial)."}
 
 
