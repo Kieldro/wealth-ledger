@@ -1505,7 +1505,7 @@ function renderIncome(sp) {
   const rate = m => m.income > 0 ? 100 * m.net / m.income : null;
   const chip = (m, label) => { const r = rate(m);
     return `<span class="chip">${label}: ${m.net >= 0 ? "saved" : "spent"} <b class="${m.net >= 0 ? "up" : "down"}">${f0(Math.abs(m.net))}</b>` +
-      (m.net >= 0 ? (r != null ? ` (${pct0(r)})` : "") : " more than came in") + `</span>`; };
+      (m.net >= 0 ? (r != null && !m.partial ? ` (${pct0(r)})` : "") : " more than came in") + `</span>`; };
   const day = Number(sp.today?.slice(8)) || null;
   $("savechips").innerHTML = (lastFull ? chip(lastFull, esc(monthName(lastFull.month))) : "") +
     (cur ? chip(cur, `${esc(mon(cur.month))} to date <span class="badge b-muted">partial · ${day ? day + " of " + daysIn(cur.month) + " days" : "MTD"}</span>`) : "");
