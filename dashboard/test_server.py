@@ -361,7 +361,9 @@ def test_crypto_groups_by_wallet_and_coin(dbfile):
     assert c["total"] == 60000.0 and c["sheet_total"] == 59000.0 and c["warnings"] == ["no price for W2 NEW"]
     assert [(w["wallet"], w["value"]) for w in c["wallets"]] == [("W1", 40000.0), ("W2", 20000.0)]
     assert [h["coin"] for h in c["wallets"][1]["holdings"]] == ["BTC", "USD", "NEW"]  # uncounted last, dust dropped
-    assert c["coins"] == [{"coin": "BTC", "qty": 0.75, "price": 80000.0, "value": 60000.0, "pct": 100.0}]
+    assert c["coins"] == [{"coin": "BTC", "qty": 0.75, "price": 80000.0, "value": 60000.0, "pct": 100.0, "where": [
+        {"wallet": "W1", "qty": 0.5, "value": 40000.0, "qty_source": "onchain"},
+        {"wallet": "W2", "qty": 0.25, "value": 20000.0, "qty_source": "exchange-api"}]}]
     assert [(x["where"], x["type"], x["btc"]) for x in c["btc"]["locations"]] == [
         ("W1", "self-custody", 0.5), ("W2", "self-custody", 0.25)]
 

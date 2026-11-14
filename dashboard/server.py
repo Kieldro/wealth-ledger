@@ -431,7 +431,8 @@ def api_holdings(params) -> dict:
 
 
 def api_crypto(params) -> dict:
-    """Every crypto holding from the latest valuations/crypto.py run, grouped by wallet and by coin."""
+    """Every crypto holding from the latest valuations/crypto.py run, grouped by wallet and by coin (each coin
+    with the wallets it is kept in)."""
     rows = q("SELECT snapshot_date, value, detail, fetched_at FROM v_valuations_latest "
              "WHERE asset = ?", (CRYPTO_LINE,))
     if not rows:
@@ -454,8 +455,15 @@ def api_crypto(params) -> dict:
         w["value"] = round(w["value"], 2)
         w["holdings"].sort(key=lambda h: (not h["counted"], -h["value"]))
     total = r["value"] or 0
+    kept: dict[str, list] = {}  # coin -> the wallets holding it (counted holdings only), largest first
+    for w in out:
+        for h in w["holdings"]:
+            if h["counted"]:
+                kept.setdefault(h["coin"], []).append({"wallet": w["wallet"], "qty": h["qty"], "value": h["value"],
+                                                       "qty_source": h["qty_source"]})
     coins = sorted(({"coin": c, "qty": v.get("qty"), "price": v.get("price"), "value": round(v.get("value") or 0, 2),
-                     "pct": round(100 * (v.get("value") or 0) / total, 2) if total else 0}
+                     "pct": round(100 * (v.get("value") or 0) / total, 2) if total else 0,
+                     "where": sorted(kept.get(c, []), key=lambda x: -x["value"])}
                     for c, v in (d.get("by_coin") or {}).items() if abs(v.get("value") or 0) >= 0.01),
                    key=lambda c: -c["value"])
     btc_price = (d.get("by_coin") or {}).get("BTC", {}).get("price")
