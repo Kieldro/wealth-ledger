@@ -10,7 +10,7 @@ Quantity per (wallet, coin), best source first:
                    *.txt wallet exports and the wallet's own addresses in Exodus "*-addresses-*.csv" exports in
                    personal.json crypto.xpub_export_dir): BTC via mempool.space (blockstream.info fallback),
                    ETH + ERC-20 USDT/USDC via public RPCs, TRX + TRC-20 USDT via TronGrid, SOL via Solana RPC,
-                   ALGO via AlgoNode
+                   ALGO via AlgoNode, XMR from a view-only wallet file via monero-wallet-cli and your own node
   2. exchange-api  Gemini / Kraken / Coinbase private balance calls, only if read-only keys are in that file
   3. simplefin     exchange wallets synced into txns.db (kind='crypto'); networth.py counts them nowhere else
   4. sheet         the crypto tab's manual quantity
@@ -448,6 +448,21 @@ def algo_balances(addr: str) -> dict[str, float]:
     return {"ALGO": _req(ALGO_API + addr + "?exclude=all")["amount"] / 1e6}
 
 
+def xmr_balance(entry: dict, run=subprocess.run) -> dict[str, float]:
+    """Balance of a view-only Monero wallet file, refreshed against the node by monero-wallet-cli.
+    A view-only wallet sees incoming outputs only: after a spend it overstates until key images are re-imported."""
+    cli, wallet = Path(entry["cli"]).expanduser(), Path(entry["view_wallet"]).expanduser()
+    if not wallet.exists():
+        raise ValueError("view-only wallet file not found")
+    r = run([str(cli), "--wallet-file", str(wallet), "--password", "", "--daemon-address",
+             entry.get("daemon") or "127.0.0.1:18081", "--trusted-daemon", "--log-file", "/dev/null", "balance"],
+            capture_output=True, text=True, timeout=int(entry.get("timeout", 600)), stdin=subprocess.DEVNULL)
+    m = re.search(r"^Balance: ([0-9.]+), unlocked balance:", r.stdout, re.M)
+    if not m or "refresh failed" in r.stdout.lower() or "no connection to daemon" in r.stdout.lower():
+        raise ValueError(f"monero-wallet-cli gave no balance (rc {r.returncode})")
+    return {"XMR": float(m.group(1))}
+
+
 # ---------------------------------------------------------------- exchanges (read-only keys)
 
 def kraken_sign(urlpath: str, postdata: str, nonce: str, secret_b64: str) -> str:
@@ -563,6 +578,9 @@ TEMPLATE = {
     "_sol_example": [{"wallet": "Mobile", "address": "base58 address"}],
     "algo": [],
     "_algo_example": [{"wallet": "Mobile", "address": "58-character Algorand address"}],
+    "xmr": [],
+    "_xmr_example": [{"wallet": "Desktop", "view_wallet": "~/path/to/view-only wallet file (no password)",
+                      "cli": "~/path/to/monero-wallet-cli", "daemon": "127.0.0.1:18081"}],
     "gemini": {"api_key": "", "api_secret": "", "_note": "read-only key, Fund Management: balances only"},
     "kraken": {"api_key": "", "api_secret": "", "_note": "read-only key, Query Funds only"},
     "coinbase": {"key_file": "", "_note": "CDP API key file (View permission only), chmod 600"},
@@ -738,6 +756,14 @@ def onchain_sources(cfg: dict, btc_lookup=None) -> tuple[list[dict], list[str]]:
             except Exception as ex:  # noqa: BLE001
                 warns.append(f"{chain.upper()} {w} #{n}: {ex}")
                 failed.add((wallet_name(w), chain))
+    for n, e in enumerate(cfg.get("xmr") or [], 1):
+        w = e.get("wallet") or default_wallet()
+        try:
+            out.append({"wallet": w, "chain": "xmr", "source": "onchain", "coins": {"XMR"}, "qty": xmr_balance(e),
+                        "note": f"xmr view-only wallet #{n} (incoming only; re-import key images after a spend)"})
+        except Exception as ex:  # noqa: BLE001
+            warns.append(f"XMR {w} #{n}: {ex}")
+            failed.add((wallet_name(w), "xmr"))
     # a partial result would undercount: if any entry of a wallet+chain failed, that wallet keeps its sheet qty
     for w, chain in sorted(failed):
         warns.append(f"{chain.upper()} {w}: lookup failed, using the sheet quantity")

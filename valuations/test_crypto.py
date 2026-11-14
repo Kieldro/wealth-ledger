@@ -5,6 +5,7 @@
 import hashlib
 import hmac
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -383,3 +384,26 @@ def test_algo_balances(monkeypatch):
     assert c.algo_balances(ALGO_A) == {"ALGO": 3.25}
     with pytest.raises(ValueError):
         c.algo_balances("bad")
+
+
+def test_xmr_balance_reads_wallet_cli_output(tmp_path):
+    w = tmp_path / "view"
+    w.write_bytes(b"x")
+    entry = {"cli": "/bin/true", "view_wallet": str(w)}
+    out = lambda text: lambda argv, **k: types.SimpleNamespace(stdout=text, returncode=0)
+    seen = []
+    run = lambda argv, **k: seen.append(argv) or types.SimpleNamespace(
+        stdout="Opened wallet: 4abc\nBalance: 12.345600000000, unlocked balance: 12.000000000000\n", returncode=0)
+    assert c.xmr_balance(entry, run=run) == {"XMR": 12.3456}
+    assert seen[0][-1] == "balance" and str(w) in seen[0]
+    with pytest.raises(ValueError):
+        c.xmr_balance(entry, run=out("Error: wallet failed to connect to daemon\n"))
+    with pytest.raises(ValueError):
+        c.xmr_balance({"cli": "/bin/true", "view_wallet": str(tmp_path / "missing")}, run=run)
+
+
+def test_failed_xmr_wallet_keeps_sheet_quantity(monkeypatch, tmp_path):
+    monkeypatch.setattr(c, "XPUB_EXPORT_DIR", tmp_path)
+    out, warns = c.onchain_sources({"xmr": [{"wallet": "Hodl", "cli": "/bin/true", "view_wallet": str(tmp_path / "nope")}]},
+                                   btc_lookup=lambda a: (0, 0))
+    assert out == [] and any("XMR Hodl" in w and "sheet quantity" in w for w in warns)
