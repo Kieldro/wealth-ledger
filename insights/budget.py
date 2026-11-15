@@ -104,14 +104,19 @@ def parse_sheet(values: list[list]) -> dict:
     """{"lines": [{category, item, budget}], "sheet_total": the Total row's monthly value or None}.
 
     Rows are [category, item, monthly]; reading stops at the Total row. Header and spacer rows (no numeric
-    monthly amount) are skipped. A blank category becomes NO_CATEGORY. When a header row has "Expense" in the
-    item column, reading starts below it, so an income block above the budget is not read as budget lines."""
+    monthly amount) are skipped. A blank category becomes NO_CATEGORY. When a header row says "Expense",
+    reading starts below it, so an income block above the budget is not read as budget lines; "Expense" in
+    the first column means the rows are [item, category, monthly]."""
     lines, total = [], None
-    items = [str(r[1]).strip().lower() if len(r) > 1 else "" for r in values]
-    start = items.index("expense") + 1 if "expense" in items else 0
+    cell = lambda r, i: str(r[i]).strip() if len(r) > i else ""
+    start, ci, ii = 0, 0, 1
+    for n, r in enumerate(values):
+        if "expense" in (cell(r, 0).lower(), cell(r, 1).lower()):
+            start = n + 1
+            ci, ii = (1, 0) if cell(r, 0).lower() == "expense" else (0, 1)
+            break
     for r in values[start:]:
-        cat = str(r[0]).strip() if len(r) > 0 else ""
-        item = str(r[1]).strip() if len(r) > 1 else ""
+        cat, item = cell(r, ci), cell(r, ii)
         if item.lower() == "total":
             total = _num(r, 2)
             break

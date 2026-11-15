@@ -73,6 +73,12 @@ def test_parse_sheet_skips_an_income_block_above_the_expense_header():
     assert budget.parse_sheet(top + SHEET) == budget.parse_sheet(SHEET)
 
 
+def test_parse_sheet_reads_item_first_columns_when_the_header_says_so():
+    swapped = [["Income", "", "pre tax"], ["Salary", "", 120000], ["Expense", "category", "monthly"]]
+    swapped += [[r[1], r[0], *r[2:]] if len(r) > 1 else r for r in SHEET]
+    assert budget.parse_sheet(swapped) == budget.parse_sheet(SHEET)
+
+
 def test_store_vs_its_gas_station_and_unmapped(led):
     led.txn(date(2026, 10, 2), -80.00, "H-E-B #123 000000000SPRINGFIELD", payee="H-E-B")
     led.txn(date(2026, 10, 3), -45.00, "H-E-B GAS CARWASH #6SPRINGFIELD", payee="H-E-B")
