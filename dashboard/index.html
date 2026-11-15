@@ -112,10 +112,24 @@ tr.short td { background: color-mix(in srgb, var(--neg) 9%, transparent); }
 .chip { font-size: 12px; padding: 2px 8px; border-radius: 6px; background: var(--surface-2); color: var(--text-2); white-space: nowrap; }
 .chip b { font-weight: 600; }
 .up { color: var(--pos); } .down { color: var(--neg); }
-td.spark, th.spark { width: 80px; text-align: center; padding-top: 0; padding-bottom: 0; }
+td.spark, th.spark { width: 64px; padding-left: 4px; padding-right: 4px; text-align: center; padding-top: 0; padding-bottom: 0; }
 .sparkline { vertical-align: middle; }
 .sparkline polyline { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
 .sparkline.flat { color: var(--text-2); }
+.hdr { display: inline-flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.chg { font-size: 11px; font-weight: 400; white-space: nowrap; }
+.acctsum { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 4px 0 12px; }
+.acctsum h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--text-2); display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.acctsum h3 b { font-size: 15px; color: var(--text); }
+.stack { display: block; width: 100%; height: 8px; border-radius: 4px; overflow: hidden; }
+.acctsum ul { list-style: none; margin: 6px 0 0; padding: 0; font-size: 12px; }
+.acctsum li { display: flex; gap: 6px; align-items: baseline; padding: 1px 0; }
+.acctsum li .lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; align-self: center; }
+.k-checking { fill: var(--s1); background: var(--s1); } .k-savings { fill: var(--s3); background: var(--s3); }
+.k-investment { fill: var(--s7); background: var(--s7); } .k-retirement { fill: var(--s4); background: var(--s4); }
+.k-hsa { fill: var(--s5); background: var(--s5); } .k-credit { fill: var(--s2); background: var(--s2); } .k-loan { fill: var(--s8); background: var(--s8); }
+@media (max-width: 560px) { .acctsum { grid-template-columns: 1fr; } }
 .nowrap { white-space: nowrap; }
 .note { font-size: 12px; color: var(--muted); }
 
@@ -348,8 +362,9 @@ footer code { font-size: 11.5px; }
     </section>
 
     <section class="card span-6" id="acctscard" data-nav="Accounts">
-      <div class="hd"><h2>Accounts</h2><label class="toggle"><input type="checkbox" id="showzero"> show zero balances</label></div>
+      <div class="hd"><h2>Accounts</h2><span class="hdr"><span class="seg" id="acct-seg" role="group" aria-label="Period for trend lines and change"></span><label class="toggle"><input type="checkbox" id="showzero"> show zero balances</label></span></div>
       <p class="sub">Synced accounts only (latest snapshot). Click an account to see all its transactions. Custodial accounts are shown but not counted in net worth. Crypto exchange wallets are counted once, inside the Crypto total (priced live), not as separate lines.</p>
+      <div class="acctsum" id="acctsum"></div>
       <div class="tw"><table id="accts"></table></div>
     </section>
 
@@ -472,6 +487,7 @@ footer code { font-size: 11.5px; }
       <p class="sub" id="recentsub">Latest 30 across all accounts. Pending rows are dimmed.</p>
       <div class="filters" role="search">
         <input type="search" id="txq" placeholder="Search description, note or account" aria-label="Search recent transactions by description or account" autocomplete="off">
+        <select id="txcat" aria-label="Filter by category"><option value="">All categories</option></select>
         <select id="txcls" aria-label="Filter by class"><option value="">All classes</option><option value="spend">Spend</option><option value="income">Income</option><option value="refund">Refund</option><option value="transfer">Transfer</option><option value="card_payment">Card payment</option><option value="investment">Investment</option></select>
       </div>
       <div class="tw"><table id="recent"></table></div>
@@ -1018,18 +1034,54 @@ function asOf(r) {
 // a row's little trend line: shape only (no axis, no numbers), green when the balance ended higher, red when lower
 function spark(v) {
   if (!v || v.length < 2) return "";
-  const lo = Math.min(...v), hi = Math.max(...v), W = 72, H = 20, span = hi - lo;
+  const lo = Math.min(...v), hi = Math.max(...v), W = 60, H = 20, span = hi - lo;
   const pts = v.map((y, i) => `${(1 + i * (W - 2) / (v.length - 1)).toFixed(1)},${(span ? H - 2 - (y - lo) * (H - 4) / span : H / 2).toFixed(1)}`).join(" ");
   const d = v[v.length - 1] - v[0], cls = Math.abs(d) < 0.01 ? "flat" : d > 0 ? "up" : "down";
   return `<svg class="sparkline ${cls}" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="${cls === "flat" ? "No change" : cls === "up" ? "Higher" : "Lower"} than ${v.length} readings ago"><polyline points="${pts}"/></svg>`;
 }
+// Accounts period (Monarch-style): the pills set how far back each trend line and the change under each balance go
+const ACCT_RANGES = [["1W", 7], ["1M", 30], ["3M", 90]], ARANGE_KEY = "wl.acctrange";
+let acctDays = 30;
+try { acctDays = +localStorage.getItem(ARANGE_KEY) || 30; } catch { /* storage blocked */ }
+const daysAgo = n => { const d = new Date(); d.setDate(d.getDate() - n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+const chg = (first, last) => {  // change over the period: a rising balance (or a debt paid down) is green
+  const d = last - first;
+  if (Math.abs(d) < 0.005) return "";
+  return `<span class="${d > 0 ? "up" : "down"}">${signed(d)}${Math.abs(first) >= 0.01 ? " (" + pctStr(100 * d / Math.abs(first)) + ")" : ""}</span>`;
+};
+// assets and liabilities of the counted accounts, each as one bar split by account type
+function acctSummary(rows, start) {
+  const side = (title, kinds, sign) => {
+    const parts = kinds.map(k => [k, sign * rows.filter(r => r.kind === k && r.counted).reduce((x, r) => x + r.balance, 0)]).filter(p => p[1] >= 0.01);
+    const tot = parts.reduce((x, p) => x + p[1], 0);
+    if (!tot) return "";
+    const was = sign * rows.filter(r => r.counted && kinds.includes(r.kind)).reduce((x, r) => x + start(r), 0);
+    let x = 0, bar = "";
+    for (const [k, v] of parts) { const w = 100 * v / tot; bar += `<rect class="k-${k}" x="${x.toFixed(2)}" y="0" width="${w.toFixed(2)}" height="8"/>`; x += w; }
+    const delta = tot - was, good = sign * delta > 0;  // more assets or less debt is green
+    return `<div><h3><span>${title} ${Math.abs(delta) < 0.5 ? "" : `<span class="chg ${good ? "up" : "down"}">${signed(delta)}</span>`}</span><b>${f0(tot)}</b></h3>
+      <svg class="stack" viewBox="0 0 100 8" preserveAspectRatio="none" role="img" aria-label="${title} by account type">${bar}</svg>
+      <ul>${parts.map(([k, v]) => `<li><span class="dot k-${k}"></span><span class="lbl">${esc(KIND_LABEL[k] || k)}</span><span>${f0(v)}</span><span class="note">${(100 * v / tot).toFixed(0)}%</span></li>`).join("")}</ul></div>`;
+  };
+  return side("Assets", ["checking", "savings", "investment", "retirement", "hsa"], 1) + side("Liabilities", ["credit", "loan"], -1);
+}
 function renderAccounts(a) {
   const showZero = $("showzero").checked;
+  const since = daysAgo(acctDays), label = ACCT_RANGES.find(r => r[1] === acctDays)?.[0] || acctDays + "d";
+  const win = r => (r.spark || []).filter(p => p[0] >= since).map(p => p[1]);
+  const start = r => { const w = win(r); return w.length ? w[0] : r.balance; };
+  $("acct-seg").innerHTML = ACCT_RANGES.map(([l, n]) => `<button type="button" data-n="${n}" aria-pressed="${n === acctDays}">${l}</button>`).join("");
+  for (const b of $("acct-seg").querySelectorAll("button")) b.onclick = () => {
+    acctDays = +b.dataset.n;
+    try { localStorage.setItem(ARANGE_KEY, String(acctDays)); } catch { /* storage blocked */ }
+    renderAccounts(a);
+  };
+  $("acctsum").innerHTML = acctSummary(a.accounts, start);
   const groups = {};
   for (const r of a.accounts) (groups[r.kind] ||= []).push(r);
   const order = ["checking", "savings", "credit", "loan", "investment", "retirement", "hsa", "crypto", "custodial", "unclassified"];
   const kinds = Object.keys(groups).sort((x, y) => (order.indexOf(x) + 99) % 99 - (order.indexOf(y) + 99) % 99);
-  let h = `<thead><tr><th>Account</th><th class="hide-sm">Institution</th><th class="spark" title="Balance over the last ${a.spark_days} days">Trend</th><th class="r">Balance</th><th class="r">As of</th><th class="r hide-sm">Source</th></tr></thead><tbody>`;
+  let h = `<thead><tr><th>Account</th><th class="hide-sm">Institution</th><th class="spark" title="Balance over the selected period">Trend</th><th class="r" title="Latest balance, and under it the change over the last ${label}">Balance</th><th class="r" title="Hover a date for the feed it came from">As of</th></tr></thead><tbody>`;
   let hidden = 0;
   for (const k of kinds) {
     const rs = groups[k].filter(r => showZero || Math.abs(r.balance) >= 0.01);
@@ -1037,15 +1089,15 @@ function renderAccounts(a) {
     if (!rs.length) continue;
     const tot = rs.reduce((x, r) => x + r.balance, 0);
     const tag = k === "crypto" ? ' <span class="badge b-muted">in Crypto total</span>' : (!rs[0].counted ? ' <span class="badge b-muted">not counted</span>' : "");
-    h += `<tr class="group"><td colspan="2">${esc(KIND_LABEL[k] || k)}${tag}</td><td></td><td class="r">${f0(tot)}</td><td colspan="2" class="hide-sm"></td></tr>`;
+    h += `<tr class="group"><td colspan="2">${esc(KIND_LABEL[k] || k)}${tag}</td><td></td><td class="r">${f0(tot)}<div class="chg">${chg(rs.reduce((x, r) => x + start(r), 0), tot)}</div></td><td></td></tr>`;
     for (const r of rs) h += `<tr class="acct ${r.counted || k === "crypto" ? "" : "dim"}" data-id="${esc(r.account_id)}" tabindex="0" role="button" aria-label="Show transactions for ${esc(stripNum(r.account_name))}"><td class="name" title="${esc(r.account_name)}">${ico(r.institution)}${esc(stripNum(r.account_name))} <span class="note">${esc((r.account_name.match(/\((\d{4})\)$/) || [, ""])[1])}</span></td>
-      <td class="hide-sm name">${esc(r.institution)}</td><td class="spark">${spark(r.spark)}</td><td class="r ${r.balance < 0 ? "down" : ""}" title="${esc(f2(r.balance))}">${f0(r.balance)}</td>
-      <td class="r note">${asOf(r)}</td><td class="r hide-sm note">${esc(r.source)}</td></tr>`;
+      <td class="hide-sm name">${esc(r.institution)}</td><td class="spark">${spark(win(r))}</td><td class="r" title="${esc(f2(r.balance))}"><span class="${r.balance < 0 ? "down" : ""}">${f0(r.balance)}</span><div class="chg">${chg(start(r), r.balance)}</div></td>
+      <td class="r note" title="Source: ${esc(r.source)}">${asOf(r)}</td></tr>`;
   }
   const stale = a.accounts.filter(r => r.stale && (showZero || Math.abs(r.balance) >= 0.01)).length;
   kf("acctscard", `${a.accounts.length - hidden} accounts` + (stale ? ` · <b class="down">${stale} stale</b>` : ""));
-  if (stale) h += `<tr><td colspan="6" class="note"><span class="badge b-stale">stale</span>${stale} feed${stale > 1 ? "s" : ""} with no new balance in over ${a.stale_days} days; the amount shown is the last one the bank sent.</td></tr>`;
-  if (hidden) h += `<tr><td colspan="6" class="note">${hidden} zero-balance account${hidden > 1 ? "s" : ""} hidden</td></tr>`;
+  if (stale) h += `<tr><td colspan="5" class="note"><span class="badge b-stale">stale</span>${stale} feed${stale > 1 ? "s" : ""} with no new balance in over ${a.stale_days} days; the amount shown is the last one the bank sent.</td></tr>`;
+  if (hidden) h += `<tr><td colspan="5" class="note">${hidden} zero-balance account${hidden > 1 ? "s" : ""} hidden</td></tr>`;
   $("accts").innerHTML = h + "</tbody>";
   wireAccts("accts");
 }
@@ -1064,7 +1116,7 @@ async function showAccount(id) {
   try {
     const d = await get("/api/account_txns?id=" + encodeURIComponent(id));
     if (d.error) throw new Error(d.error);
-    acctView = d; $("txq").value = ""; $("txcls").value = "";
+    acctView = d; $("txq").value = ""; $("txcls").value = ""; $("txcat").value = "";
     renderRecent(data.spending?.recent || []);
   } catch (e) { $("acctinfo").textContent = `Couldn't load ${name}: ${e.message}`; }
 }
@@ -1540,13 +1592,18 @@ function renderIncome(sp) {
 }
 
 const RECENT_SHOWN = 30;
+const cap = s => s ? s[0].toUpperCase() + s.slice(1) : "";
 function renderRecent(all) {
   const acct = acctView;
   if (acct) all = acct.txns;
+  const cats = [...new Set(all.map(r => r.category).filter(Boolean))].sort((x, y) => x.localeCompare(y));
+  let cat = $("txcat").value;
+  if (!cats.includes(cat)) cat = "";
+  $("txcat").innerHTML = '<option value="">All categories</option>' + cats.map(c => `<option value="${esc(c)}"${c === cat ? " selected" : ""}>${esc(cap(c))}</option>`).join("");
   const words = $("txq").value.trim().toLowerCase().split(/\s+/).filter(Boolean), cls = $("txcls").value;
-  const filtering = words.length || cls;
-  const hit = all.filter(r => (!cls || r.class === cls) &&
-    words.every(w => `${r.description} ${r.payee || ""} ${r.memo || ""} ${r.merchant} ${r.account_name}`.toLowerCase().includes(w)));
+  const filtering = words.length || cls || cat;
+  const hit = all.filter(r => (!cls || r.class === cls) && (!cat || r.category === cat) &&
+    words.every(w => `${r.description} ${r.payee || ""} ${r.memo || ""} ${r.merchant} ${r.account_name} ${r.category || ""} ${r.group || ""}`.toLowerCase().includes(w)));
   const rows = filtering || acct ? hit : hit.slice(0, RECENT_SHOWN);
   if (acct) {
     const a = acct.account, nm = stripNum(a.account_name), last4 = (a.account_name.match(/\((\d{4})\)$/) || [, ""])[1];
@@ -1560,10 +1617,10 @@ function renderRecent(all) {
     : `Latest ${rows.length} across all accounts; search or filter to look through the latest ${all.length}. Pending rows are dimmed.`;
   if (!rows.length) { $("recent").innerHTML = '<tr><td class="note">No matching transactions.</td></tr>'; return; }
   const yr = acct && rows.some(r => r.date.slice(0, 4) !== rows[0].date.slice(0, 4));  // show the year once history spans years
-  let h = `<thead><tr><th>Date</th><th>Merchant</th>${acct ? "" : '<th class="hide-sm">Account</th>'}<th>Class</th><th class="r">Amount</th><th class="r" title="The account's balance right after this transaction, worked back from its latest synced balance. Blank for pending rows and investment accounts.">Balance</th></tr></thead><tbody>`;
+  let h = `<thead><tr><th>Date</th><th>Merchant</th>${acct ? "" : '<th class="hide-sm">Account</th>'}<th title="The budget line this merchant maps to (the same rules as Budget vs actual). Other = no rule matches.">Category</th><th class="hide-sm">Class</th><th class="r">Amount</th><th class="r" title="The account's balance right after this transaction, worked back from its latest synced balance. Blank for pending rows and investment accounts.">Balance</th></tr></thead><tbody>`;
   for (const r of rows) h += `<tr class="${r.pending ? "dim" : ""}"><td class="note" style="white-space:nowrap">${esc(yr ? r.date : r.date.slice(5))}</td>
     <td class="name" title="${esc(r.description)}">${esc(r.merchant)}${r.pending ? ' <span class="note">pending</span>' : ""}${r.memo ? `<div class="note desc" title="${esc(r.memo)}">“${esc(r.memo)}”</div>` : ""}</td>
-    ${acct ? "" : `<td class="hide-sm name note">${esc(r.account_name)}</td>`}<td><span class="cls ${esc(r.class)}">${esc(r.class.replace("_", " "))}</span></td>
+    ${acct ? "" : `<td class="hide-sm name note">${esc(r.account_name)}</td>`}<td class="name ${r.category ? "" : "note"}" title="${esc(r.group ? cap(r.group) : "")}">${esc(cap(r.category || r.class.replace("_", " ")))}</td><td class="hide-sm"><span class="cls ${esc(r.class)}">${esc(r.class.replace("_", " "))}</span></td>
     <td class="r ${r.amt > 0 ? "amt-pos" : ""}">${f2(r.amt)}</td><td class="r note">${r.balance_after == null ? "" : f2(r.balance_after)}</td></tr>`;
   $("recent").innerHTML = h + "</tbody>";
 }
@@ -1679,7 +1736,7 @@ addEventListener("focus", reloadIfOld);
 addEventListener("online", reloadIfOld);
 setInterval(reloadIfOld, 60e3);
 $("showzero").onchange = () => data.accounts && renderAccounts(data.accounts);
-$("txq").oninput = $("txcls").onchange = () => (acctView || data.spending) && renderRecent(data.spending?.recent || []);
+$("txq").oninput = $("txcls").onchange = $("txcat").onchange = () => (acctView || data.spending) && renderRecent(data.spending?.recent || []);
 $("acctclear").onclick = clearAccount;
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
   if (data.summary?.categories) drawDonut(data.summary.categories.filter(c => c.type === "asset" && c.value > 0), data.summary.assets);

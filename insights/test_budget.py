@@ -131,3 +131,14 @@ def test_default_rules_compile_and_example_config_rules_load():
     assert rs[: 1] == [("EXAMPLE PROPERTY MGMT", "rent")] and rs[-len(budget.DEFAULT_RULES):] == budget.DEFAULT_RULES
     assert budget.exclude_re().search("Saving") and not budget.exclude_re().search("Food")
     assert isinstance(budget.exclude_re(), re.Pattern)
+
+
+def test_categorizer_gives_each_transaction_its_budget_line():
+    lines = [{"category": "food", "item": "groceries", "budget": 400.0},
+             {"category": "car", "item": "gasoline", "budget": 80.0},
+             {"category": "saving", "item": "groceries fund", "budget": 50.0}]
+    cat = budget.categorizer(lines, rule_list=[(r"H-E-B\s*GAS", "gasoline"), (r"H-E-B", "groceries"), (r"NETFLIX", "streaming")])
+    assert cat("H-E-B #639 AUSTIN TX", None)["item"] == "groceries"
+    assert cat("H-E-B GAS #12", None)["category"] == "car"  # first matching rule wins
+    assert cat("NETFLIX.COM", None) is None  # the rule's line is not in the sheet
+    assert cat("SOMEWHERE ELSE", "Nobody") is None

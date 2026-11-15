@@ -170,6 +170,24 @@ def month_bounds(month: str) -> tuple[date, date]:
     return date(y, m, 1), date(y, m, calendar.monthrange(y, m)[1])
 
 
+def categorizer(lines: list[dict], rule_list=None, exclude: re.Pattern | None = None):
+    """(description, payee) -> the budget line a transaction lands on, or None when no rule matches.
+
+    Same first-match rules and saving-line exclusion as compute(), one transaction at a time (for showing a
+    category next to each transaction). An Amazon charge is not split by item here: it gets its merchant's line."""
+    exclude = exclude_re() if exclude is None else exclude
+    lines = [l for l in lines if not exclude.search(l["category"])]
+    resolved = resolve(lines, rules() if rule_list is None else rule_list)
+
+    def line_for(desc: str | None, payee: str | None) -> dict | None:
+        text = _text(payee, desc)
+        for txn_re, idx in resolved:
+            if txn_re.search(text):
+                return lines[idx] if idx is not None else None
+        return None
+    return line_for
+
+
 def compute(con: sqlite3.Connection, lines: list[dict], month: str, today: date | None = None,
             rule_list=None, since: str | None = None, label=default_label, exclude: re.Pattern | None = None,
             amazon_rules=None) -> dict:

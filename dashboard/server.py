@@ -402,10 +402,10 @@ def api_accounts(params) -> dict:
     rows = q("""SELECT account_id, account_name, institution, source, ROUND(balance,2) balance, as_of, snapshot_date,
                        COALESCE(kind,'unclassified') kind
                 FROM v_accounts ORDER BY kind, ABS(balance) DESC""")
-    hist: dict[str, list] = {}  # account -> its daily balances, oldest first (the row's little trend line)
-    for b in q("""SELECT account_id, CAST(balance AS REAL) bal FROM balances
+    hist: dict[str, list] = {}  # account -> [date, balance] per day, oldest first (the row's trend line and change)
+    for b in q("""SELECT account_id, snapshot_date, CAST(balance AS REAL) bal FROM balances
                   WHERE snapshot_date >= date('now', ?) ORDER BY snapshot_date""", (f"-{SPARK_DAYS} day",)):
-        hist.setdefault(b["account_id"], []).append(round(b["bal"], 2))
+        hist.setdefault(b["account_id"], []).append([b["snapshot_date"], round(b["bal"], 2)])
     for r in rows:
         freshness(r)
         r["counted"] = r["kind"] in NW_KINDS
@@ -606,6 +606,23 @@ def api_budget(params) -> dict:
     return res
 
 
+UNCATEGORIZED = "Other"  # spending no budget rule matches
+
+
+def add_categories(rows: list[dict]) -> None:
+    """Give each spend or refund row the budget line its merchant maps to (category = the line's item, group =
+    its sheet category). Other classes (income, transfers, card payments, investments) have no budget line."""
+    sh = budget_sheet()
+    line_for = budget.categorizer(sh["data"]["lines"]) if sh["data"] else None
+    for r in rows:
+        r["category"] = r["group"] = None
+        if r["class"] not in ("spend", "refund"):
+            continue
+        line = line_for(r["description"], r["payee"]) if line_for else None
+        r["category"] = line["item"] if line else UNCATEGORIZED
+        r["group"] = line["category"] if line else None
+
+
 RECENT_LIMIT = 200  # recent transactions sent to the page (it shows 30 until you search or filter)
 ACCOUNT_TXN_LIMIT = 5000  # one account's full history (clicked on the page); more than any account has today
 
@@ -646,6 +663,7 @@ def api_account_txns(params) -> dict:
     txns = q("""SELECT txn_id, date, ROUND(amt,2) amt, description, payee, memo, class, pending FROM v_ledger
                 WHERE account_id=? ORDER BY date DESC, first_seen DESC, txn_id LIMIT ?""", (aid, ACCOUNT_TXN_LIMIT + 1))
     bal = running_balances(aid)
+    add_categories(txns)
     for r in txns:
         r["balance_after"] = bal.get(r.pop("txn_id"))
         r["merchant"] = merchant(r["description"], r["payee"])
@@ -745,6 +763,7 @@ def api_spending(params) -> dict:
     recent = q("""SELECT txn_id, date, account_name, ROUND(amt,2) amt, description, payee, memo, class, pending
                   FROM v_ledger ORDER BY date DESC, first_seen DESC, txn_id LIMIT ?""", (RECENT_LIMIT,))
     bal = running_balances()
+    add_categories(recent)
     for r in recent:
         r["balance_after"] = bal.get(r.pop("txn_id"))
         r["merchant"] = merchant(r["description"], r["payee"])
