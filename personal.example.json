@@ -69,8 +69,10 @@
   "xpub_export_wallet": "Wallet"
  },
  "dashboard": {
-  "_help": "exact: networth.py line label -> category; rules: [regex, category] fallbacks tried in order. Categories: cash retirement taxable crypto metals realestate vehicles other.",
+  "_help": "web_connect: true lets a signed-in viewer paste a SimpleFIN setup token on the page while nothing is connected yet (for a second person's ledger). exact: networth.py line label -> category; rules: [regex, category] fallbacks tried in order. Categories: cash retirement taxable crypto metals realestate vehicles other. theme: the colour theme (all dark) for browsers that haven't picked one in the page footer: graphite (default), rose, amethyst, plum or sage.",
   "default_username": "admin",
+  "web_connect": false,
+  "theme": "graphite",
   "ledger_start": "2026-01-01",
   "exact": {
    "Brokerage": "taxable",
@@ -115,6 +117,7 @@
   "year_end_balances": {},
   "manual_distributions": [{"date": "2026-04-15", "amount": 5000}]
  },
+ "monthly_email": {"_help": "insights/monthly_email.py: last month's summary from the ledger database (no spreadsheet), emailed once a month by the daily sync on or after 'day'. Off unless enabled is true. Sent with gws from the signed-in Gmail to itself; 'to' names another address. categories: [transaction regex on 'payee | description', category], tried before the generic defaults.", "enabled": false, "day": 3, "categories": [["EXAMPLE PROPERTY MGMT", "Housing"]]},
  "plaid": {"client_user_id": "wealth-ledger-user"},
  "networth_history": {"_help": "insights/nw_history.py (dashboard trend before the daily snapshots): Drive name of your yearly balance-sheet spreadsheets, each named '<name_query> YYYY' with a 'balance sheet' tab (dated columns, a 'Total Equity' row).", "name_query": "Financial Statements"},
  "zelle_memos": {"_help": "insights/zelle_memos.py: Gmail search for your bank's Zelle emails (default: zelle)", "query": "zelle"},

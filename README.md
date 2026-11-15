@@ -24,10 +24,11 @@ details all live in `~/.config/wealth-ledger/personal.json`, outside the repo.
 | `insights/overdraft.py` | Overdraft check: projects recurring bills, card autopays and pay 31 days ahead per checking account |
 | `insights/zelle_memos.py` | Adds the note typed on each Zelle (from the bank's Zelle emails, read with `gws`) to the matching transaction's memo |
 | `insights/amazon.py` | Imports an Amazon "Your Orders" data export (items, refunds; no addresses/gift/tracking), matches Amazon card charges to the shipments they paid for, so `insights/budget.py` splits each charge across its items' budget lines |
+| `insights/monthly_email.py` | Opt-in monthly summary email built from the ledger database alone, no spreadsheet (income, spending by category vs the month before, balances, rental, unusual charges), sent to yourself with `gws` once a month by the daily sync; without `--send` it only prints |
 | `insights/nw_history.py` | Past net-worth points (Total Equity per dated column) from the yearly balance-sheet spreadsheets, read with `gws`, for the dashboard trend; weekly |
 | `insights/prices.py` | Daily closes into `prices` (keyless): BTC (Coinbase candles, Kraken fallback), gold/silver/platinum/copper (Yahoo COMEX futures; Coinbase PAXG fallback for gold), rial and dinar (latest rate only) so the dashboard can show every value in them, plus the S&P 500 and Nasdaq (Yahoo ^GSPC, ^IXIC) for the trend's benchmark overlays; backfills once, then 1 request per symbol daily |
 | `dashboard/` | Private dashboard (stdlib HTTP server + one HTML page), see `dashboard/README.md` |
-| `bin/wealth-ledger-sync` | Daily cron job: SimpleFIN + Plaid sync, valuations, overdraft check, backup; writes a status file, never notifies |
+| `bin/wealth-ledger-sync` | Daily cron job: SimpleFIN + Plaid sync, valuations, overdraft check, backup; writes a status file, never notifies (the opt-in monthly email aside) |
 | `bin/wealth-ledger-backup` | Daily integrity-checked, gzipped copy of the database to another disk (`backup` in `personal.json`); run by the sync |
 | `bin/simplefin-institution-check` | Monthly check whether an institution you are waiting for is in SimpleFIN yet |
 | `scraper/` | Experimental Playwright bank-scraper base class, tested against a local mock bank |
@@ -68,3 +69,19 @@ CLI. Example cron entries (symlink the `bin/` scripts into `~/.local/bin` first)
 ```
 
 The tests use made-up data and `personal.example.json` (see `conftest.py`), never your real `personal.json`.
+
+## A second ledger (another person, no spreadsheet)
+
+Every path can be overridden, so one checkout can serve a separate ledger for someone else: set
+`WEALTH_LEDGER_CONFIG_DIR`, `WEALTH_LEDGER_PERSONAL`, `WEALTH_LEDGER_DB`, `WEALTH_LEDGER_STATUS`, `WEALTH_LEDGER_LOCK`,
+`WEALTH_LEDGER_EMAIL_STATE` and `PLAID_CONFIG` for its sync (cron) and its dashboard (another port).
+
+A `personal.json` without `sheet_id` runs on synced accounts alone: the sync skips every step that reads a
+spreadsheet, Gmail or wallets, and the dashboard hides the sections that need them. Useful keys for such a ledger:
+
+- `"auto_kind": true`: account types (checking, savings, credit, retirement...) are guessed from account names at
+  each sync; an account that can't be guessed is reported as a problem and left out of the totals until it is
+  added to `account_kind`.
+- `"dashboard": {"web_connect": true}`: while nothing is connected, the page shows how to link banks in SimpleFIN
+  and takes the setup token; it claims it and runs the first 90-day sync. An existing connection can't be replaced
+  from the page.

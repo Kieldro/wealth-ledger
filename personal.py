@@ -59,6 +59,11 @@ def require(name: str, key: str):
     return sec[key]
 
 
+def has_sheet() -> bool:
+    """False for a ledger that runs on synced accounts alone (no "sheet_id"): nothing then reads a spreadsheet."""
+    return bool(load().get("sheet_id"))
+
+
 def sheet_id() -> str:
     sid = load().get("sheet_id")
     if not sid:

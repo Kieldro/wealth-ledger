@@ -110,6 +110,20 @@ def test_backfill_then_incremental(con, monkeypatch):
     assert asked[0] == ("BTC", date(2024, 12, 24), start)
 
 
+def test_update_records_when_it_last_fetched_but_not_on_a_dry_run(con, monkeypatch):
+    monkeypatch.setattr(prices, "SOURCES", {"BTC": [("cb", lambda s, e: {e.isoformat(): 50000.0})]})
+    when = lambda: con.execute("SELECT value FROM meta WHERE key = 'prices_updated'").fetchone()
+    prices.update(con, today=date(2026, 11, 1), dry_run=True)
+    assert when() is None
+    prices.update(con, today=date(2026, 11, 1))
+    assert datetime.fromisoformat(when()[0]).utcoffset() == timedelta(0)  # stored in UTC, with its offset
+    monkeypatch.setattr(prices, "SOURCES", {"BTC": [("cb", lambda s, e: {})]})
+    before = when()
+    with pytest.raises(RuntimeError):
+        prices.update(con, today=date(2026, 11, 2))
+    assert when() == before  # nothing came back: the time of the last real refresh stands
+
+
 def test_update_reports_failures_but_keeps_the_rest(con, monkeypatch):
     def broken(s, e):
         raise OSError("down")

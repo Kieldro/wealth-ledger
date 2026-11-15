@@ -26,17 +26,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import personal
 
-DB = os.path.expanduser("~/.local/share/wealth-ledger/txns.db")
+DB = os.path.expanduser(os.environ.get("WEALTH_LEDGER_DB") or "~/.local/share/wealth-ledger/txns.db")
 
 _NW = personal.section("networth")
-SHEET = personal.sheet_id()
+SHEET = personal.sheet_id() if personal.has_sheet() else None  # None: synced accounts only, no sheet rows
 # balance-sheet label (column A, exact) -> account_name LIKE patterns in v_accounts (sign as stored)
-SYNCED: dict[str, list[str]] = personal.require("networth", "synced")
+SYNCED: dict[str, list[str]] = personal.require("networth", "synced") if SHEET else {}
 # rows the sheet's own Total Assets leaves out, mirrored here so the two totals agree
 SHEET_EXCLUDED: set[str] = set(_NW.get("sheet_excluded") or [])
 # sheet rows that are the real line items (everything else is spot prices, oz counts, ratios)
-ASSET_ROWS: set[str] = set(personal.require("networth", "asset_rows"))
-LIAB_ROWS: set[str] = set(personal.require("networth", "liab_rows"))
+ASSET_ROWS: set[str] = set(personal.require("networth", "asset_rows") if SHEET else [])
+LIAB_ROWS: set[str] = set(personal.require("networth", "liab_rows") if SHEET else [])
 # extra synced accounts with no sheet row (kind custodial is never the owner's money)
 EXTRA_KINDS = ("credit", "retirement", "checking", "savings", "investment", "hsa", "loan")
 # where a crypto quantity can be read from directly (valuations/crypto.py qty sources); "sheet" is typed in
@@ -45,6 +45,8 @@ STALE_DAYS = 7  # a counted account this far behind the freshest one is named in
 
 
 def sheet_rows() -> dict[str, float]:
+    if not SHEET:
+        return {}
     out = subprocess.run(
         ["gws", "sheets", "spreadsheets", "values", "get", "--params",
          json.dumps({"spreadsheetId": SHEET, "range": "balance sheet!A1:B140",

@@ -224,6 +224,10 @@ def update(db: sqlite3.Connection, today: date | None = None, dry_run: bool = Fa
             db.executemany("INSERT OR REPLACE INTO prices (date, symbol, usd, source) VALUES (?,?,?,?)",
                            [(d, sym, float(f"{v:.{SIG_DIGITS}g}"), src) for d, v in sorted(got.items())])
             db.commit()
+    if not dry_run and any(r["rows"] for r in report.values()):  # when the closes were last refreshed (sign-in page)
+        db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('prices_updated', ?)",
+                   (datetime.now(timezone.utc).isoformat(timespec="seconds"),))
+        db.commit()
     if errors:
         raise RuntimeError("; ".join(errors))
     return report

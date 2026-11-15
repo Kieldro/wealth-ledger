@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Daily SimpleFIN + Plaid -> SQLite sync for wealth-ledger, then the valuation providers and a database backup.
 # Plaid covers accounts SimpleFIN can't reach; its keys + items are in ~/.config/wealth-ledger/plaid.json.
-#   wealth-ledger-sync                 daily sync (cron). Never sends notifications: problems go to the log
+#   wealth-ledger-sync                 daily sync (cron). Never sends notifications (the opt-in monthly summary
+#                                     email aside): problems go to the log
 #                                     and to the status file ($WEALTH_LEDGER_STATUS, default ~/.cache/wealth-ledger-status).
 #   wealth-ledger-sync claim <token>   one-time: exchange SimpleFIN setup token, then 90-day backfill
 # Works when symlinked (e.g. ~/.local/bin/wealth-ledger-sync -> <repo>/bin/wealth-ledger-sync).
@@ -47,6 +48,9 @@ fi
 echo "=== $(date -Is)"
 if [[ ! -f $ACCESS ]]; then
   echo "not claimed yet; run: wealth-ledger-sync claim <setup-token>"
+  # the public closes need no bank connection: keep them current anyway (the sign-in page's market line reads them)
+  pxout=$(cd "$ROOT" && "$PY" -m insights.prices --db "$DB" 2>&1) || echo "prices: $(grep -m1 '^error' <<<"$pxout" || tail -1 <<<"$pxout")"
+  echo "$pxout" | tail -1
   exit 0
 fi
 
@@ -64,35 +68,43 @@ if [[ -f $PLAID_CFG ]]; then
   (( prc != 0 )) && problem "Plaid sync failed: $(grep -m1 "^error" <<<"$pout" || tail -1 <<<"$pout"). If ITEM_LOGIN_REQUIRED: plaid_sync.py relink"
   (( rc == 0 )) && rc=$prc
 fi
-# notes the sender typed on each Zelle, from the bank's Zelle emails (feeds drop them); read-only Gmail via gws
-zout=$(cd "$ROOT" && "$PY" -m insights.zelle_memos --db "$DB" 2>&1) || problem "$(grep -m1 '^error' <<<"$zout" || tail -1 <<<"$zout")"
-echo "$zout" | tail -1
-
-# past net-worth points from the yearly balance sheets (dashboard trend history); weekly, read-only Sheets via gws
-hout=$(cd "$ROOT" && "$PY" -m insights.nw_history --if-stale --db "$DB" 2>&1) || problem "$(grep -m1 '^error' <<<"$hout" || tail -1 <<<"$hout")"
-echo "$hout" | tail -1
-
 # daily BTC, metal, currency and S&P 500/Nasdaq closes (dashboard units + trend benchmarks); keyless public APIs, 1 request each once backfilled
 pxout=$(cd "$ROOT" && "$PY" -m insights.prices --db "$DB" 2>&1) || problem "$(grep -m1 '^error' <<<"$pxout" || tail -1 <<<"$pxout")"
 echo "$pxout" | tail -1
 
-# estimates for things no bank feed covers (metals/crypto daily, home/cars monthly); free sources only
-vout=$(cd "$ROOT" && "$PY" -m valuations.run 2>&1); vrc=$?
-echo "$vout"
-(( vrc != 0 )) && problem "Valuations: $(grep -m1 '^error' <<<"$vout" || tail -1 <<<"$vout")"
+# The steps in this block read the owner's spreadsheet, Gmail or wallets (gws, personal.json sections). A ledger
+# without "sheet_id" in personal.json runs on its synced accounts alone and skips them.
+if (cd "$ROOT" && "$PY" -c 'import personal, sys; sys.exit(not personal.has_sheet())' 2>/dev/null); then
+  # notes the sender typed on each Zelle, from the bank's Zelle emails (feeds drop them); read-only Gmail via gws
+  zout=$(cd "$ROOT" && "$PY" -m insights.zelle_memos --db "$DB" 2>&1) || problem "$(grep -m1 '^error' <<<"$zout" || tail -1 <<<"$zout")"
+  echo "$zout" | tail -1
 
-# crypto sends/receives with memos: on-chain history of your bitcoin xpubs + Exodus CSV exports + Claude's send log
-cout=$(cd "$ROOT" && "$PY" -m insights.crypto_transfers --db "$DB" 2>&1) || problem "$(grep -m1 '^error' <<<"$cout" || tail -1 <<<"$cout")"
-echo "$cout" | tail -1
+  # past net-worth points from the yearly balance sheets (dashboard trend history); weekly, read-only Sheets via gws
+  hout=$(cd "$ROOT" && "$PY" -m insights.nw_history --if-stale --db "$DB" 2>&1) || problem "$(grep -m1 '^error' <<<"$hout" || tail -1 <<<"$hout")"
+  echo "$hout" | tail -1
 
-# yellow label + note on balance-sheet rows nothing keeps current (formatting only; never writes values)
-mout=$(cd "$ROOT" && "$PY" sheet_marks.py 2>&1) || problem "$(grep -m1 '^error' <<<"$mout" || tail -1 <<<"$mout")"
-echo "$mout" | tail -1
+  # estimates for things no bank feed covers (metals/crypto daily, home/cars monthly); free sources only
+  vout=$(cd "$ROOT" && "$PY" -m valuations.run 2>&1); vrc=$?
+  echo "$vout"
+  (( vrc != 0 )) && problem "Valuations: $(grep -m1 '^error' <<<"$vout" || tail -1 <<<"$vout")"
+
+  # crypto sends/receives with memos: on-chain history of your bitcoin xpubs + Exodus CSV exports + Claude's send log
+  cout=$(cd "$ROOT" && "$PY" -m insights.crypto_transfers --db "$DB" 2>&1) || problem "$(grep -m1 '^error' <<<"$cout" || tail -1 <<<"$cout")"
+  echo "$cout" | tail -1
+
+  # yellow label + note on balance-sheet rows nothing keeps current (formatting only; never writes values)
+  mout=$(cd "$ROOT" && "$PY" sheet_marks.py 2>&1) || problem "$(grep -m1 '^error' <<<"$mout" || tail -1 <<<"$mout")"
+  echo "$mout" | tail -1
+fi
 
 # overdraft check: recurring auto-drafts vs checking balances; warning lines only, never a notification
 oout=$(cd "$ROOT" && "$PY" -m insights.overdraft --status --db "$DB" 2>&1); orc=$?
 if (( orc != 0 )); then problem "Overdraft check failed: $(tail -1 <<<"$oout")"
 else while IFS= read -r w; do [[ -n $w ]] && problem "$w"; done <<<"$oout"; fi
+
+# last month's summary email, once a month and only when personal.json "monthly_email" turns it on
+eout=$(cd "$ROOT" && "$PY" -m insights.monthly_email --if-due --db "$DB" 2>&1) || problem "$(grep -m1 '^error' <<<"$eout" || tail -1 <<<"$eout")"
+echo "$eout" | tail -1
 
 # copy of the database to another disk (personal.json "backup"); never blocks the sync result
 bout=$("$ROOT/bin/wealth-ledger-backup" 2>&1) || problem "Backup failed: $(tail -1 <<<"$bout")"

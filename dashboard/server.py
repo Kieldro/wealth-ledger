@@ -32,18 +32,19 @@ from collections import deque
 from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from html import escape as html_escape
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 import personal  # noqa: E402
-from insights import budget, inherited_ira, overdraft, rental, subscriptions  # noqa: E402
+from insights import budget, inherited_ira, monthly_email, overdraft, rental, subscriptions  # noqa: E402
 from insights import prices as price_hist  # noqa: E402
 
 _DASH = personal.section("dashboard")
-DB = os.path.expanduser("~/.local/share/wealth-ledger/txns.db")
-STATUS = os.path.expanduser("~/.cache/wealth-ledger-status")
+DB = os.path.expanduser(os.environ.get("WEALTH_LEDGER_DB") or "~/.local/share/wealth-ledger/txns.db")
+STATUS = os.path.expanduser(os.environ.get("WEALTH_LEDGER_STATUS") or "~/.cache/wealth-ledger-status")
 NETWORTH = [os.path.join(ROOT, ".venv", "bin", "python"), os.path.join(ROOT, "networth.py"), "--json"]
 CACHE_TTL = 600
 STATUS_MAX_AGE_H = 36  # the sync runs daily; a last run older than this means it hung, died or isn't scheduled
@@ -133,6 +134,9 @@ def read_status(now: datetime | None = None) -> dict:
     try:
         lines = [l.rstrip() for l in open(STATUS) if l.strip()]
     except OSError as e:
+        c = connect_state()
+        if c and (c["needed"] or c["running"]):  # nothing has synced yet: the page shows how to connect instead
+            return {"last_run": None, "rc": None, "problems": []}
         return {"last_run": None, "rc": None, "problems": [f"status file unreadable: {e.strerror}"]}
     m = re.match(r"last run (\S+) rc=(\d+)", lines[0]) if lines else None
     out = {"last_run": m.group(1) if m else None, "rc": int(m.group(2)) if m else None,
@@ -254,12 +258,21 @@ def crypto_wallet_lines(line: dict, src: str) -> list[dict]:
     return [{"line": w, "value": v, "source": "live" if w in read else src} for w, v in wallets.items()]
 
 
+def hidden_sections() -> list[str]:
+    """Page sections (their ids) this ledger has nothing for: no spreadsheet, or no personal.json section."""
+    sheet = personal.has_sheet()
+    off = {"budget": not sheet, "cryptocard": not sheet and not personal.section("crypto"),
+           "ira": not personal.section("inherited_ira"), "rentalcard": not personal.section("rental")}
+    return [k for k, v in off.items() if v]
+
+
 def api_summary(params) -> dict:
     nw = networth(refresh="refresh" in params)
     data = nw["data"]
     res = {"status": read_status(), "networth_error": nw["error"],
            "networth_fetched": datetime.fromtimestamp(nw["fetched"]).astimezone().isoformat() if nw["fetched"] else None,
-           "cache_ttl_s": CACHE_TTL}
+           "cache_ttl_s": CACHE_TTL, "sheetless": not personal.has_sheet(), "hide": hidden_sections(),
+           "connect": connect_state()}
     if not data:
         return res
     res["status"]["problems"] += data.get("warnings") or []  # things that may make the total wrong (networth.py)
@@ -580,6 +593,8 @@ _bud = {"data": None, "fetched": 0.0, "error": None}
 def budget_sheet() -> dict:
     """The income-sheet budget lines via gws, cached like networth(); a failed read keeps the stale copy."""
     with _bud_lock:
+        if not personal.has_sheet():  # ledger without a spreadsheet: no budget, generic categories
+            return dict(_bud)
         if _bud["data"] is None or time.time() - _bud["fetched"] >= CACHE_TTL:
             try:
                 _bud.update(data=budget.sheet_lines(), fetched=time.time(), error=None)
@@ -592,7 +607,7 @@ def budget_sheet() -> dict:
 def api_budget(params) -> dict:
     sh = budget_sheet()
     res = {"error": sh["error"], "fetched": datetime.fromtimestamp(sh["fetched"]).astimezone().isoformat()
-           if sh["fetched"] else None, "tab": budget.TAB}
+           if sh["fetched"] else None, "tab": budget.TAB, "off": not personal.has_sheet()}
     if not sh["data"]:
         return res
     this_m, last_m = budget.months()
@@ -611,12 +626,18 @@ UNCATEGORIZED = "Other"  # spending no budget rule matches
 
 def add_categories(rows: list[dict]) -> None:
     """Give each spend or refund row the budget line its merchant maps to (category = the line's item, group =
-    its sheet category). Other classes (income, transfers, card payments, investments) have no budget line."""
+    its sheet category). Other classes (income, transfers, card payments, investments) have no budget line.
+    Without a spreadsheet the category is the monthly email's generic one (insights/monthly_email.py)."""
     sh = budget_sheet()
     line_for = budget.categorizer(sh["data"]["lines"]) if sh["data"] else None
+    generic = None if personal.has_sheet() else monthly_email.category_rules(
+        personal.section("monthly_email").get("categories"))
     for r in rows:
         r["category"] = r["group"] = None
         if r["class"] not in ("spend", "refund"):
+            continue
+        if generic:
+            r["category"] = monthly_email.categorize(r["description"], r["payee"], generic)
             continue
         line = line_for(r["description"], r["payee"]) if line_for else None
         r["category"] = line["item"] if line else UNCATEGORIZED
@@ -780,12 +801,75 @@ ROUTES = {"/api/summary": api_summary, "/api/trend": api_trend, "/api/accounts":
           "/api/rental": api_rental, "/api/inherited_ira": api_inherited_ira, "/api/account_txns": api_account_txns}
 
 
+# ---------- connecting SimpleFIN from the page ----------
+# personal.json "dashboard": {"web_connect": true} lets a signed-in viewer paste a SimpleFIN setup token while the
+# ledger has no access URL yet (and only then: an existing connection can't be replaced from the page). The token
+# is claimed here and the first 90-day sync runs in the background. Off by default.
+WEB_CONNECT = bool(_DASH.get("web_connect"))
+SYNC = os.path.join(ROOT, "bin", "wealth-ledger-sync")
+_conn_lock = threading.Lock()
+_conn = {"running": False, "error": None}
+
+
+def connect_state() -> dict | None:
+    if not WEB_CONNECT:
+        return None
+    return {"needed": not os.path.exists(ACCESS_FILE), "running": _conn["running"], "error": _conn["error"]}
+
+
+def _first_sync():
+    try:
+        r = subprocess.run([SYNC, "--days", "90"], capture_output=True, text=True, timeout=1800)
+        if os.environ.get("WEALTH_LEDGER_SYNC_LOG"):  # same file the daily cron run appends to
+            with open(os.path.expanduser(os.environ["WEALTH_LEDGER_SYNC_LOG"]), "a") as f:
+                f.write(r.stdout + r.stderr)
+        _conn["error"] = None if r.returncode == 0 else "The first sync had problems; see the warnings above."
+        log(f"connect: first sync rc={r.returncode}")
+    except Exception as e:
+        _conn["error"] = "The first sync did not finish; it will be tried again at the next daily sync."
+        log(f"connect: first sync failed: {e!r}")
+    finally:
+        _conn["running"] = False
+        _nw["fetched"] = 0.0  # next summary recomputes the net worth
+
+
+def start_connect(token: str) -> tuple[int, dict]:
+    """Claim a SimpleFIN setup token and start the first sync. (HTTP status, body)."""
+    if not WEB_CONNECT:
+        return 404, {"error": "not found"}
+    sys.path.insert(0, os.path.join(ROOT, "simplefin")) if os.path.join(ROOT, "simplefin") not in sys.path else None
+    import simplefin_sync
+    with _conn_lock:
+        if os.path.exists(ACCESS_FILE) or _conn["running"]:
+            return 409, {"error": "Already connected."}
+        try:
+            u = urlparse(base64.b64decode("".join(token.split()), validate=True).decode())
+            host = (u.hostname or "").lower()
+            if u.scheme != "https" or not (host == "simplefin.org" or host.endswith(".simplefin.org")):
+                raise ValueError
+        except Exception:
+            return 400, {"error": "That doesn't look like a SimpleFIN setup token. Copy the whole token and try again."}
+        try:
+            simplefin_sync.claim("".join(token.split()), Path(ACCESS_FILE))
+        except simplefin_sync.SimpleFinError as e:
+            log(f"connect: claim failed: {e}")
+            return 400, {"error": f"SimpleFIN refused the token ({e}). Create a new setup token and try again."}
+        except Exception as e:
+            log(f"connect: claim failed: {e!r}")
+            return 502, {"error": "Could not reach SimpleFIN. Try again in a minute."}
+        _conn.update(running=True, error=None)
+        threading.Thread(target=_first_sync, daemon=True).start()
+        log("connect: SimpleFIN token claimed; first sync started")
+        return 200, {"ok": True}
+
+
 # ---------- auth ----------
 # Every path except /login, /logout and /robots.txt needs a valid session, including loopback requests
 # (cloudflared connects from 127.0.0.1). Credentials: AUTH_FILE (0600, scrypt hash + session-signing secret).
-CONF_DIR = os.path.expanduser("~/.config/wealth-ledger")
+CONF_DIR = os.path.expanduser(os.environ.get("WEALTH_LEDGER_CONFIG_DIR") or "~/.config/wealth-ledger")
 AUTH_FILE = os.path.join(CONF_DIR, "dashboard_auth.json")
 SESSIONS_FILE = os.path.join(CONF_DIR, "dashboard_sessions.json")
+ACCESS_FILE = os.path.expanduser(os.environ.get("WEALTH_LEDGER_ACCESS") or os.path.join(CONF_DIR, "simplefin_access_url"))
 ICON_DIR = os.path.join(CONF_DIR, "icons")  # <institution slug>.png, shown next to accounts (see README)
 ICON_PATH = re.compile(r"/icons/([a-z0-9]+(?:-[a-z0-9]+)*)\.png")
 COOKIE = "ctd_session"
@@ -1083,7 +1167,6 @@ def cli_set_password(argv: list[str]):
 ROBOTS = b"User-agent: *\nDisallow: /\n"
 CHARTJS = "https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"
 CSP_BASE = "default-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
-CSP_LOGIN = f"{CSP_BASE}; style-src 'unsafe-inline'; img-src data:"
 LOGIN_HTML = """<!doctype html>
 <html lang="en">
 <head>
@@ -1091,52 +1174,262 @@ LOGIN_HTML = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
 <meta name="referrer" content="no-referrer">
-<title>Sign in · Finance Dashboard</title>
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#111110">
+<title>Sign in · Wealth Ledger</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%232a78d6'/%3E%3Cpath d='M3 11l3-3 2 2 5-5' stroke='white' stroke-width='1.8' fill='none'/%3E%3C/svg%3E">
 <style>
-:root { color-scheme: light; --bg: #f4f4f2; --surface: #fcfcfb; --border: #e3e2de; --text: #0b0b0b; --text-2: #52514e;
-  --muted: #7a7974; --accent: #2a78d6; --neg: #c0362c; --err-bg: #fbe9e7; }
-@media (prefers-color-scheme: dark) { :root { color-scheme: dark; --bg: #111110; --surface: #1a1a19; --border: #2e2e2c;
-  --text: #f0efec; --text-2: #c3c2b7; --muted: #8f8e88; --accent: #3987e5; --neg: #f07068; --err-bg: #3a1a17; } }
+:root {
+  color-scheme: dark;
+  --bg: #111110; --surface: #1a1a19; --field: #111110; --border: #2e2e2c; --border-2: #45453f;
+  --text: #f0efec; --text-2: #c3c2b7; --muted: #96958e; --accent: #5a9bef; --btn: #2b6fc9;
+  --btn-hover: #2563b6; --btn-text: #ffffff; --pos: #4cc77f; --neg: #f07068; --err-bg: #2c1614; --warn: #f2c35b;
+}
+:root[data-theme="rose"] {
+  --bg: #151012; --surface: #1f1719; --field: #151012; --border: #3b2c31; --border-2: #574349;
+  --text: #f6eef0; --text-2: #d6c3c8; --muted: #a59197; --accent: #ec9cb4; --btn: #e79ab1;
+  --btn-hover: #f0adc1; --btn-text: #2a1118; --pos: #5fd08f; --neg: #ff7759; --err-bg: #33161a; --warn: #f2c35b;
+}
+:root[data-theme="amethyst"] {
+  --bg: #121019; --surface: #1a1724; --field: #121019; --border: #353046; --border-2: #4f4866;
+  --text: #f1eef9; --text-2: #c9c3db; --muted: #9a93ae; --accent: #b9a6f5; --btn: #b3a0f0;
+  --btn-hover: #c5b6f7; --btn-text: #1b1433; --pos: #56cc8b; --neg: #f47a72; --err-bg: #30171c; --warn: #f2c35b;
+}
+:root[data-theme="plum"] {
+  --bg: #160e15; --surface: #21151f; --field: #160e15; --border: #41293c; --border-2: #5e3f57;
+  --text: #f7ecf4; --text-2: #d9c2d3; --muted: #a98ea1; --accent: #e58bc2; --btn: #b83d80;
+  --btn-hover: #a53572; --btn-text: #ffffff; --pos: #5fd08f; --neg: #ff7a5c; --err-bg: #36161a; --warn: #f2c35b;
+}
+:root[data-theme="sage"] {
+  --bg: #0e1311; --surface: #151c19; --field: #0e1311; --border: #2c3932; --border-2: #445549;
+  --text: #edf3ef; --text-2: #bfcdc5; --muted: #8b9b92; --accent: #93d1b3; --btn: #8fcdae;
+  --btn-hover: #a4dcc0; --btn-text: #0e2219; --pos: #62d68a; --neg: #f47a6e; --err-bg: #2d1917; --warn: #f2c35b;
+}
 * { box-sizing: border-box; }
 html, body { margin: 0; }
-body { background: var(--bg); color: var(--text); min-height: 100vh; display: flex; align-items: center; justify-content: center;
-  font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
-  -webkit-text-size-adjust: 100%; padding: 16px; }
-.card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 22px 20px; width: 100%; max-width: 360px; }
-h1 { font-size: 15px; font-weight: 600; margin: 0 0 2px; color: var(--text-2); letter-spacing: .02em; }
-.sub { font-size: 12px; color: var(--muted); margin: 0 0 18px; }
-label { display: block; font-size: 12px; color: var(--text-2); margin: 0 0 4px; }
-input { width: 100%; font: inherit; font-size: 16px; color: var(--text); background: var(--bg); border: 1px solid var(--border);
-  border-radius: 10px; padding: 10px 12px; margin: 0 0 14px; }
-input:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
-button { width: 100%; font: inherit; font-size: 15px; font-weight: 600; color: #fff; background: var(--accent); border: 0;
-  border-radius: 10px; padding: 11px; cursor: pointer; margin-top: 4px; }
-.err { background: var(--err-bg); color: var(--neg); border-radius: 10px; padding: 8px 12px; margin: 0 0 14px; font-size: 13px; }
+body { background: var(--bg); color: var(--text); min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; padding: 24px 16px 10vh;
+  font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-text-size-adjust: 100%; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 32px 28px 26px; width: 100%;
+  max-width: 384px; }
+.mark { display: block; width: 36px; height: 36px; margin: 0 0 18px; }
+.mark rect { fill: var(--btn); }
+.mark path { stroke: var(--btn-text); }
+h1 { font-size: 22px; line-height: 1.2; font-weight: 650; letter-spacing: -.015em; margin: 0 0 4px; }
+.sub { font-size: 14px; color: var(--text-2); margin: 0 0 24px; }
+label { display: block; font-size: 13px; font-weight: 500; color: var(--text-2); margin: 0 0 6px; }
+.field { position: relative; margin: 0 0 16px; }
+input { display: block; width: 100%; height: 48px; font: inherit; font-size: 16px; color: var(--text); background: var(--field);
+  border: 1px solid var(--border-2); border-radius: 10px; padding: 0 13px; margin: 0; appearance: none; -webkit-appearance: none;
+  transition: border-color .12s, box-shadow .12s; }
+input:hover { border-color: var(--muted); }
+input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent); }
+#p { padding-right: 52px; font-variant-ligatures: none; }
+.reveal { position: absolute; top: 1px; right: 1px; bottom: 1px; width: 48px; display: flex; align-items: center; justify-content: center;
+  padding: 0; border: 0; border-radius: 9px; background: none; color: var(--muted); cursor: pointer; }
+.reveal:hover { color: var(--text); }
+.reveal[hidden] { display: none; }
+.reveal .slash { display: none; }
+.reveal[aria-pressed="true"] { color: var(--accent); }
+.reveal[aria-pressed="true"] .slash { display: inline; }
+.reveal:focus-visible, .go:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.caps { font-size: 12.5px; color: var(--warn); margin: -8px 0 14px; }
+.caps[hidden] { display: none; }
+.go { display: block; width: 100%; height: 48px; font: inherit; font-weight: 600; color: var(--btn-text); background: var(--btn); border: 0;
+  border-radius: 10px; padding: 0 16px; margin: 8px 0 0; cursor: pointer; transition: background-color .12s; }
+.go:hover { background: var(--btn-hover); }
+.go:disabled { opacity: .65; cursor: progress; }
+.err { display: flex; gap: 9px; align-items: flex-start; background: var(--err-bg); color: var(--neg);
+  border: 1px solid color-mix(in srgb, var(--neg) 28%, transparent); border-radius: 10px; padding: 10px 12px; margin: 0 0 18px;
+  font-size: 14px; line-height: 1.4; }
+.err svg { flex: none; margin-top: 2px; }
+.foot { font-size: 12.5px; color: var(--muted); text-align: center; margin: 18px 0 0; }
+/* under the card: closes of a few broad benchmarks (a fixed list; nothing from the ledger), then the credit */
+.mkt { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 12px 8px; width: 100%; max-width: 384px;
+  margin: 22px 0 0; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.mkt > div { display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 0; }
+.mkt .n { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.mkt svg { width: 14px; height: 14px; flex: none; }
+.mkt .v { white-space: nowrap; }
+.mkt b { font-weight: 600; color: var(--text); }
+.mkt i { font-style: normal; margin-left: 6px; color: var(--muted); }
+.mkt i.up { color: var(--pos); }
+.mkt i.down { color: var(--neg); }
+.upd { font-size: 11.5px; color: var(--muted); margin: 12px 0 0; font-variant-numeric: tabular-nums; }
+.by { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+@media (max-width: 420px) { .card { padding: 26px 20px 22px; } }
+@media (prefers-reduced-motion: reduce) { input, .go { transition: none; } }
 </style>
+<script>
+try { var t = localStorage.getItem("wl.theme"); if (/^(graphite|rose|amethyst|plum|sage)$/.test(t)) document.documentElement.dataset.theme = t; } catch (e) { /* storage blocked */ }
+document.querySelector('meta[name="theme-color"]').content = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
+</script>
 </head>
 <body>
 <main class="card">
-  <h1>Finances</h1>
-  <p class="sub">Private dashboard. Sign in to continue.</p>
+  <svg class="mark" viewBox="0 0 16 16" aria-hidden="true"><rect width="16" height="16" rx="4"/><path d="M3 11l3-3 2 2 5-5" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+  <h1>Wealth Ledger</h1>
+  <p class="sub">Sign in to your private dashboard.</p>
   {{error}}
   <form method="post" action="/login" autocomplete="on">
     <label for="u">Username</label>
-    <input id="u" name="username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required autofocus>
+    <div class="field"><input id="u" name="username" type="text" value="{{username}}" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="256" required autofocus></div>
     <label for="p">Password</label>
-    <input id="p" name="password" type="password" autocomplete="current-password" required>
-    <button type="submit">Sign in</button>
+    <div class="field"><input id="p" name="password" type="password" autocomplete="current-password" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="1024" required>
+      <button type="button" class="reveal" id="t" aria-pressed="false" aria-controls="p" aria-label="Show password" title="Show password" hidden><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/><path class="slash" d="M4 4l16 16"/></svg></button></div>
+    <p class="caps" id="caps" role="status" hidden>Caps Lock is on.</p>
+    <button type="submit" class="go" id="go">Sign in</button>
   </form>
+  <p class="foot">You stay signed in on this device until you log out.</p>
 </main>
+{{markets}}
+<p class="by">Built by Keolabs</p>
+<script>
+"use strict";
+(function () {
+  var f = document.forms[0], u = document.getElementById("u"), p = document.getElementById("p"),
+      t = document.getElementById("t"), caps = document.getElementById("caps"), go = document.getElementById("go");
+  function reveal(show) {
+    p.type = show ? "text" : "password";
+    t.setAttribute("aria-pressed", String(show));
+    t.title = show ? "Hide password" : "Show password";
+    t.setAttribute("aria-label", t.title);
+  }
+  t.hidden = false;
+  t.addEventListener("click", function () { reveal(p.type === "password"); p.focus(); });
+  function capsLock(e) { if (e.getModifierState) caps.hidden = !e.getModifierState("CapsLock"); }
+  p.addEventListener("keydown", capsLock);
+  p.addEventListener("keyup", capsLock);
+  p.addEventListener("blur", function () { caps.hidden = true; });
+  if (u.value) p.focus();  // after a failed attempt the username is kept: only the password needs retyping
+  f.addEventListener("submit", function () {
+    reveal(false);  // never submit (or let the browser remember) the field as plain text
+    go.disabled = true; go.textContent = "Signing in…";
+  });
+  addEventListener("pageshow", function (e) { if (e.persisted) { go.disabled = false; go.textContent = "Sign in"; } });
+})();
+</script>
 </body>
 </html>
 """
+THEMES = ("graphite", "rose", "amethyst", "plum", "sage")  # all dark; the palettes are in index.html and LOGIN_HTML
+
+
+def default_theme() -> str:
+    """This ledger's theme for a browser that hasn't picked one: personal.json "dashboard.theme", else graphite."""
+    try:
+        t = personal.section("dashboard").get("theme")
+    except Exception:  # the sign-in page must still open when personal.json is missing or broken
+        return THEMES[0]
+    return t if t in THEMES else THEMES[0]
+
+
+def with_theme(page: str) -> str:
+    """The page with the ledger's default theme on <html> (its own script then applies the viewer's saved choice)."""
+    t = default_theme()
+    return page if t == THEMES[0] else page.replace('<html lang="en">', f'<html lang="en" data-theme="{t}">', 1)
+
+
+# One line of public market closes for the sign-in page, read from the prices the daily sync already stores
+# (insights/prices.py): nothing is fetched at request time. The page is public, so the lookup is memoized.
+# The sign-in page is public, so its one line of market closes is limited to this fixed list of broad benchmarks
+# below. Nothing else in the prices table, and nothing from the ledger, can ever reach that page:
+# which other symbols are stored could hint at what is held.
+_INDEX_ICON = ('<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="8" fill="%s"/><path d="M4 10.2l2.6-2.6 '
+               '1.8 1.8L12 5.8" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>')
+_BTC_ICON = ('<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="8" fill="#f7931a"/><path d="M6.2 4.6h2.6a1.7 1.7 0 0 1 '
+             '0 3.4H6.2zm0 3.4h3.1a1.7 1.7 0 0 1 0 3.4H6.2zM7.3 3.2v1.4M9 3.2v1.4M7.3 11.4v1.4M9 11.4v1.4" fill="none" stroke="#fff" '
+             'stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>')
+_GOLD_ICON = ('<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="8" fill="#d9a514"/><path d="M5.3 10.4l1.2-4.6h3l1.2 '
+              '4.6z" fill="none" stroke="#fff" stroke-width="1.3" stroke-linejoin="round"/></svg>')
+LOGIN_MARKETS = (("SPX", "S&P 500", "", _INDEX_ICON % "#1f9d76"), ("XAU", "Gold", "$", _GOLD_ICON),
+                 ("BTC", "Bitcoin", "$", _BTC_ICON))  # symbol, label, value prefix, icon
+LOGIN_MARKETS_TTL = 600      # seconds a result is reused, an empty or failed one too
+LOGIN_MARKETS_MAX_AGE = 10   # days: an older close is left out rather than shown as current
+LOGIN_MARKETS_PREV_GAP = 7   # days: the change is against the close before, if that is at most this much earlier
+_login_markets: tuple[float, str] | None = None  # (time.monotonic() when built, html); replaced whole
+_login_markets_lock = threading.Lock()
+
+
+def _market_closes_html() -> str:
+    today = date.today()
+    since = (today - timedelta(days=LOGIN_MARKETS_MAX_AGE + LOGIN_MARKETS_PREV_GAP)).isoformat()
+    rows = q("SELECT symbol, date, usd FROM prices WHERE symbol IN (%s) AND date >= ? ORDER BY date DESC"
+             % ",".join("?" * len(LOGIN_MARKETS)), [*(m[0] for m in LOGIN_MARKETS), since])
+
+    def close(r):  # (day, usd), or None when the row isn't a date and a positive number
+        try:
+            day, usd = date.fromisoformat(str(r["date"])[:10]), float(r["usd"])
+        except (TypeError, ValueError):
+            return None
+        return (day, usd) if 0 < usd < float("inf") else None
+    parts, newest = [], None
+    for sym, label, prefix, icon in LOGIN_MARKETS:
+        mine = [close(r) for r in rows if r["symbol"] == sym][:2]  # the latest close and the one before it
+        # -2: the sync stamps UTC dates, which can run a day ahead of local time; anything later is a bad row
+        if not mine or not mine[0] or not (-2 <= (today - mine[0][0]).days <= LOGIN_MARKETS_MAX_AGE):
+            continue
+        (day, usd), prev, chg = mine[0], mine[1] if len(mine) > 1 else None, ""
+        if prev and 0 < (day - prev[0]).days <= LOGIN_MARKETS_PREV_GAP:  # daily move: new ledgers have only a week stored
+            pct = round(100 * (usd / prev[1] - 1), 1)
+            chg = (f'<i class="{"up" if pct > 0 else "down" if pct < 0 else "flat"}" title="Since the close before, '
+                   f'{prev[0].isoformat()}">{"+" if pct > 0 else "−" if pct < 0 else ""}{abs(pct):.1f}%</i>')
+        parts.append(f'<div><span class="n">{icon}{html_escape(label)}</span>'
+                     f'<span class="v"><b>{prefix}{round(usd):,}</b>{chg}</span></div>')
+        newest = max(newest or day, day)
+    if not parts:
+        return ""
+    try:  # when the sync last fetched them (insights/prices.py); a ledger from before that was recorded has only the date
+        when = datetime.fromisoformat(q("SELECT value FROM meta WHERE key = 'prices_updated'")[0]["value"]).astimezone()
+        note = f"Updated {when:%b} {when.day}, {when.hour % 12 or 12}:{when:%M %p %Z}".rstrip()
+    except (sqlite3.OperationalError, IndexError, TypeError, ValueError):
+        note = f"As of {newest:%b} {newest.day}"
+    return (f'<div class="mkt" title="Market closes as of {newest.isoformat()}">{"".join(parts)}</div>'
+            f'<p class="upd">{html_escape(note)}</p>')
+
+
+def login_markets() -> str:
+    """'<div class="mkt" …><div>…S&amp;P 500…<b>6,812</b><i class="up">+0.4%</i>…</div>…</div><p class="upd">Updated …</p>'
+    for the sign-in page: the latest stored close of each LOGIN_MARKETS symbol and its move since the close before,
+    or "" when none is usable. Never raises and reads nothing but the prices table; at most one small query per
+    LOGIN_MARKETS_TTL, whatever the traffic."""
+    global _login_markets
+    memo = _login_markets
+    if memo and time.monotonic() - memo[0] < LOGIN_MARKETS_TTL:
+        return memo[1]
+    if not _login_markets_lock.acquire(blocking=False):  # another request is already looking it up
+        return memo[1] if memo else ""
+    try:
+        try:
+            html = _market_closes_html()
+        except sqlite3.OperationalError:  # no prices table (a ledger that never ran the price step), no DB, locked
+            html = ""
+        except Exception as e:
+            log(f"login markets: {e!r}")
+            html = ""
+        _login_markets = (time.monotonic(), html)
+    finally:
+        _login_markets_lock.release()
+    return html
+
+
+LOGIN_ERR_ICON = ('<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" '
+                  'stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16.5v.01"/></svg>')
+
+
+def script_hashes(page: bytes) -> str:
+    """CSP sources for a page's own inline scripts: one 'sha256-…' per <script>…</script> block."""
+    return " ".join("'sha256-%s'" % base64.b64encode(hashlib.sha256(m).digest()).decode()
+                    for m in re.findall(rb"<script>(.*?)</script>", page, re.S))
+
+
+# the sign-in page's one inline script (show password, Caps Lock hint, busy button); the page works without it
+CSP_LOGIN = f"{CSP_BASE}; script-src {script_hashes(LOGIN_HTML.encode())}; style-src 'unsafe-inline'; img-src data:"
 
 
 def index_csp(page: bytes) -> str:
-    hashes = " ".join("'sha256-%s'" % base64.b64encode(hashlib.sha256(m).digest()).decode()
-                      for m in re.findall(rb"<script>(.*?)</script>", page, re.S))
-    return (f"{CSP_BASE}; script-src {hashes} {CHARTJS}; style-src 'self' 'unsafe-inline'; "
+    return (f"{CSP_BASE}; script-src {script_hashes(page)} {CHARTJS}; style-src 'self' 'unsafe-inline'; "
             f"img-src 'self' data:; connect-src 'self'")
 
 
@@ -1243,9 +1536,14 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             return None
 
-    def _login_page(self, code: int = 200, error: str = "", headers=()):
-        err = f'<p class="err" role="alert">{html_escape(error)}</p>' if error else ""
-        return self._send(code, LOGIN_HTML.replace("{{error}}", err).encode(), "text/html; charset=utf-8", headers, CSP_LOGIN)
+    def _login_page(self, code: int = 200, error: str = "", headers=(), username: str = ""):
+        # a failed attempt keeps the typed username (never the password), so only the password is retyped
+        err = f'<p class="err" role="alert">{LOGIN_ERR_ICON}<span>{html_escape(error)}</span></p>' if error else ""
+        # the page is public: besides the theme it shows only the allowlisted market closes, the error and the typed
+        # username (replaced last, so typed text can't smuggle in a placeholder)
+        page = (with_theme(LOGIN_HTML).replace("{{error}}", err).replace("{{markets}}", login_markets())
+                .replace("{{username}}", html_escape(username)))
+        return self._send(code, page.encode(), "text/html; charset=utf-8", headers, CSP_LOGIN)
 
     # --- routes
     def do_GET(self):
@@ -1262,8 +1560,8 @@ class Handler(BaseHTTPRequestHandler):
             if not self._authed():
                 return self._deny(p)
             if p in ("/", "/index.html"):
-                with open(os.path.join(HERE, "index.html"), "rb") as f:
-                    page = f.read()
+                with open(os.path.join(HERE, "index.html"), encoding="utf-8") as f:
+                    page = with_theme(f.read()).encode()
                 return self._send(200, page, "text/html; charset=utf-8", self._renewal(), index_csp(page))
             if p == "/healthz":
                 return self._send(200, b"ok\n", "text/plain")
@@ -1299,13 +1597,16 @@ class Handler(BaseHTTPRequestHandler):
                 if status == "locked":
                     mins = max(1, round(extra / 60))
                     return self._login_page(429, f"Too many failed attempts. Try again in about {mins} min.",
-                                            [("Retry-After", str(extra))])
-                return self._login_page(401, "Wrong username or password.")
+                                            [("Retry-After", str(extra))], username=user)
+                return self._login_page(401, "Wrong username or password.", username=user)
             if p == "/logout":
                 AUTH.revoke(self._cookie_values())
                 return self._redirect("/login", [self._set_cookie("", 0)])
             if not self._authed():
                 return self._deny(p)
+            if p == "/api/connect":
+                code, body = start_connect(form.get("token", [""])[0][:2048])
+                return self._json(code, body)
             if p == "/api/refresh":  # re-reads the balance sheet via networth.py; POST so it can't be triggered cross-site
                 return self._json(200, api_summary({"refresh": ["1"]}))
             return self._json(404, {"error": "not found"})

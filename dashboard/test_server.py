@@ -590,3 +590,255 @@ def test_page_has_privacy_mode_pace_and_per_day_hooks():
     for needle in ('id="privbtn"', 'const PRIV_KEY = "wl.privacy"', "if (privacy) return masked(u);", "new MutationObserver",
                    'id="pace"', "function renderPace(sp)", 'id="savechips"', "function renderIncome(sp)", "perDay(c.remaining)"):
         assert needle in html, needle
+
+
+# ---------- connecting SimpleFIN from the page ----------
+def _token(url: str) -> str:
+    import base64
+    return base64.b64encode(url.encode()).decode()
+
+
+@pytest.fixture
+def connect(tmp_path, monkeypatch):
+    import threading
+    sys_path_mod = __import__("sys")
+    sys_path_mod.path.insert(0, str(__import__("pathlib").Path(server.ROOT) / "simplefin"))
+    import simplefin_sync
+    claimed, started = [], []
+    monkeypatch.setattr(server, "WEB_CONNECT", True)
+    monkeypatch.setattr(server, "ACCESS_FILE", str(tmp_path / "simplefin_access_url"))
+    monkeypatch.setattr(server, "_conn", {"running": False, "error": None})
+    monkeypatch.setattr(simplefin_sync, "claim", lambda token, path: (claimed.append(token), path.write_text("x"))[0])
+    monkeypatch.setattr(threading.Thread, "start", lambda self: started.append(self))
+    return claimed, started
+
+
+def test_connect_is_off_unless_enabled(connect, monkeypatch):
+    monkeypatch.setattr(server, "WEB_CONNECT", False)
+    assert server.connect_state() is None
+    assert server.start_connect(_token("https://beta-bridge.simplefin.org/simplefin/claim/abc"))[0] == 404
+    assert connect == ([], [])
+
+
+@pytest.mark.parametrize("bad", ["", "not base64!", _token("http://beta-bridge.simplefin.org/claim/abc"),
+                                 _token("https://evil.example.com/claim"), _token("https://simplefin.org.evil.example/x")])
+def test_connect_refuses_anything_but_a_simplefin_claim_url(connect, bad):
+    assert server.start_connect(bad)[0] == 400
+    assert connect == ([], [])
+
+
+def test_connect_claims_once_then_starts_the_first_sync(connect):
+    claimed, started = connect
+    assert server.connect_state()["needed"]
+    tok = _token("https://beta-bridge.simplefin.org/simplefin/claim/abc")
+    assert server.start_connect(tok + "\n ") == (200, {"ok": True})
+    assert claimed == [tok] and len(started) == 1
+    assert server.connect_state() == {"needed": False, "running": True, "error": None}
+    assert server.start_connect(tok)[0] == 409  # an existing connection can't be replaced from the page
+    assert claimed == [tok]
+
+
+def test_sections_without_data_are_hidden_for_a_sheetless_ledger(monkeypatch):
+    monkeypatch.setattr(server.personal, "has_sheet", lambda: False)
+    monkeypatch.setattr(server.personal, "section", lambda name: {})
+    assert set(server.hidden_sections()) == {"budget", "cryptocard", "ira", "rentalcard"}
+    monkeypatch.setattr(server.personal, "has_sheet", lambda: True)
+    monkeypatch.setattr(server.personal, "section", lambda name: {"x": 1})
+    assert server.hidden_sections() == []
+
+
+# ---------- sign-in page ----------
+def test_login_page_keeps_its_form_contract_and_its_script_matches_the_csp():
+    import base64, hashlib, re
+    html = server.LOGIN_HTML
+    for needle in ('<form method="post" action="/login"', 'name="username"', 'name="password" type="password"',
+                   'autocomplete="username"', 'autocomplete="current-password"', "{{error}}", "{{username}}", "{{markets}}"):
+        assert needle in html, needle
+    scripts = re.findall(r"<script>(.*?)</script>", html, re.S)
+    assert len(scripts) == html.count("<script") == 2  # theme (in <head>) and form behaviour; nothing loaded from elsewhere
+    for body in scripts:
+        digest = base64.b64encode(hashlib.sha256(body.encode()).digest()).decode()
+        assert f"'sha256-{digest}'" in server.CSP_LOGIN.split("script-src ")[1].split(";")[0]
+    assert "default-src 'none'" in server.CSP_LOGIN and "http" not in server.CSP_LOGIN
+
+
+def test_login_page_shows_the_error_and_keeps_the_username_escaped(monkeypatch):
+    monkeypatch.setattr(server, "login_markets", lambda: '<p class="mkt">closes</p>')  # no ledger DB behind this test
+    sent = []
+    h = server.Handler.__new__(server.Handler)
+    h._send = lambda code, body, ctype, headers=(), csp=None, cache=None: sent.append((code, body.decode(), csp))
+    h._login_page()
+    h._login_page(401, "Wrong <b>username</b>", username='x"><script>alert(1)</script>{{error}}{{markets}}')
+    (ok, plain, csp), (code, page, _) = sent
+    assert ok == 200 and 'role="alert"' not in plain and 'value=""' in plain and csp == server.CSP_LOGIN
+    assert code == 401 and 'role="alert"' in page and "Wrong &lt;b&gt;username&lt;/b&gt;" in page
+    assert 'value="x&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;{{error}}{{markets}}"' in page  # typed text is never expanded
+    assert page.count("<script") == 2 and "{{username}}" not in page
+    assert plain.count('<p class="mkt">closes</p>') == page.count('<p class="mkt">closes</p>') == 1
+    assert "Wealth Ledger" in plain and "Built by Keolabs" in plain
+
+
+def test_theme_default_comes_from_personal_json_and_every_theme_is_on_both_pages(monkeypatch):
+    index = open(server.os.path.join(server.os.path.dirname(server.__file__), "index.html")).read()
+    for page in (index, server.LOGIN_HTML):
+        assert page.count('<html lang="en">') == 1 and "prefers-color-scheme" not in page  # dark only
+        assert "/^(%s)$/" % "|".join(server.THEMES) in page  # the saved choice is applied before first paint
+        for t in server.THEMES[1:]:
+            assert f':root[data-theme="{t}"]' in page, t
+    for t in server.THEMES:
+        assert f'data-t="{t}"' in index, t  # the picker
+    monkeypatch.setattr(server.personal, "section", lambda name: {"theme": "rose"} if name == "dashboard" else {})
+    assert server.default_theme() == "rose" and '<html lang="en" data-theme="rose">' in server.with_theme(index)
+    assert server.index_csp(server.with_theme(index).encode()) == server.index_csp(index.encode())
+    for bad in ({}, {"theme": "neon"}, {"theme": ['"><script>']}):
+        monkeypatch.setattr(server.personal, "section", lambda name, bad=bad: bad)
+        assert server.default_theme() == "graphite" and server.with_theme(index) == index
+
+    def missing(name):
+        raise server.personal.PersonalConfigError("no personal.json")
+    monkeypatch.setattr(server.personal, "section", missing)
+    assert server.with_theme(server.LOGIN_HTML) == server.LOGIN_HTML  # the sign-in page still opens
+
+
+# ---------- market closes on the sign-in page ----------
+@pytest.fixture(autouse=True)
+def _fresh_login_markets(monkeypatch):
+    monkeypatch.setattr(server, "_login_markets", None)  # the memo must not carry from one test into the next
+
+
+def _day(n: int) -> str:
+    return (date.today() - timedelta(days=n)).isoformat()
+
+
+def _prices(dbfile, rows):
+    con = ctdb.connect(dbfile)
+    con.executemany("INSERT INTO prices VALUES (?,?,?,?)", rows)
+    con.commit()
+    con.close()
+
+
+def _mkt(html: str) -> str:
+    """The market line without its icons, so a test reads as the text and change classes a viewer gets."""
+    import re
+    return re.sub(r'<svg.*?</svg>|<p class="upd">.*?</p>', "", html)
+
+
+def test_login_markets_says_when_the_closes_were_last_fetched(dbfile):
+    _prices(dbfile, [(_day(1), "SPX", 6811.6, "y")])
+    assert server.login_markets().endswith(f'</div><p class="upd">As of {date.today() - timedelta(days=1):%b} {(date.today() - timedelta(days=1)).day}</p>')
+    con = ctdb.connect(dbfile)
+    con.execute("INSERT OR REPLACE INTO meta VALUES ('prices_updated', '2026-11-15T19:45:00+00:00')")
+    con.commit()
+    server._login_markets = None
+    import re
+    assert re.search(r'</div><p class="upd">Updated Nov 1[56], \d{1,2}:\d\d [AP]M( [A-Z+\-0-9]+)?</p>$', server.login_markets())  # server's local time
+    con.execute("INSERT OR REPLACE INTO meta VALUES ('prices_updated', '<b>soon</b>')")
+    con.commit()
+    con.close()
+    server._login_markets = None
+    assert "<b>soon" not in server.login_markets() and '<p class="upd">As of ' in server.login_markets()
+
+
+def test_login_markets_shows_the_latest_close_of_each_symbol_in_order_with_its_daily_move(dbfile):
+    _prices(dbfile, [(_day(3), "BTC", 90000.0, "coinbase"), (_day(1), "BTC", 97000.0, "coinbase"), (_day(0), "BTC", 96250.4, "coinbase"),
+                     (_day(5), "SPX", 6800.0, "yahoo ^GSPC"), (_day(2), "SPX", 6811.6, "yahoo ^GSPC"),  # over a weekend
+                     (_day(1), "XAU", 4105.2, "yahoo GC=F"), (_day(0), "IXIC", 22000.0, "yahoo ^IXIC"), (_day(0), "XAG", 50.0, "yahoo SI=F")])
+    html = server.login_markets()
+    assert html.count("<svg") == 3 and "<script" not in html and "href" not in html  # inline icons only: the CSP allows nothing else
+    assert _mkt(html) == (
+        f'<div class="mkt" title="Market closes as of {_day(0)}">'
+        f'<div><span class="n">S&amp;P 500</span><span class="v"><b>6,812</b><i class="up" title="Since the close before, {_day(5)}">+0.2%</i></span></div>'
+        '<div><span class="n">Gold</span><span class="v"><b>$4,105</b></span></div>'  # one close stored: no move to show
+        f'<div><span class="n">Bitcoin</span><span class="v"><b>$96,250</b><i class="down" title="Since the close before, {_day(1)}">−0.8%</i></span></div>'
+        '</div>')  # the Nasdaq and silver are stored, not listed
+
+
+def test_login_markets_move_needs_a_recent_valid_close_before(dbfile):
+    gap = server.LOGIN_MARKETS_PREV_GAP
+    _prices(dbfile, [(_day(gap + 1), "SPX", 6000.0, "y"), (_day(0), "SPX", 6811.0, "y"),   # the close before is too far back
+                     (_day(1), "XAU", "n/a", "y"), (_day(0), "XAU", 4105.0, "y"),         # ... or isn't a price
+                     (_day(1), "BTC", 96250.0, "c"), (_day(0), "BTC", 96250.0, "c")])     # unchanged: no sign, no colour
+    html = _mkt(server.login_markets())
+    assert '<b>6,812</b></span>' not in html and '<b>6,811</b></span></div>' in html and '<b>$4,105</b></span></div>' in html
+    assert f'<b>$96,250</b><i class="flat" title="Since the close before, {_day(1)}">0.0%</i>' in html
+
+
+def test_login_page_never_shows_a_stored_symbol_outside_the_fixed_benchmark_list(dbfile):
+    """The sign-in page is public: a symbol the ledger happens to store (a holding, a display unit) must not reach it."""
+    assert [m[0] for m in server.LOGIN_MARKETS] == ["SPX", "XAU", "BTC"]
+    _prices(dbfile, [(_day(0), "SPX", 6811.6, "y"), (_day(0), "IXIC", 22480.3, "y"), (_day(0), "XAG", 51.5, "y"),
+                     (_day(0), "IRR", 0.00000054, "y"), (_day(0), "ZZTOP", 31337.0, "manual"), (_day(0), "ETH", 3410.0, "c")])
+    sent = []
+    h = server.Handler.__new__(server.Handler)
+    h._send = lambda code, body, ctype, headers=(), csp=None, cache=None: sent.append(body.decode())
+    h._login_page()
+    h._login_page(401, "Wrong username or password.", username="u")
+    for page in sent:
+        assert _mkt(page).count('<div><span class="n">') == 1 and '<span class="n">S&amp;P 500</span><span class="v"><b>6,812</b>' in _mkt(page)
+        for leak in ("ZZTOP", "31,337", "31337", "IXIC", "Nasdaq", "22,480", "XAG", "IRR", "ETH", "3,410"):
+            assert leak not in page, leak
+    server._login_markets = None  # nothing listed is stored: no line at all, whatever else the table holds
+    con = ctdb.connect(dbfile)
+    con.execute("DELETE FROM prices WHERE symbol = 'SPX'")
+    con.commit()
+    con.close()
+    sent.clear()
+    h._login_page()
+    assert 'class="mkt"' not in sent[0] and "ZZTOP" not in sent[0] and "{{markets}}" not in sent[0]
+
+
+def test_login_markets_leaves_out_stale_missing_and_garbage_rows(dbfile, monkeypatch):
+    # SPX a day too old, gold just fresh enough, bitcoin's latest row is not a price
+    _prices(dbfile, [(_day(server.LOGIN_MARKETS_MAX_AGE + 1), "SPX", 6800.0, "y"),
+                     (_day(server.LOGIN_MARKETS_MAX_AGE), "XAU", 4100.0, "y"),
+                     (_day(1), "BTC", 96000.0, "c"), (_day(0), "BTC", "n/a", "c")])
+    assert _mkt(server.login_markets()) == (f'<div class="mkt" title="Market closes as of {_day(server.LOGIN_MARKETS_MAX_AGE)}">'
+                                            '<div><span class="n">Gold</span><span class="v"><b>$4,100</b></span></div></div>')
+    monkeypatch.setattr(server, "_login_markets", None)
+    con = ctdb.connect(dbfile)
+    con.execute("DELETE FROM prices")
+    con.commit()
+    con.close()
+    # a non-positive price, a date that isn't one, a date far in the future: nothing left to show
+    _prices(dbfile, [(_day(0), "SPX", -5.0, "y"), ("soon", "XAU", 4100.0, "y"), (_day(-30), "BTC", 96000.0, "c")])
+    assert server.login_markets() == ""
+
+
+def test_login_markets_is_empty_without_a_prices_table_a_database_or_on_any_error(tmp_path, monkeypatch):
+    import sqlite3
+    path = tmp_path / "old.db"
+    sqlite3.connect(path).executescript("CREATE TABLE balances (x);")
+    monkeypatch.setattr(server, "DB", str(path))
+    assert server.login_markets() == ""
+    monkeypatch.setattr(server, "_login_markets", None)
+    monkeypatch.setattr(server, "DB", str(tmp_path / "missing.db"))
+    assert server.login_markets() == "" and not (tmp_path / "missing.db").exists()  # read-only: nothing is created
+    monkeypatch.setattr(server, "_login_markets", None)
+    logged = []
+    monkeypatch.setattr(server, "log", logged.append)
+    monkeypatch.setattr(server, "q", lambda *a: 1 / 0)
+    assert server.login_markets() == "" and len(logged) == 1 and "ZeroDivisionError" in logged[0]
+
+
+def test_login_markets_looks_once_per_ttl_and_never_queues_behind_another_lookup(dbfile, monkeypatch):
+    clock, calls, build = [1000.0], [], server._market_closes_html
+    monkeypatch.setattr(server.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(server, "_market_closes_html", lambda: calls.append(1) or build())
+    with server._login_markets_lock:  # a lookup in progress elsewhere: answer at once, without a second query
+        assert server.login_markets() == "" and not calls and server._login_markets is None
+    assert server.login_markets() == "" and server.login_markets() == "" and len(calls) == 1  # "" is remembered too
+    _prices(dbfile, [(_day(0), "BTC", 96250.0, "coinbase")])
+    clock[0] += server.LOGIN_MARKETS_TTL - 1
+    assert server.login_markets() == "" and len(calls) == 1
+    clock[0] += 2
+    assert "Bitcoin</span><span class=\"v\"><b>$96,250</b>" in server.login_markets() and len(calls) == 2
+    with server._login_markets_lock:  # expired while another request refreshes it: the last answer, still no query
+        clock[0] += server.LOGIN_MARKETS_TTL + 1
+        assert "Bitcoin" in server.login_markets() and len(calls) == 2
+
+
+def test_login_markets_escapes_its_labels(dbfile, monkeypatch):
+    _prices(dbfile, [(_day(0), "BTC", 1234567.0, "coinbase")])
+    monkeypatch.setattr(server, "LOGIN_MARKETS", (("BTC", '<i>"B"&', "$", ""),))
+    assert _mkt(server.login_markets()) == (f'<div class="mkt" title="Market closes as of {_day(0)}"><div><span class="n">'
+                                            '&lt;i&gt;&quot;B&quot;&amp;</span><span class="v"><b>$1,234,567</b></span></div></div>')

@@ -314,6 +314,15 @@ def sync(args) -> None:
         quiet = any(m in w for m in muted)
         print(f"{'note (superseded connection)' if quiet else 'WARNING'}: {w}", file=sys.stderr)
     new, updated = upsert(args.db, list(all_rows.values()), holdings, balances)
+    if ctdb.personal.load().get("auto_kind"):  # nobody classifies this ledger's accounts by hand
+        db = ctdb.connect(args.db)
+        guessed, unknown = ctdb.guess_kinds(db)
+        db.close()
+        for name, kind in guessed:
+            print(f"account type guessed from its name: {name} -> {kind}", file=sys.stderr)
+        for name in unknown:
+            print(f"WARNING: account \"{name}\" has no type yet, so it is left out of the totals "
+                  f"(add it to account_kind)", file=sys.stderr)
     print(f"fetched={len(all_rows)} inserted={new} updated={updated} holdings={len(holdings)} "
           f"balances={len(balances)} db={args.db}")
 

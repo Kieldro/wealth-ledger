@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS networth_history (
 CREATE TABLE IF NOT EXISTS prices (
   date TEXT NOT NULL, symbol TEXT NOT NULL, usd REAL NOT NULL, source TEXT, PRIMARY KEY (date, symbol)
 );
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);  -- prices_updated: when the closes were last fetched (UTC)
 CREATE TABLE IF NOT EXISTS crypto_transfers (
   wallet TEXT NOT NULL, coin TEXT NOT NULL, txid TEXT NOT NULL, direction TEXT NOT NULL, date TEXT NOT NULL,
   amount REAL NOT NULL, fee REAL, address TEXT, counterparty TEXT, memo TEXT, source TEXT NOT NULL,
@@ -260,6 +261,37 @@ def personal_credit_limits() -> list[tuple[str, float]]:
             raise personal.PersonalConfigError(f"personal.json credit_limits[{pat!r}] must be a positive number")
         out.append((pat, float(lim)))
     return out
+
+
+# account-name regex -> kind, first match wins (guess_kinds); a name matching none stays unclassified
+KIND_GUESSES = [
+    (r"\bHSA\b|HEALTH SAVINGS", "hsa"),
+    (r"\bIRA\b|\bROTH\b|401\(?K|403\(?B|PENSION|RETIREMENT|ROLLOVER", "retirement"),
+    (r"MORTGAGE|\bLOAN\b|\bHELOC\b|LINE OF CREDIT", "loan"),
+    (r"SAVINGS?\b|MONEY MARKET|\bCD\b|CERTIFICATE", "savings"),
+    (r"CHECKING|SPENDING|CASH MANAGEMENT|\bDEBIT\b", "checking"),
+    (r"\bCARD\b|\bVISA\b|MASTERCARD|AMEX|AMERICAN EXPRESS|CREDIT|REWARDS|SAPPHIRE|FREEDOM|QUICKSILVER|PLATINUM"
+     r"|DISCOVER", "credit"),
+    (r"BROKERAGE|INVEST|INDIVIDUAL|\bSTOCKS?\b|\bJOINT\b", "investment"),
+    (r"BITCOIN|\bBTC\b|CRYPTO|ETHEREUM|\bWALLET\b", "crypto"),
+]
+
+
+def guess_kinds(db: sqlite3.Connection) -> tuple[list[tuple[str, str]], list[str]]:
+    """Give every account that has no kind one guessed from its name (note 'guessed from the name'); for ledgers
+    nobody classifies by hand (personal.json "auto_kind": true). Returns ([(account name, kind)] newly set,
+    [names still unclassified])."""
+    import re
+    done, left = [], []
+    for aid, name in db.execute("SELECT account_id, account_name FROM v_accounts WHERE kind IS NULL").fetchall():
+        kind = next((k for rx, k in KIND_GUESSES if re.search(rx, name or "", re.I)), None)
+        if kind:
+            db.execute("INSERT OR IGNORE INTO account_kind VALUES (?,?,?)", (aid, kind, "guessed from the name"))
+            done.append((name, kind))
+        else:
+            left.append(name or aid)
+    db.commit()
+    return done, left
 
 
 def connect(path) -> sqlite3.Connection:
