@@ -67,6 +67,12 @@ def test_parse_sheet_stops_at_total_and_skips_headers():
     assert "monthly income" not in [l["item"] for l in s["lines"]] and len(s["lines"]) == 9
 
 
+def test_parse_sheet_skips_an_income_block_above_the_expense_header():
+    top = [["", "Income", "pre tax", "post tax"], ["", "Salary", 120000, 90000], ["", "Rental income", 2000], [],
+           ["", "Expense", "monthly", "yearly"]]
+    assert budget.parse_sheet(top + SHEET) == budget.parse_sheet(SHEET)
+
+
 def test_store_vs_its_gas_station_and_unmapped(led):
     led.txn(date(2026, 10, 2), -80.00, "H-E-B #123 000000000SPRINGFIELD", payee="H-E-B")
     led.txn(date(2026, 10, 3), -45.00, "H-E-B GAS CARWASH #6SPRINGFIELD", payee="H-E-B")

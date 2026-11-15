@@ -104,9 +104,12 @@ def parse_sheet(values: list[list]) -> dict:
     """{"lines": [{category, item, budget}], "sheet_total": the Total row's monthly value or None}.
 
     Rows are [category, item, monthly]; reading stops at the Total row. Header and spacer rows (no numeric
-    monthly amount) are skipped. A blank category becomes NO_CATEGORY."""
+    monthly amount) are skipped. A blank category becomes NO_CATEGORY. When a header row has "Expense" in the
+    item column, reading starts below it, so an income block above the budget is not read as budget lines."""
     lines, total = [], None
-    for r in values:
+    items = [str(r[1]).strip().lower() if len(r) > 1 else "" for r in values]
+    start = items.index("expense") + 1 if "expense" in items else 0
+    for r in values[start:]:
         cat = str(r[0]).strip() if len(r) > 0 else ""
         item = str(r[1]).strip() if len(r) > 1 else ""
         if item.lower() == "total":
