@@ -395,14 +395,22 @@ def freshness(r: dict, today: date | None = None) -> None:
     r["stale"] = r["age_days"] > STALE_DAYS
 
 
+SPARK_DAYS = 90  # how far back each account's trend line goes
+
+
 def api_accounts(params) -> dict:
     rows = q("""SELECT account_id, account_name, institution, source, ROUND(balance,2) balance, as_of, snapshot_date,
                        COALESCE(kind,'unclassified') kind
                 FROM v_accounts ORDER BY kind, ABS(balance) DESC""")
+    hist: dict[str, list] = {}  # account -> its daily balances, oldest first (the row's little trend line)
+    for b in q("""SELECT account_id, CAST(balance AS REAL) bal FROM balances
+                  WHERE snapshot_date >= date('now', ?) ORDER BY snapshot_date""", (f"-{SPARK_DAYS} day",)):
+        hist.setdefault(b["account_id"], []).append(round(b["bal"], 2))
     for r in rows:
         freshness(r)
         r["counted"] = r["kind"] in NW_KINDS
-    return {"accounts": rows, "stale_days": STALE_DAYS}
+        r["spark"] = hist.get(r["account_id"], [])
+    return {"accounts": rows, "stale_days": STALE_DAYS, "spark_days": SPARK_DAYS}
 
 
 def api_holdings(params) -> dict:

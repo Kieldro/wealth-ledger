@@ -190,6 +190,7 @@ def test_account_txns_lists_only_that_account(dbfile):
     assert [t["balance_after"] for t in r["txns"]] == [None, -250, -350]  # walked back from -250; pending has none
     assert server.api_account_txns({"id": ["nope"]})["error"] == "unknown account"
     assert all("account_id" in a for a in server.api_accounts({})["accounts"])
+    assert all(isinstance(a["spark"], list) for a in server.api_accounts({})["accounts"])
     assert {c["account_id"] for c in server.api_cards({})["cards"]} == {"c1", "c2", "c3"}  # card rows open the same view
 
 
