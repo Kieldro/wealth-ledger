@@ -1,4 +1,5 @@
 """insights/prices.py against synthetic replies (no network)."""
+import json
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -9,6 +10,46 @@ from insights import prices
 
 def _ts(d: str) -> int:
     return int(datetime.fromisoformat(d).replace(tzinfo=timezone.utc).timestamp())
+
+
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch):  # main() also fetches the inflation nowcast: never from a test
+    def refuse(url, timeout=60):
+        raise RuntimeError(f"test tried to reach {url}")
+    monkeypatch.setattr(prices, "_get_gz", refuse)
+
+
+def _nowcast(*months):
+    """The Cleveland Fed file's shape: one chart per (month, as-of date, CPI values), oldest first."""
+    return [{"chart": {"_comment": f"{asof} 00:00", "subcaption": month},
+             "dataset": [{"seriesname": "Core CPI Inflation", "data": [{"value": "9.9"}]},
+                         {"seriesname": "CPI Inflation", "data": [{"value": v} for v in vals]}]}
+            for month, asof, vals in months]
+
+
+def test_cleveland_nowcast_takes_the_latest_cpi_estimate_of_the_newest_month_that_has_one():
+    file = _nowcast(("2026-10", "2026-10-30", ["3.80", "3.85"]), ("2026-11", "2026-11-13", ["3.90", "3.93543014449254", ""]),
+                    ("2026-12", "2026-11-13", ["", ""]))
+    assert prices.cleveland_nowcast(lambda url: file) == {"pct": 3.94, "asof": "2026-11-13", "month": "2026-11",
+                                                         "source": "Cleveland Fed nowcast"}
+    for bad in ([], _nowcast(("2026-11", "2026-11-13", ["250"])), _nowcast(("2026-11", "soon", ["3.9"]))):
+        with pytest.raises((RuntimeError, ValueError)):
+            prices.cleveland_nowcast(lambda url, bad=bad: bad)
+
+
+def test_update_inflation_stores_json_and_main_survives_its_failure(con, tmp_path, monkeypatch, capsys):
+    good = {"pct": 3.94, "asof": "2026-11-13", "month": "2026-11", "source": "Cleveland Fed nowcast"}
+    stored = lambda: con.execute("SELECT value FROM meta WHERE key = 'inflation'").fetchone()
+    assert prices.update_inflation(con, dry_run=True, fetch=lambda: good) == good and stored() is None
+    prices.update_inflation(con, fetch=lambda: good)
+    assert json.loads(stored()[0]) == good
+    with pytest.raises(RuntimeError, match="inflation: KeyError"):
+        prices.update_inflation(con, fetch=lambda: {}["x"])
+    assert json.loads(stored()[0]) == good  # a failed fetch keeps the last good figure
+    monkeypatch.setattr(prices, "update", lambda db, dry_run=False: {})
+    monkeypatch.setattr(prices, "cleveland_nowcast", lambda: 1 / 0)
+    assert prices.main(["--db", str(tmp_path / "i.db")]) == 0  # the prices still count as updated
+    assert "inflation not updated (inflation: ZeroDivisionError" in capsys.readouterr().out
 
 
 def fake_coinbase(close_of):

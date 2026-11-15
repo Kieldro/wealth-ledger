@@ -1246,14 +1246,13 @@ input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px 
 .err svg { flex: none; margin-top: 2px; }
 .foot { font-size: 12.5px; color: var(--muted); text-align: center; margin: 18px 0 0; }
 /* under the card: closes of a few broad benchmarks (a fixed list; nothing from the ledger), then the credit */
-.mkt { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 12px 8px; width: 100%; max-width: 384px;
-  margin: 22px 0 0; font-size: 12.5px; font-variant-numeric: tabular-nums; }
-.mkt > div { display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 0; }
-.mkt .n { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.mkt { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; width: 100%; max-width: 384px;
+  margin: 22px 0 0; font-variant-numeric: tabular-nums; }
+.mkt > div { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; white-space: nowrap; }
+.mkt .n { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); }
 .mkt svg { width: 14px; height: 14px; flex: none; }
-.mkt .v { white-space: nowrap; }
-.mkt b { font-weight: 600; color: var(--text); }
-.mkt i { font-style: normal; margin-left: 6px; color: var(--muted); }
+.mkt b { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.mkt i { font-style: normal; font-size: 11.5px; color: var(--muted); }
 .mkt i.up { color: var(--pos); }
 .mkt i.down { color: var(--neg); }
 .upd { font-size: 11.5px; color: var(--muted); margin: 12px 0 0; font-variant-numeric: tabular-nums; }
@@ -1345,6 +1344,9 @@ _GOLD_ICON = ('<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8"
               '4.6z" fill="none" stroke="#fff" stroke-width="1.3" stroke-linejoin="round"/></svg>')
 LOGIN_MARKETS = (("SPX", "S&P 500", "", _INDEX_ICON % "#1f9d76"), ("XAU", "Gold", "$", _GOLD_ICON),
                  ("BTC", "Bitcoin", "$", _BTC_ICON))  # symbol, label, value prefix, icon
+_INFL_ICON = ('<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="8" fill="#6f7fe8"/><g fill="none" stroke="#fff" '
+              'stroke-width="1.3" stroke-linecap="round"><circle cx="5.9" cy="5.9" r="1.25"/><circle cx="10.1" cy="10.1" r="1.25"/>'
+              '<path d="M10.6 5.4L5.4 10.6"/></g></svg>')
 LOGIN_MARKETS_TTL = 600      # seconds a result is reused, an empty or failed one too
 LOGIN_MARKETS_MAX_AGE = 10   # days: an older close is left out rather than shown as current
 LOGIN_MARKETS_PREV_GAP = 7   # days: the change is against the close before, if that is at most this much earlier
@@ -1375,12 +1377,20 @@ def _market_closes_html() -> str:
             pct = round(100 * (usd / prev[1] - 1), 1)
             chg = (f'<i class="{"up" if pct > 0 else "down" if pct < 0 else "flat"}" title="Since the close before, '
                    f'{prev[0].isoformat()}">{"+" if pct > 0 else "−" if pct < 0 else ""}{abs(pct):.1f}%</i>')
-        parts.append(f'<div><span class="n">{icon}{html_escape(label)}</span>'
-                     f'<span class="v"><b>{prefix}{round(usd):,}</b>{chg}</span></div>')
+        parts.append(f'<div><span class="n">{icon}{html_escape(label)}</span><b>{prefix}{round(usd):,}</b>{chg}</div>')
         newest = max(newest or day, day)
+    try:  # the inflation figure the sync keeps beside the prices (insights/prices.py: the Cleveland Fed's CPI nowcast)
+        infl = json.loads(q("SELECT value FROM meta WHERE key = 'inflation'")[0]["value"])
+        pct, asof = float(infl["pct"]), date.fromisoformat(str(infl["asof"])[:10])
+        if -5 < pct < 30 and -2 <= (today - asof).days <= LOGIN_MARKETS_MAX_AGE:
+            parts.append(f'<div><span class="n">{_INFL_ICON}Inflation</span><b>{pct:.1f}%</b><i title="Consumer prices, year '
+                         f'over year: the Cleveland Fed nowcast as of {asof.isoformat()}">a year</i></div>')
+            newest = max(newest or asof, asof)
+    except (sqlite3.OperationalError, IndexError, KeyError, TypeError, ValueError):
+        pass
     if not parts:
         return ""
-    try:  # when the sync last fetched them (insights/prices.py); a ledger from before that was recorded has only the date
+    try:  # when the sync last fetched them; a ledger from before that was recorded has only the date
         when = datetime.fromisoformat(q("SELECT value FROM meta WHERE key = 'prices_updated'")[0]["value"]).astimezone()
         note = f"Updated {when:%b} {when.day}, {when.hour % 12 or 12}:{when:%M %p %Z}".rstrip()
     except (sqlite3.OperationalError, IndexError, TypeError, ValueError):
@@ -1392,7 +1402,7 @@ def _market_closes_html() -> str:
 def login_markets() -> str:
     """'<div class="mkt" …><div>…S&amp;P 500…<b>6,812</b><i class="up">+0.4%</i>…</div>…</div><p class="upd">Updated …</p>'
     for the sign-in page: the latest stored close of each LOGIN_MARKETS symbol and its move since the close before,
-    or "" when none is usable. Never raises and reads nothing but the prices table; at most one small query per
+    then the inflation nowcast, or "" when none is usable. Never raises and reads nothing but the prices table; at most one small query per
     LOGIN_MARKETS_TTL, whatever the traffic."""
     global _login_markets
     memo = _login_markets

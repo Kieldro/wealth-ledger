@@ -20,6 +20,8 @@ Free, keyless sources only:
                 the latest rate is kept (LATEST_ONLY): the dashboard converts every date at today's rate, since
                 Yahoo's rial history is the official 42,000 until Jan 2026 and the market rate after it.
   SPX, IXIC     Yahoo index closes (^GSPC, ^IXIC); weekdays only, like gold.
+Also one number that is not a price: the Cleveland Fed's daily nowcast of year-over-year consumer-price inflation,
+kept as JSON in `meta['inflation']` for the dashboard's sign-in page (see cleveland_nowcast).
 
 The first run backfills from a few days before the earliest date the trend needs (the first networth_history point
 or the first daily balance snapshot). Later runs only re-fetch the last few days (today's candle is still moving),
@@ -33,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import bisect
+import gzip
 import json
 import os
 import sqlite3
@@ -233,6 +236,54 @@ def update(db: sqlite3.Connection, today: date | None = None, dry_run: bool = Fa
     return report
 
 
+# ---------------------------------------------------------------- inflation (sign-in page)
+NOWCAST_URL = "https://www.clevelandfed.org/-/media/files/webcharts/inflationnowcasting/nowcast_year.json"
+NOWCAST_SERIES = "CPI Inflation"
+
+
+def _get_gz(url: str, timeout: int = 60):
+    """JSON from a URL, asking for gzip (the nowcast file is 7 MB raw, 0.4 MB compressed)."""
+    req = urllib.request.Request(url, headers={**UA, "Accept-Encoding": "gzip"})
+    with urllib.request.urlopen(req, timeout=timeout) as f:
+        body = f.read()
+        return json.loads(gzip.decompress(body) if f.headers.get("Content-Encoding") == "gzip" else body)
+
+
+def cleveland_nowcast(get=None) -> dict:
+    """The Cleveland Fed's Inflation Nowcast: its running estimate, refreshed every business day from oil, gasoline
+    and recent price data, of the year-over-year CPI change for the month in progress (weeks before the official
+    figure). Keyless and free to reuse. -> {"pct", "asof" (date of the estimate), "month" (YYYY-MM), "source"}.
+    The file holds one chart per month, oldest first; a month that has only just begun may have no value yet."""
+    for chart in reversed((get or _get_gz)(NOWCAST_URL)):
+        head = chart.get("chart") or {}
+        for ds in chart.get("dataset") or []:
+            if ds.get("seriesname") != NOWCAST_SERIES:
+                continue
+            vals = [x.get("value") for x in ds.get("data") or [] if str(x.get("value") or "").strip()]
+            if vals:
+                pct, asof = float(vals[-1]), str(head.get("_comment") or "")[:10]
+                date.fromisoformat(asof)  # ValueError if the file's date ever changes shape
+                if not -5 < pct < 30:
+                    raise RuntimeError(f"cleveland nowcast: implausible {pct}")
+                return {"pct": round(pct, 2), "asof": asof, "month": str(head.get("subcaption") or "")[:7],
+                        "source": "Cleveland Fed nowcast"}
+    raise RuntimeError("cleveland nowcast: no CPI value in the file")
+
+
+def update_inflation(db: sqlite3.Connection, dry_run: bool = False, fetch=None) -> dict:
+    """Fetch the nowcast and keep it in meta['inflation'] (JSON). Raises on any failure, storing nothing."""
+    try:
+        infl = (fetch or cleveland_nowcast)()
+    except RuntimeError:
+        raise
+    except Exception as e:  # network, JSON or shape
+        raise RuntimeError(f"inflation: {type(e).__name__}: {e}") from None
+    if not dry_run:
+        db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('inflation', ?)", (json.dumps(infl),))
+        db.commit()
+    return infl
+
+
 # ---------------------------------------------------------------- lookups (dashboard)
 
 def asof(series: list[tuple[str, float]], dates) -> dict[str, float]:
@@ -254,11 +305,16 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     try:
         db = ctdb.connect(args.db)
+        try:  # before the prices, so a failed symbol doesn't cost the day's inflation figure; never fatal itself
+            infl = update_inflation(db, dry_run=args.dry_run)
+            infl = f"inflation {infl['pct']}% a year for {infl['month']} as of {infl['asof']} ({infl['source']})"
+        except Exception as e:  # noqa: BLE001 - shows only on the sign-in page; not worth a dashboard warning
+            infl = f"inflation not updated ({e})"
         report = update(db, dry_run=args.dry_run)
     except Exception as e:  # noqa: BLE001 - one line for the sync log
         print(f"error: prices: {e}", file=sys.stderr)
         return 1
-    parts = []
+    parts = [infl]
     for sym, r in report.items():
         lo, hi, n = db.execute("SELECT MIN(date), MAX(date), COUNT(*) FROM prices WHERE symbol = ?", (sym,)).fetchone()
         fetched = ", ".join(f"{s}..{e}" for s, e in r["ranges"])

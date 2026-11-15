@@ -747,9 +747,9 @@ def test_login_markets_shows_the_latest_close_of_each_symbol_in_order_with_its_d
     assert html.count("<svg") == 3 and "<script" not in html and "href" not in html  # inline icons only: the CSP allows nothing else
     assert _mkt(html) == (
         f'<div class="mkt" title="Market closes as of {_day(0)}">'
-        f'<div><span class="n">S&amp;P 500</span><span class="v"><b>6,812</b><i class="up" title="Since the close before, {_day(5)}">+0.2%</i></span></div>'
-        '<div><span class="n">Gold</span><span class="v"><b>$4,105</b></span></div>'  # one close stored: no move to show
-        f'<div><span class="n">Bitcoin</span><span class="v"><b>$96,250</b><i class="down" title="Since the close before, {_day(1)}">−0.8%</i></span></div>'
+        f'<div><span class="n">S&amp;P 500</span><b>6,812</b><i class="up" title="Since the close before, {_day(5)}">+0.2%</i></div>'
+        '<div><span class="n">Gold</span><b>$4,105</b></div>'  # one close stored: no move to show
+        f'<div><span class="n">Bitcoin</span><b>$96,250</b><i class="down" title="Since the close before, {_day(1)}">−0.8%</i></div>'
         '</div>')  # the Nasdaq and silver are stored, not listed
 
 
@@ -759,7 +759,7 @@ def test_login_markets_move_needs_a_recent_valid_close_before(dbfile):
                      (_day(1), "XAU", "n/a", "y"), (_day(0), "XAU", 4105.0, "y"),         # ... or isn't a price
                      (_day(1), "BTC", 96250.0, "c"), (_day(0), "BTC", 96250.0, "c")])     # unchanged: no sign, no colour
     html = _mkt(server.login_markets())
-    assert '<b>6,812</b></span>' not in html and '<b>6,811</b></span></div>' in html and '<b>$4,105</b></span></div>' in html
+    assert '<b>6,811</b></div>' in html and '<b>$4,105</b></div>' in html
     assert f'<b>$96,250</b><i class="flat" title="Since the close before, {_day(1)}">0.0%</i>' in html
 
 
@@ -774,7 +774,7 @@ def test_login_page_never_shows_a_stored_symbol_outside_the_fixed_benchmark_list
     h._login_page()
     h._login_page(401, "Wrong username or password.", username="u")
     for page in sent:
-        assert _mkt(page).count('<div><span class="n">') == 1 and '<span class="n">S&amp;P 500</span><span class="v"><b>6,812</b>' in _mkt(page)
+        assert _mkt(page).count('<div><span class="n">') == 1 and '<span class="n">S&amp;P 500</span><b>6,812</b>' in _mkt(page)
         for leak in ("ZZTOP", "31,337", "31337", "IXIC", "Nasdaq", "22,480", "XAG", "IRR", "ETH", "3,410"):
             assert leak not in page, leak
     server._login_markets = None  # nothing listed is stored: no line at all, whatever else the table holds
@@ -793,7 +793,7 @@ def test_login_markets_leaves_out_stale_missing_and_garbage_rows(dbfile, monkeyp
                      (_day(server.LOGIN_MARKETS_MAX_AGE), "XAU", 4100.0, "y"),
                      (_day(1), "BTC", 96000.0, "c"), (_day(0), "BTC", "n/a", "c")])
     assert _mkt(server.login_markets()) == (f'<div class="mkt" title="Market closes as of {_day(server.LOGIN_MARKETS_MAX_AGE)}">'
-                                            '<div><span class="n">Gold</span><span class="v"><b>$4,100</b></span></div></div>')
+                                            '<div><span class="n">Gold</span><b>$4,100</b></div></div>')
     monkeypatch.setattr(server, "_login_markets", None)
     con = ctdb.connect(dbfile)
     con.execute("DELETE FROM prices")
@@ -831,7 +831,7 @@ def test_login_markets_looks_once_per_ttl_and_never_queues_behind_another_lookup
     clock[0] += server.LOGIN_MARKETS_TTL - 1
     assert server.login_markets() == "" and len(calls) == 1
     clock[0] += 2
-    assert "Bitcoin</span><span class=\"v\"><b>$96,250</b>" in server.login_markets() and len(calls) == 2
+    assert "Bitcoin</span><b>$96,250</b>" in server.login_markets() and len(calls) == 2
     with server._login_markets_lock:  # expired while another request refreshes it: the last answer, still no query
         clock[0] += server.LOGIN_MARKETS_TTL + 1
         assert "Bitcoin" in server.login_markets() and len(calls) == 2
@@ -841,4 +841,26 @@ def test_login_markets_escapes_its_labels(dbfile, monkeypatch):
     _prices(dbfile, [(_day(0), "BTC", 1234567.0, "coinbase")])
     monkeypatch.setattr(server, "LOGIN_MARKETS", (("BTC", '<i>"B"&', "$", ""),))
     assert _mkt(server.login_markets()) == (f'<div class="mkt" title="Market closes as of {_day(0)}"><div><span class="n">'
-                                            '&lt;i&gt;&quot;B&quot;&amp;</span><span class="v"><b>$1,234,567</b></span></div></div>')
+                                            '&lt;i&gt;&quot;B&quot;&amp;</span><b>$1,234,567</b></div></div>')
+
+
+def _meta(dbfile, key, value):
+    con = ctdb.connect(dbfile)
+    con.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)", (key, value))
+    con.commit()
+    con.close()
+
+
+def test_login_markets_adds_the_inflation_nowcast_the_sync_stored(dbfile, monkeypatch):
+    tile = lambda: _mkt(server.login_markets())
+    _meta(dbfile, "inflation", json.dumps({"pct": 3.94, "asof": _day(2), "month": "2026-11", "source": "Cleveland Fed nowcast"}))
+    assert tile() == (f'<div class="mkt" title="Market closes as of {_day(2)}"><div><span class="n">Inflation</span><b>3.9%</b>'
+                      f'<i title="Consumer prices, year over year: the Cleveland Fed nowcast as of {_day(2)}">a year</i></div></div>')
+    _prices(dbfile, [(_day(0), "BTC", 96250.0, "c")])
+    monkeypatch.setattr(server, "_login_markets", None)
+    assert tile().index("Bitcoin") < tile().index("Inflation") and tile().count('<span class="n">') == 2  # after the closes
+    for bad in ("", "[1]", '"3.9"', json.dumps({"pct": "<b>", "asof": _day(0)}), json.dumps({"pct": 250, "asof": _day(0)}),
+                json.dumps({"pct": 3.9, "asof": _day(server.LOGIN_MARKETS_MAX_AGE + 1)}), json.dumps({"pct": 3.9})):
+        _meta(dbfile, "inflation", bad)
+        monkeypatch.setattr(server, "_login_markets", None)
+        assert "Inflation" not in server.login_markets() and "Bitcoin" in server.login_markets(), bad
