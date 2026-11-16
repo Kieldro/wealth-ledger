@@ -18,6 +18,7 @@ details all live in `~/.config/wealth-ledger/personal.json`, outside the repo.
 | `personal.example.json` | Template for `personal.json`, with placeholder values |
 | `simplefin/simplefin_sync.py` | SimpleFIN Bridge -> SQLite (transactions, balances, holdings) |
 | `plaid/plaid_sync.py` | Plaid -> SQLite, for accounts SimpleFIN can't reach (link / relink / sync); also stores card credit limits (`balances.limit`) |
+| `fidelity/history_import.py` | One-off backfill of Fidelity history from saved fidelity.com activity responses (JSON, kept outside the repo) into `txns` as source `fidelity_web`: only rows dated before each account's first live-feed transaction, on the live account's id, with the overlap compared against the feed; idempotent, `--dry-run` to preview |
 | `networth.py` | Net worth = live synced balances + the sheet's manual rows + valuations |
 | `sheet_marks.py` | Marks balance-sheet rows nothing keeps current (yellow label + note); unmarks them once they're live. Formatting only |
 | `sheet_estimates.py` | Writes the latest home valuation, its date and the estimates behind it to the sheet's `estimates` tab (only that tab; only when it changed), so the balance sheet can point at it |
