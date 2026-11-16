@@ -480,8 +480,8 @@ def test_page_sections_fold_have_a_nav_label_and_a_key_figure_slot():
     html = open(server.os.path.join(server.os.path.dirname(server.__file__), "index.html")).read()
     grid = html[html.index('<div class="grid"'):html.index('id="totop"')]
     heads = re.findall(r'<section class="card span-\d+" id="(\w+)" data-nav="([\w ]+)">', grid)
-    assert len(heads) == grid.count("<section") == 13 and heads[0] == ("draftscard", "Drafts")
-    assert len({i for i, _ in heads}) == 13
+    assert len(heads) == grid.count("<section") == 14 and heads[0] == ("draftscard", "Drafts")
+    assert len({i for i, _ in heads}) == 14
     for needle in ('const SEC_KEY = "wl.sections"', 'fig.id = "kf-" + sec.id', 'id="jump"', 'goSec("draftscard")',
                    "data warning", '<details><summary>Why</summary>', 'id="moredrafts"'):
         assert needle in html, needle

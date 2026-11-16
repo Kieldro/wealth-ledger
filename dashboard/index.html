@@ -155,7 +155,7 @@ tr.short td { background: color-mix(in srgb, var(--neg) 9%, transparent); }
 /* hero */
 .hero { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 12px; }
 .hero .card { padding: 16px 18px; }
-/* Assets / Liabilities open the Assets card with that side's line items showing */
+/* the Assets / Liabilities tiles open their card with every line item showing */
 .hero .golink { cursor: pointer; transition: border-color .12s; }
 .hero .golink:hover { border-color: var(--muted); }
 .hero .golink .label::after { content: " ›"; color: var(--muted); }
@@ -278,14 +278,16 @@ td.neg { color: var(--neg); font-weight: 600; }
 .trendchg { font-size: 13px; color: var(--text-2); margin: 4px 0 1px; }
 .trendchg:empty { display: none; }
 .trendchg b { font-weight: 600; }
-/* benchmark overlays on the trend (S&P 500, Nasdaq, gold, bitcoin): toggle chips, colour from --c */
+/* benchmark overlays on the trend (S&P 500, gold, bitcoin): toggle chips, colour from --c, each with its correlation */
 .bench { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 0 0 8px; font-size: 12px; color: var(--muted); }
 .bench button { padding: 2px 9px; font-size: 11.5px; color: var(--text-2); display: inline-flex; align-items: center; gap: 5px; }
 .bench button i { width: 12px; height: 2px; border-radius: 1px; background: var(--c); }
 .bench button[aria-pressed="true"] { border-color: var(--c); color: var(--text); font-weight: 600; }
 .bench button:disabled { cursor: not-allowed; opacity: .45; }
 .bench button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.bench [data-b="SPX"] { --c: var(--s3); } .bench [data-b="IXIC"] { --c: var(--s7); }
+.bench [data-b="SPX"] { --c: var(--s3); }
+.bench button .corr { font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+.bench button .corr:empty { display: none; }
 .bench [data-b="XAU"] { --c: var(--s4); } .bench [data-b="BTC"] { --c: var(--s2); }
 /* display unit picker ($, BTC, metals, rial, dinar): one choice converts every value on the page */
 .unitpick { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-2); flex-wrap: wrap; }
@@ -344,8 +346,9 @@ footer { margin: 14px 0 8px; font-size: 12px; color: var(--muted); line-height: 
 footer code { font-size: 11.5px; }
 .err { color: var(--neg); font-size: 13px; }
 
-@media (min-width: 1001px) {  /* wide screens keep allocation and trend on top; drafts sit beside the cards they pay */
-  #alloccard, #trendcard { order: -1; }
+@media (min-width: 1001px) {  /* wide screens keep assets, trend and liabilities on top; drafts sit beside the cards they pay */
+  #alloccard, #trendcard, #liabcard { order: -1; }
+  #alloccard { grid-row: span 2; }  /* trend and liabilities stack beside it */
 }
 @media (max-width: 1000px) {
   .span-7, .span-5, .span-6, .span-4, .span-8 { grid-column: span 12; }
@@ -482,12 +485,17 @@ document.querySelector('meta[name="theme-color"]').content = getComputedStyle(do
         <div class="seg rng" id="trendrng" role="group" aria-label="Trend date range"><button type="button" data-r="1M" aria-pressed="false" title="Last month">1M</button><button type="button" data-r="3M" aria-pressed="false" title="Last 3 months">3M</button><button type="button" data-r="6M" aria-pressed="false" title="Last 6 months">6M</button><button type="button" data-r="YTD" aria-pressed="false" title="Year to date">YTD</button><button type="button" data-r="1Y" aria-pressed="false" title="Last year">1Y</button><button type="button" data-r="3Y" aria-pressed="false" title="Last 3 years">3Y</button><button type="button" data-r="All" aria-pressed="false" title="All history">All</button></div></div>
       <div class="trendchg num" id="trendchg"></div>
       <p class="sub" id="trendsub">Daily snapshots</p>
-      <div class="bench" id="trendbench" role="group" aria-label="Compare with a benchmark"><span class="hide-sm">Compare</span><button type="button" data-b="SPX" aria-pressed="false" title="S&amp;P 500 index"><i></i>S&amp;P 500</button><button type="button" data-b="IXIC" aria-pressed="false" title="Nasdaq Composite index"><i></i>Nasdaq</button><button type="button" data-b="XAU" aria-pressed="false" title="Gold (COMEX close)"><i></i>Gold</button><button type="button" data-b="BTC" aria-pressed="false" title="Bitcoin"><i></i>Bitcoin</button></div>
+      <div class="bench" id="trendbench" role="group" aria-label="Compare with a benchmark"><span class="hide-sm">Compare</span><button type="button" data-b="SPX" aria-pressed="false" title="S&amp;P 500 index"><i></i>S&amp;P 500<span class="corr"></span></button><button type="button" data-b="XAU" aria-pressed="false" title="Gold (COMEX close)"><i></i>Gold<span class="corr"></span></button><button type="button" data-b="BTC" aria-pressed="false" title="Bitcoin"><i></i>Bitcoin<span class="corr"></span></button></div>
       <div class="chartbox"><canvas id="trend" aria-label="Net worth trend" role="img"></canvas></div>
       <div class="legend" id="trendlegend"><span><i></i>Net worth (synced accounts daily + sheet-only items held constant)</span></div>
       <p class="note" id="trendbenchnote" style="margin:6px 0 0" hidden></p>
       <p class="note" id="trendunitnote" style="margin:6px 0 0" hidden></p>
       <p class="note" id="trendnote"></p>
+    </section>
+
+    <section class="card span-5" id="liabcard" data-nav="Liabilities">
+      <div class="hd"><h2>Liabilities</h2><span class="note">tap a row for its line items</span></div>
+      <div class="tw"><table id="liabcats"></table></div>
     </section>
 
     <section class="card span-4" id="cardscard" data-nav="Cards">
@@ -761,10 +769,10 @@ for (const sec of document.querySelectorAll(".grid > section.card")) {
   $("jump").append(b);
 }
 for (const el of document.querySelectorAll(".hero .golink")) {
+  const [sec, table] = el.dataset.go === "asset" ? ["alloccard", "cats"] : ["liabcard", "liabcats"];
   const go = () => {
-    goSec("alloccard");
-    for (const tr of $("cats").querySelectorAll("tr.cat"))  // that side's line items open, the other side's closed
-      if ((tr.getAttribute("aria-expanded") === "true") !== (tr.dataset.t === el.dataset.go)) tr.onclick();
+    goSec(sec);
+    for (const tr of $(table).querySelectorAll('tr.cat[aria-expanded="false"]')) tr.onclick();  // every line item showing
   };
   el.addEventListener("click", go);
   el.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
@@ -854,7 +862,7 @@ function renderSummary(s) {
   if (s.net_worth == null) return;
 
   $("assets").textContent = f0(s.assets);
-  kf("alloccard", `${compact(s.assets)} assets · ${compact(s.liabilities)} owed`);
+  kf("alloccard", `${compact(s.assets)}`);
   const wk = s.changes?.["7"] || s.changes?.["1"];
   kf("trendcard", wk && wk.delta != null ? `<b class="${wk.delta > 0 ? "up" : wk.delta < 0 ? "down" : ""}">${signed(wk.delta)}</b> ${s.changes["7"] === wk ? "this week" : "today"}` : "");
   $("liabs").textContent = f0(s.liabilities);
@@ -885,32 +893,40 @@ function renderSummary(s) {
   $("nwnote").textContent = (missing.length ? (s.changes[missing[0]].note || "") + ", so " + missing.join("/") + "-day change is n/a. " : "") +
     (s.sheet_net_worth ? `Sheet's own total: ${f0(s.sheet_net_worth)}.` : "");
 
-  // allocation table
+  // the balance sheet's lines by category: assets (with their share) in one card, what's owed in the other
   const assetTotal = s.assets;
-  let rows = `<thead><tr><th>Category</th><th class="r">Value</th><th class="r hide-sm">% assets</th><th class="r">Source</th></tr></thead><tbody>`;
-  for (const c of cats) {
-    if (!c.value && !c.lines.length) continue;
-    const color = c.type === "asset" ? `var(${CAT_COLOR[c.key]})` : "var(--liab)";
-    rows += `<tr class="cat" data-k="${c.key}" data-t="${c.type}" tabindex="0" role="button" aria-expanded="false"><td><span class="sw" style="background:${color}"></span>${esc(c.label)}</td>
-      <td class="r ${c.value < 0 ? "down" : ""}">${f0(c.value)}</td>
-      <td class="r hide-sm">${c.type === "asset" ? (100 * c.value / assetTotal).toFixed(1) + "%" : ""}</td><td class="r">${srcBadge(c)}</td></tr>`;
-    for (const l of c.lines) rows += `<tr class="sub" data-p="${c.key}" hidden><td class="name" title="${esc(l.line)}">${esc(l.line)}</td><td class="r">${f0(l.value)}</td><td class="hide-sm"></td><td class="r"><span class="badge b-${l.source}">${l.source}</span></td></tr>`;
-  }
-  const sum = cats.reduce((a, c) => a + c.value, 0);
-  rows += `<tr class="total"><td>Net worth</td><td class="r">${f0(sum)}</td><td class="hide-sm"></td><td></td></tr></tbody>`;
-  $("cats").innerHTML = rows;
-  $("cats").querySelectorAll("tr.cat").forEach(tr => {
-    tr.onclick = () => {
-      const open = tr.getAttribute("aria-expanded") !== "true";
-      tr.setAttribute("aria-expanded", String(open));
-      $("cats").querySelectorAll(`tr[data-p="${tr.dataset.k}"]`).forEach(x => x.hidden = !open);
-    };
-    tr.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); tr.onclick(); } };
-  });
+  catTable("cats", cats.filter(c => c.type === "asset"), "Total assets", assetTotal);
+  catTable("liabcats", cats.filter(c => c.type === "liability"), "Total owed");
+  kf("liabcard", s.liabilities ? `${compact(s.liabilities)} owed` : "");
   $("donutc").textContent = compact(assetTotal);
   drawDonut(cats.filter(c => c.type === "asset" && c.value > 0), assetTotal);
 }
 
+// one table of balance-sheet categories (tap a category for its lines); liabilities show as positive amounts owed
+function catTable(id, list, totalLabel, assetTotal) {
+  const liab = !assetTotal, amt = v => f0(liab ? -v : v);
+  let rows = `<thead><tr><th>Category</th><th class="r">${liab ? "Owed" : "Value"}</th>${liab ? "" : '<th class="r hide-sm">% assets</th>'}<th class="r">Source</th></tr></thead><tbody>`;
+  for (const c of list) {
+    if (!c.value && !c.lines.length) continue;
+    const color = liab ? "var(--liab)" : `var(${CAT_COLOR[c.key]})`;
+    rows += `<tr class="cat" data-k="${c.key}" tabindex="0" role="button" aria-expanded="false"><td><span class="sw" style="background:${color}"></span>${esc(c.label)}</td>
+      <td class="r ${!liab && c.value < 0 ? "down" : ""}">${amt(c.value)}</td>
+      ${liab ? "" : `<td class="r hide-sm">${(100 * c.value / assetTotal).toFixed(1)}%</td>`}<td class="r">${srcBadge(c)}</td></tr>`;
+    for (const l of c.lines) rows += `<tr class="sub" data-p="${c.key}" hidden><td class="name" title="${esc(l.line)}">${esc(l.line)}</td><td class="r">${amt(l.value)}</td>${liab ? "" : '<td class="hide-sm"></td>'}<td class="r"><span class="badge b-${l.source}">${l.source}</span></td></tr>`;
+  }
+  const sum = list.reduce((a, c) => a + c.value, 0);
+  rows += `<tr class="total"><td>${totalLabel}</td><td class="r">${amt(sum)}</td>${liab ? "" : '<td class="hide-sm"></td>'}<td></td></tr></tbody>`;
+  const t = $(id);
+  t.innerHTML = rows;
+  t.querySelectorAll("tr.cat").forEach(tr => {
+    tr.onclick = () => {
+      const open = tr.getAttribute("aria-expanded") !== "true";
+      tr.setAttribute("aria-expanded", String(open));
+      t.querySelectorAll(`tr[data-p="${tr.dataset.k}"]`).forEach(x => x.hidden = !open);
+    };
+    tr.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); tr.onclick(); } };
+  });
+}
 function drawDonut(cats, total) {
   if (!window.Chart) return;
   charts.donut?.destroy();
@@ -1059,7 +1075,7 @@ for (const b of document.querySelectorAll("#trendrng button")) b.onclick = () =>
 // Benchmark overlays: "if net worth had tracked X". Each benchmark is priced in the shown unit first (the S&P 500 in
 // bitcoin when the page shows BTC), then rebased to net worth at the range's first point, so the lines start together.
 // /api/trend "benchmarks" holds every path on one date grid; the toggles are remembered per viewer.
-const BENCH = {SPX: {label: "S&P 500", color: "--s3"}, IXIC: {label: "Nasdaq", color: "--s7"},
+const BENCH = {SPX: {label: "S&P 500", color: "--s3"},
   XAU: {label: "Gold", color: "--s4"}, BTC: {label: "Bitcoin", color: "--s2"}}, BENCH_KEY = "wl.trendBench";
 let benchOn = [];
 try { const v = JSON.parse(localStorage.getItem(BENCH_KEY) || "[]"); if (Array.isArray(v)) benchOn = v.filter(k => Object.hasOwn(BENCH, k)); } catch { /* storage blocked or bad value */ }
@@ -1095,6 +1111,54 @@ function benchPaths(t, u, inR) {
     }
     return {key: k, data, at: new Map(data.map(p => [p.date, p])), pct: data.length ? 100 * (data.at(-1).y / first.y - 1) : null};
   });
+}
+// Correlation of net worth's moves with a benchmark's: Pearson r of the paired % changes between the range's daily
+// points, weekly (last point of each week) once they span over 120 days, else per benchmark close. Sheet snapshots are
+// left out: months apart, anything that rose over the same years would look correlated. A daily point is synced in the
+// morning, so it is paired with the close before its date. n = changes used.
+function benchCorr(t, u, inR, k) {
+  const b = t.benchmarks;
+  if (!b?.dates?.length) return null;
+  const UP = u === "USD" || UNITS[u].spotOnly ? null : b.prices[u] || [];
+  const pairs = [];
+  let j = 0;
+  for (const p of inR) {
+    if (p.kind !== "daily") continue;
+    while (j + 1 < b.dates.length && b.dates[j + 1] < p.date) j++;
+    const d = b.dates[j], v = b.prices[k]?.[j], px = UP ? UP[j] : 1;
+    if (!(d < p.date) || (dayMs(p.date) - dayMs(d)) / DAY_MS > 8 || !(v > 0 && px > 0)) continue;
+    pairs.push({x: p.x, date: p.date, nw: p.y, bd: d, bv: v / px});
+  }
+  const weekly = pairs.length > 1 && (pairs.at(-1).x - pairs[0].x) / DAY_MS > 120;
+  const kept = [];
+  for (const q of pairs) {
+    const last = kept.at(-1);
+    if (weekly && last && Math.floor(last.x / (7 * DAY_MS)) === Math.floor(q.x / (7 * DAY_MS))) kept[kept.length - 1] = q;
+    else if (!weekly && last && last.bd === q.bd) continue;  // no new close since the last point (weekend, holiday)
+    else kept.push(q);
+  }
+  const xs = [], ys = [];
+  for (let i = 1; i < kept.length; i++) {
+    if (!(kept[i - 1].nw > 0)) continue;
+    xs.push(kept[i].nw / kept[i - 1].nw - 1); ys.push(kept[i].bv / kept[i - 1].bv - 1);
+  }
+  const n = xs.length;
+  if (n < 8) return {r: null, n, weekly};
+  const since = kept[0].date;
+  const mx = xs.reduce((a, v) => a + v, 0) / n, my = ys.reduce((a, v) => a + v, 0) / n;
+  let sxy = 0, sxx = 0, syy = 0;
+  for (let i = 0; i < n; i++) { const dx = xs[i] - mx, dy = ys[i] - my; sxy += dx * dy; sxx += dx * dx; syy += dy * dy; }
+  return {r: sxx && syy ? sxy / Math.sqrt(sxx * syy) : null, n, weekly, since};
+}
+function syncBenchCorr(t, u, inR) {
+  for (const btn of document.querySelectorAll("#trendbench button")) {
+    const k = btn.dataset.b, el = btn.querySelector(".corr"), c = benchHas(t, k) ? benchCorr(t, u, inR, k) : null;
+    el.textContent = c?.r != null ? (c.r < 0 ? "−" : "") + Math.abs(c.r).toFixed(2) : "";
+    btn.title = BENCH[k].label + (c?.r != null
+      ? `: correlation ${el.textContent} between its ${c.weekly ? "weekly" : "daily"} moves and net worth's since ${fmtDay(c.since)} (${c.n} changes, daily snapshots only).` +
+        " 1 = move together, 0 = unrelated, −1 = opposite. Net worth moves also include pay, spending and transfers."
+      : c ? `: too few points in this range for a correlation (${c.n} changes, needs 8).` : "");
+  }
 }
 const pctStr = p => p == null || !isFinite(p) ? "n/a" : (p < 0 ? "−" : "+") + Math.abs(p).toFixed(1) + "%";
 
@@ -1155,13 +1219,14 @@ function renderTrend(t) {
     } else $("trendchg").innerHTML = "";
   }
   syncBenchButtons(t);
+  syncBenchCorr(t, u, inR);
   // rebasing needs a positive starting net worth (a negative one would turn every gain into a loss)
   const paths = first?.y > 0 ? benchPaths(t, u, inR) : [];
   const benchNote = $("trendbenchnote");
   benchNote.hidden = !benchOn.length || !inR.length;
   benchNote.textContent = benchNote.hidden ? "" : !(first.y > 0) ? "Benchmarks need a positive net worth at the start of the range."
     : `Benchmarks: what net worth would be had it tracked each one since ${fmtDay(first.date)}` + (P ? ` (priced in ${UNITS[u].long})` : "") +
-      ". S&P 500 and Nasdaq are price indexes (dividends not included)." +
+      ". The S&P 500 is a price index (dividends not included)." +
       (paths.some(p => !p.data.length) ? ` No price on ${fmtDay(first.date)} for ${paths.filter(p => !p.data.length).map(p => BENCH[p.key].label).join(", ")}.` : "");
   $("trendlegend").innerHTML = (nD || !nS ? `<span><i></i>Daily: synced accounts${SHEETLESS ? "" : " + sheet-only items held constant"}</span>` : "") +
     (nS ? '<span><i class="ring"></i>Sheet snapshot (whole net worth)</span><span><i class="dash"></i>between snapshots</span>' : "") +
