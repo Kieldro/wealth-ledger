@@ -11,7 +11,7 @@ Sources (free, no account, verified 2026-10-21):
      read as a conservative floor-ish anchor than a sale price.
   3. Zillow's Zestimate (and rent Zestimate) through Apify's maxcopell/zillow-detail-scraper actor, because
      zillow.com bot-walls a home connection. Needs an Apify token in ~/.config/apify/token (or $APIFY_TOKEN);
-     ~$0.0036 per lookup on Apify's free plan, so weekly runs cost about $0.02 a month. Skipped without a token.
+     ~$0.0036 per lookup on Apify's free plan, so a monthly run costs well under a cent. Skipped without a token.
 Redfin, Realtor.com, Trulia, Homes.com and Movoto return 403/429 (bot walls) from a home connection, so they
 are not used.
 
@@ -35,7 +35,7 @@ import personal  # noqa: E402
 
 _CFG = personal.section("home")
 NAME = "home"
-EVERY_DAYS = 7  # Zillow refreshes its Zestimate often; ComeHome falls back quietly if its WAF objects
+EVERY_DAYS = 30  # monthly: home estimates move slowly, and ComeHome's WAF tolerates rare visits better
 ASSET = personal.require("home", "asset")
 ASSETS = (ASSET,)
 
