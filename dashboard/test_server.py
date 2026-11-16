@@ -512,6 +512,22 @@ def test_page_trend_has_a_one_week_range_before_one_month():
     assert 'if (r === "1W") return new Date(y, m, d - 7, 12).getTime();' in html
 
 
+def test_page_marks_an_estimated_correlation_so_it_cannot_pass_for_a_measured_one():
+    """Guard on the page source: a range the daily snapshots don't cover still gets a figure, but with "≈", an "est"
+    tag, its own style, a visible note and a title that says estimate. The first daily date comes from the data."""
+    import re
+    html = open(server.os.path.join(server.os.path.dirname(server.__file__), "index.html")).read()
+    for needle in ("function benchCorrEst(t, u, pts, k)", 'el.classList.toggle("est", !!est)', 'est ? "≈" + num : num',
+                   'el.insertAdjacentHTML("beforeend", "<small>est</small>")', 'id="trendcorrnote" hidden',
+                   '"≈ = estimate: net worth between snapshots is taken as a straight line', ": estimate only, ≈${num}",
+                   "daily = pts.filter(p => p.kind === \"daily\"), d0 = daily[0]", "c.n < 8 ? \"few\""):
+        assert needle in html, needle
+    est = re.search(r"\.bench button \.corr\.est \{([^}]*)\}", html).group(1)
+    assert "font-style: italic" in est and "opacity" in est and "underline dashed" in est
+    js = html[html.index("function benchCorr("):html.index("const pctStr")]
+    assert not re.search(r"20\d\d-\d\d-\d\d", js)  # no date written into the rule
+
+
 def test_allocation_splits_the_crypto_total_by_wallet(dbfile, monkeypatch):
     """The crypto total drills down to one line per wallet; an exchange's own cash row is labelled as cash. When
     the valuation isn't the number in use, the total stays one line. A wallet read in full today is live even when

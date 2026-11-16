@@ -316,6 +316,11 @@ td.neg { color: var(--neg); font-weight: 600; }
 .bench [data-b="SPX"] { --c: var(--s3); }
 .bench button .corr { font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
 .bench button .corr:empty { display: none; }
+/* an estimated correlation must not pass for a measured one: ≈, italic, dimmed, dashed underline and an "est" tag */
+.bench button .corr.est { font-style: italic; opacity: .72; white-space: nowrap; text-decoration: underline dashed; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.bench button .corr.est small { display: inline-block; margin-left: 4px; padding: 0 3px; border: 1px dashed var(--muted); border-radius: 4px;
+  font-size: 9px; font-style: normal; letter-spacing: .04em; text-transform: uppercase; }
+#trendcorrnote { margin: -2px 0 8px; font-style: italic; }
 .bench [data-b="XAU"] { --c: var(--s4); } .bench [data-b="BTC"] { --c: var(--s2); }
 /* display unit picker ($, BTC, metals, rial, dinar): one choice converts every value on the page */
 .unitpick { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-2); flex-wrap: wrap; }
@@ -421,10 +426,11 @@ footer code { font-size: 11.5px; }
   #status .pill .hide-sm { display: inline; }
   #unitpick { order: 6; margin: 8px 0 0 auto; }
   .unitpick select { max-width: 190px; border-radius: 999px; font-size: 13px; }
-  /* the four benchmarks in one even row */
-  .bench { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
-  .bench button { min-width: 0; padding: 0 4px; justify-content: center; gap: 4px; font-size: 11.5px; white-space: nowrap; }
+  /* the benchmarks in one even row; an estimate drops under its name rather than push the chip wider */
+  .bench { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .bench button { min-width: 0; padding: 0 4px; justify-content: center; flex-wrap: wrap; align-content: center; gap: 0 4px; font-size: 11.5px; white-space: nowrap; }
   .bench button i { width: 9px; flex: none; }
+  .bench button .corr { flex-basis: 100%; }  /* every figure under its name, so the three chips match */
   /* date range as one joined control across the card */
   .rng { width: 100%; flex-wrap: nowrap; gap: 0; }
   .rng button { flex: 1; min-width: 0; padding: 0; border-radius: 0; margin-left: -1px; }
@@ -522,6 +528,7 @@ document.querySelector('meta[name="theme-color"]').content = getComputedStyle(do
       <div class="trendchg num" id="trendchg"></div>
       <p class="sub" id="trendsub">Daily snapshots</p>
       <div class="bench" id="trendbench" role="group" aria-label="Compare with a benchmark"><span class="hide-sm">Compare</span><button type="button" data-b="SPX" aria-pressed="false" title="S&amp;P 500 index"><i></i>S&amp;P 500<span class="corr"></span></button><button type="button" data-b="XAU" aria-pressed="false" title="Gold (COMEX close)"><i></i>Gold<span class="corr"></span></button><button type="button" data-b="BTC" aria-pressed="false" title="Bitcoin"><i></i>Bitcoin<span class="corr"></span></button></div>
+      <p class="note" id="trendcorrnote" hidden></p>
       <div class="chartbox"><canvas id="trend" aria-label="Net worth trend" role="img"></canvas></div>
       <div class="legend" id="trendlegend"><span><i></i>Net worth (synced accounts daily + sheet-only items held constant)</span></div>
       <p class="note" id="trendbenchnote" style="margin:6px 0 0" hidden></p>
@@ -1300,10 +1307,19 @@ function benchPaths(t, u, inR) {
     return {key: k, data, at: new Map(data.map(p => [p.date, p])), pct: data.length ? 100 * (data.at(-1).y / first.y - 1) : null};
   });
 }
+// Pearson r of two equal-length lists; null under 3 pairs or when either never moves
+function pearson(xs, ys) {
+  const n = xs.length;
+  if (n < 3) return null;
+  const mx = xs.reduce((a, v) => a + v, 0) / n, my = ys.reduce((a, v) => a + v, 0) / n;
+  let sxy = 0, sxx = 0, syy = 0;
+  for (let i = 0; i < n; i++) { const dx = xs[i] - mx, dy = ys[i] - my; sxy += dx * dy; sxx += dx * dx; syy += dy * dy; }
+  return sxx && syy ? sxy / Math.sqrt(sxx * syy) : null;
+}
 // Correlation of net worth's moves with a benchmark's: Pearson r of the paired % changes between the range's daily
 // points, weekly (last point of each week) once they span over 120 days, else per benchmark close. Sheet snapshots are
 // left out: months apart, anything that rose over the same years would look correlated. A daily point is synced in the
-// morning, so it is paired with the close before its date. n = changes used.
+// morning, so it is paired with the close before its date. n = changes used; under 8 the caller shows r as an estimate.
 function benchCorr(t, u, inR, k) {
   const b = t.benchmarks;
   if (!b?.dates?.length) return null;
@@ -1330,23 +1346,63 @@ function benchCorr(t, u, inR, k) {
     if (!(kept[i - 1].nw > 0)) continue;
     xs.push(kept[i].nw / kept[i - 1].nw - 1); ys.push(kept[i].bv / kept[i - 1].bv - 1);
   }
-  const n = xs.length;
-  if (n < 8) return {r: null, n, weekly};
-  const since = kept[0].date;
-  const mx = xs.reduce((a, v) => a + v, 0) / n, my = ys.reduce((a, v) => a + v, 0) / n;
-  let sxy = 0, sxx = 0, syy = 0;
-  for (let i = 0; i < n; i++) { const dx = xs[i] - mx, dy = ys[i] - my; sxy += dx * dy; sxx += dx * dx; syy += dy * dy; }
-  return {r: sxx && syy ? sxy / Math.sqrt(sxx * syy) : null, n, weekly, since};
+  return {r: pearson(xs, ys), n: xs.length, weekly, since: kept[0]?.date};
 }
-function syncBenchCorr(t, u, inR) {
-  for (const btn of document.querySelectorAll("#trendbench button")) {
-    const k = btn.dataset.b, el = btn.querySelector(".corr"), c = benchHas(t, k) ? benchCorr(t, u, inR, k) : null;
-    el.textContent = c?.r != null ? (c.r < 0 ? "−" : "") + Math.abs(c.r).toFixed(2) : "";
-    btn.title = BENCH[k].label + (c?.r != null
-      ? `: correlation ${el.textContent} between its ${c.weekly ? "weekly" : "daily"} moves and net worth's since ${fmtDay(c.since)} (${c.n} changes, daily snapshots only).` +
-        " 1 = move together, 0 = unrelated, −1 = opposite. Net worth moves also include pay, spending and transfers."
-      : c ? `: too few points in this range for a correlation (${c.n} changes, needs 8).` : "");
+// The same figure for a range that reaches back before the daily snapshots: an estimate. Net worth is read off a
+// straight line between the range's real points (never before the first or after the last: no slope is invented) at
+// the benchmark's own dates, a day on (the morning rule above), weekly once the points span over 120 days.
+function benchCorrEst(t, u, pts, k) {
+  const b = t.benchmarks;
+  pts = pts.filter((p, i) => p.x !== pts[i + 1]?.x);  // one point per day
+  if (!b?.dates?.length || pts.length < 2) return {r: null, n: 0};
+  const UP = u === "USD" || UNITS[u].spotOnly ? null : b.prices[u] || [];
+  const first = pts[0], last = pts.at(-1), weekly = (last.x - first.x) / DAY_MS > 120, kept = [];
+  let j = 0;
+  for (let i = 0; i < b.dates.length; i++) {
+    const x = dayMs(b.dates[i]) + DAY_MS, v = b.prices[k]?.[i], px = UP ? UP[i] : 1;
+    if (x < first.x || x > last.x || !(v > 0 && px > 0)) continue;
+    while (j + 2 < pts.length && pts[j + 1].x <= x) j++;
+    const p = pts[j], q = pts[j + 1], row = {x, nw: p.y + (q.y - p.y) * (x - p.x) / (q.x - p.x), bv: v / px};
+    if (weekly && kept.length && Math.floor(kept.at(-1).x / (7 * DAY_MS)) === Math.floor(x / (7 * DAY_MS))) kept[kept.length - 1] = row;
+    else kept.push(row);
   }
+  const xs = [], ys = [];
+  for (let i = 1; i < kept.length; i++) {
+    if (!(kept[i - 1].nw > 0)) continue;
+    xs.push(kept[i].nw / kept[i - 1].nw - 1); ys.push(kept[i].bv / kept[i - 1].bv - 1);
+  }
+  return {r: pearson(xs, ys), n: xs.length, weekly, since: first.date};
+}
+// Each chip's figure for the range. Measured: 8+ daily changes and a range that starts no earlier than the daily
+// snapshots do (their first date comes from the data). Otherwise an estimate, shown so it can't pass for a measured
+// one: "few" = under 8 daily changes; "line" = straight lines between sheet snapshots; "short" = the range starts
+// before the daily snapshots and holds nothing else, so only the part since they began counts.
+function syncBenchCorr(t, u, inR, pts, start) {
+  const real = inR.filter(p => !p.est), daily = pts.filter(p => p.kind === "daily"), d0 = daily[0];
+  const early = !d0 || (pts[0].x < d0.x && start < d0.x);  // the range reaches back before the dailies, where there is data
+  const kinds = new Set();
+  let few = 0;
+  for (const btn of document.querySelectorAll("#trendbench button")) {
+    const k = btn.dataset.b, el = btn.querySelector(".corr");
+    const c = !benchHas(t, k) ? null : early ? benchCorrEst(t, u, real, k) : benchCorr(t, u, inR, k);
+    const num = c?.r != null ? (c.r < 0 ? "−" : "") + Math.abs(c.r).toFixed(2) : "";
+    const est = !num ? "" : !early ? (c.n < 8 ? "few" : "") : real.some(p => p.kind !== "daily") ? "line" : "short";
+    el.classList.toggle("est", !!est);
+    el.textContent = !c ? "" : !num ? "—" : est ? "≈" + num : num;
+    if (est) { el.insertAdjacentHTML("beforeend", "<small>est</small>"); kinds.add(est); if (est === "few") few = c.n; }
+    const key = " 1 = move together, 0 = unrelated, −1 = opposite. Net worth moves also include pay, spending and transfers.";
+    const steps = c && `${c.weekly ? "weekly" : "daily"} moves`;
+    btn.title = BENCH[k].label + (!c ? "" : !num ? `: too few points in this range for a correlation (${c.n} changes, needs 3).`
+      : est === "few" ? `: estimate only, ≈${num}, from just ${c.n} daily changes in this range (a measured correlation needs 8), so it can swing a lot.` + key
+      : est === "line" ? `: estimate only, ≈${num}. ${d0 ? `This range reaches back before the daily snapshots began (${fmtDay(d0.date)})` : "There are no daily snapshots yet"}, so net worth between snapshots is taken as a straight line (${steps} since ${fmtDay(c.since)}, ${c.n} changes). It mostly shows the long-run trend, not real day-to-day co-movement.` + key
+      : est === "short" ? `: estimate only, ≈${num}. This range starts before the daily snapshots began (${fmtDay(d0.date)}), so it covers only the part since then (${steps}, ${c.n} changes), not the whole range.` + key
+      : `: correlation ${num} between its ${steps} and net worth's since ${fmtDay(c.since)} (${c.n} changes, daily snapshots only).` + key);
+  }
+  const note = $("trendcorrnote"), since = d0 ? ` Measured correlations use the daily snapshots since ${fmtDay(d0.date)} (${daily.length - 1} changes).` : "";
+  note.hidden = !kinds.size;
+  note.textContent = kinds.has("line") ? "≈ = estimate: net worth between snapshots is taken as a straight line, so these mostly reflect the long-run trend, not real day-to-day co-movement." + since
+    : kinds.has("short") ? `≈ = estimate: this range starts before the daily snapshots began, so these cover only the part since ${fmtDay(d0.date)}, not the whole range.`
+    : kinds.has("few") ? `≈ = estimate: only ${few} daily changes in this range; a measured correlation needs 8.` + since : "";
 }
 const pctStr = p => p == null || !isFinite(p) ? "n/a" : (p < 0 ? "−" : "+") + Math.abs(p).toFixed(1) + "%";
 
@@ -1407,7 +1463,7 @@ function renderTrend(t) {
     } else $("trendchg").innerHTML = "";
   }
   syncBenchButtons(t);
-  syncBenchCorr(t, u, inR);
+  syncBenchCorr(t, u, inR, pts, start);
   // rebasing needs a positive starting net worth (a negative one would turn every gain into a loss)
   const paths = first?.y > 0 ? benchPaths(t, u, inR) : [];
   const benchNote = $("trendbenchnote");
