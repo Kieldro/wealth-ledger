@@ -747,9 +747,9 @@ def test_login_markets_shows_the_latest_close_of_each_symbol_in_order_with_its_d
     assert html.count("<svg") == 3 and "<script" not in html and "href" not in html  # inline icons only: the CSP allows nothing else
     assert _mkt(html) == (
         f'<div class="mkt" title="Market closes as of {_day(0)}">'
-        f'<div><span class="n">S&amp;P 500</span><b>6,812</b><i class="up" title="Since the close before, {_day(5)}">+0.2%</i></div>'
-        '<div><span class="n">Gold</span><b>$4,105</b></div>'  # one close stored: no move to show
         f'<div><span class="n">Bitcoin</span><b>$96,250</b><i class="down" title="Since the close before, {_day(1)}">−0.8%</i></div>'
+        '<div><span class="n">Gold</span><b>$4,105</b></div>'  # one close stored: no move to show
+        f'<div><span class="n">S&amp;P 500</span><b>6,812</b><i class="up" title="Since the close before, {_day(5)}">+0.2%</i></div>'
         '</div>')  # the Nasdaq and silver are stored, not listed
 
 
@@ -765,7 +765,7 @@ def test_login_markets_move_needs_a_recent_valid_close_before(dbfile):
 
 def test_login_page_never_shows_a_stored_symbol_outside_the_fixed_benchmark_list(dbfile):
     """The sign-in page is public: a symbol the ledger happens to store (a holding, a display unit) must not reach it."""
-    assert [m[0] for m in server.LOGIN_MARKETS] == ["SPX", "XAU", "BTC"]
+    assert [m[0] for m in server.LOGIN_MARKETS] == ["BTC", "XAU", "SPX"]
     _prices(dbfile, [(_day(0), "SPX", 6811.6, "y"), (_day(0), "IXIC", 22480.3, "y"), (_day(0), "XAG", 51.5, "y"),
                      (_day(0), "IRR", 0.00000054, "y"), (_day(0), "ZZTOP", 31337.0, "manual"), (_day(0), "ETH", 3410.0, "c")])
     sent = []

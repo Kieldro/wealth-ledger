@@ -1342,8 +1342,8 @@ _BTC_ICON = ('<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" 
              'stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>')
 _GOLD_ICON = ('<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="8" fill="#d9a514"/><path d="M5.3 10.4l1.2-4.6h3l1.2 '
               '4.6z" fill="none" stroke="#fff" stroke-width="1.3" stroke-linejoin="round"/></svg>')
-LOGIN_MARKETS = (("SPX", "S&P 500", "", _INDEX_ICON % "#1f9d76"), ("XAU", "Gold", "$", _GOLD_ICON),
-                 ("BTC", "Bitcoin", "$", _BTC_ICON))  # symbol, label, value prefix, icon
+LOGIN_MARKETS = (("BTC", "Bitcoin", "$", _BTC_ICON), ("XAU", "Gold", "$", _GOLD_ICON),
+                 ("SPX", "S&P 500", "", _INDEX_ICON % "#1f9d76"))  # symbol, label, value prefix, icon (shown in this order)
 _INFL_ICON = ('<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="8" fill="#6f7fe8"/><g fill="none" stroke="#fff" '
               'stroke-width="1.3" stroke-linecap="round"><circle cx="5.9" cy="5.9" r="1.25"/><circle cx="10.1" cy="10.1" r="1.25"/>'
               '<path d="M10.6 5.4L5.4 10.6"/></g></svg>')
