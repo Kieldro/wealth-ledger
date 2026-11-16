@@ -100,6 +100,7 @@ button:disabled { opacity: .6; cursor: progress; }
 /* section heads: tap to fold a section; the figure on the right is its one-line conclusion */
 .sechd { display: flex; align-items: baseline; gap: 10px; cursor: pointer; margin: -4px -6px 2px; padding: 4px 6px; border-radius: 8px; }
 .sechd:focus-visible { outline: 2px solid var(--accent); }
+.sechd { user-select: none; -webkit-user-select: none; }  /* a heading is a button and a drag handle, not text to select */
 .sechd h2 { margin: 0; flex: none; }
 .sechd .kf { margin-left: auto; font-size: 12.5px; color: var(--text-2); text-align: right; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .sechd h2 { font-size: 14.5px; font-weight: 650; letter-spacing: -.005em; color: var(--text); }
@@ -115,6 +116,33 @@ section.card { scroll-margin-top: 52px; }
   background: color-mix(in srgb, var(--bg) 86%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
 .jump button { flex: none; color: var(--text-2); background: none; border-color: transparent; padding: 4px 10px; }
 .jump button:hover { color: var(--text); background: var(--surface); border-color: var(--border); }
+/* reordering the cards: drag one by its heading (mouse), or Reorder mode: headings only, each with ▲/▼ */
+.jump .reorderbtn { position: sticky; right: 0; margin-left: auto; background: var(--bg); }
+.reorderbtn { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
+.reorderbtn svg { flex: none; }
+.reorderbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 8px; padding: 8px 0; margin: -4px 0 6px; font-size: 12.5px;
+  background: color-mix(in srgb, var(--bg) 86%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+.reorderbar[hidden] { display: none; }
+.reorderbar .note { flex: 1; min-width: 0; }
+.reorderbar button:disabled { opacity: .45; cursor: default; }
+#reorderdone { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.sechd .mv { display: none; flex: none; align-self: center; gap: 4px; }
+.mv button { width: 26px; height: 22px; padding: 0; border-radius: 7px; font-size: 8px; line-height: 1; color: var(--text-2); }
+.mv button:disabled { opacity: .3; cursor: default; }
+body.reordering :is(#jump, #reorderbtn2, #totop) { display: none; }
+body.reordering .grid > section.card { scroll-margin-top: 72px; }
+body.reordering .grid > section.card > .secbody { display: none; }
+body.reordering .sechd { cursor: grab; margin-bottom: -4px; align-items: center; }
+body.reordering .sechd h2 { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body.reordering .sechd .kf { flex-shrink: 99; }  /* the figure gives way before the card's name does */
+body.reordering .sechd::after { display: none; }
+body.reordering .sechd .mv { display: inline-flex; }
+body.dragging { cursor: grabbing; user-select: none; -webkit-user-select: none; }
+body.dragging .sechd { cursor: grabbing; }
+.grid > section.card.dragsrc { opacity: .45; border-style: dashed; }
+#dropline { position: fixed; z-index: 20; border-radius: 2px; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); pointer-events: none; }
+#dragghost { position: fixed; left: 0; top: 0; z-index: 21; padding: 5px 12px; border-radius: 999px; font-size: 12.5px; font-weight: 600; white-space: nowrap;
+  background: var(--surface); border: 1px solid var(--accent); box-shadow: 0 4px 14px rgb(0 0 0 / .35); pointer-events: none; }
 #agebar { margin-bottom: 10px; }
 #agebar:empty { display: none; }
 #totop { position: fixed; right: 10px; bottom: 12px; z-index: 6; box-shadow: 0 2px 10px rgb(0 0 0 / .25); opacity: .92; }
@@ -122,7 +150,7 @@ table:empty::before { content: "Loading…"; font-size: 12px; color: var(--muted
 #totop[hidden] { display: none; }
 .grid > section.card[hidden], .jump button[hidden], #connect[hidden] { display: none; }
 /* nothing linked yet: only the connect card, not a page of zeroes */
-body.unconnected :is(#hero, .grid, #jump, #agebar, #status .pill) { display: none; }
+body.unconnected :is(#hero, .grid, #jump, #reorderbtn2, #agebar, #status .pill) { display: none; }
 #connect { margin: 0 0 12px; padding: 22px 22px 18px; max-width: 720px; }
 #connect h2 { font-size: 17px; font-weight: 650; letter-spacing: -.01em; color: var(--text); margin: 0 0 4px; }
 body.sheetless .sheetnote { display: none; }
@@ -347,8 +375,9 @@ footer code { font-size: 11.5px; }
 .err { color: var(--neg); font-size: 13px; }
 
 @media (min-width: 1001px) {  /* wide screens keep assets, trend and liabilities on top; drafts sit beside the cards they pay */
-  #alloccard, #trendcard, #liabcard { order: -1; }
-  #alloccard { grid-row: span 2; }  /* trend and liabilities stack beside it */
+  .grid:not(.custom) > :is(#alloccard, #trendcard, #liabcard) { order: -1; }
+  .grid:not(.custom) > #alloccard, .grid.custom > .tall { grid-row: span 2; }  /* trend and liabilities stack beside it */
+  .grid.custom > section.card { grid-column: span var(--w, 12); }  /* a viewer's own order: widths from fitRows() */
 }
 @media (max-width: 1000px) {
   .span-7, .span-5, .span-6, .span-4, .span-8 { grid-column: span 12; }
@@ -356,6 +385,8 @@ footer code { font-size: 11.5px; }
 @media (pointer: coarse), (max-width: 640px) {  /* fingers: nothing tappable under 44px */
   button, .unitpick select, .filters input, .filters select { min-height: 44px; padding-left: 14px; padding-right: 14px; }
   .rng button, .bench button, .seg button { min-height: 44px; min-width: 44px; }
+  .mv button { width: 44px; height: 44px; padding: 0; font-size: 11px; }
+  body.reordering .sechd { padding-top: 0; padding-bottom: 0; margin-top: -8px; margin-bottom: -8px; }
   .toggle { min-height: 44px; }
   .toggle input { width: 20px; height: 20px; }
   tr.cat td, tr.acct td { padding-top: 13px; padding-bottom: 13px; }
@@ -370,6 +401,7 @@ footer code { font-size: 11.5px; }
 }
 @media (max-width: 640px) {
   .show-sm { display: block; }
+  .pagefoot { display: flex; justify-content: space-between; align-items: center; }
   .card p.sub { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; cursor: pointer; }
   .card p.sub.open { display: block; }
   #accts td.name, #drafts td.name, #recent td.name, #cards td.name { max-width: 0; width: 99%; }
@@ -445,7 +477,11 @@ document.querySelector('meta[name="theme-color"]').content = getComputedStyle(do
       <form method="post" action="/logout" class="logout hide-sm"><button type="submit" title="Sign out of this device">Log out</button></form>
     </div>
   </header>
-  <nav class="jump hide-sm" id="jump" aria-label="Jump to a section"></nav>
+  <nav class="jump hide-sm" id="jump" aria-label="Jump to a section"><button type="button" class="reorderbtn" id="reorderbtn" title="Reorder the cards (or drag a card by its heading)"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 20V5M4 9l4-4 4 4M16 4v15M12 15l4 4 4-4"/></svg>Reorder</button></nav>
+  <div class="reorderbar" id="reorderbar" role="group" aria-label="Reorder the cards" hidden>
+    <b class="hide-sm">Reorder cards</b><span class="note" id="reordermsg" role="status"></span>
+    <button type="button" id="reorderreset" title="Back to the default order">Reset order</button><button type="button" id="reorderdone">Done</button>
+  </div>
   <div class="status" id="agebar"></div>
   <div class="alert" id="odwarn" role="alert"></div>
   <div class="problems" id="problems"></div>
@@ -639,6 +675,7 @@ document.querySelector('meta[name="theme-color"]').content = getComputedStyle(do
 
   <div class="pagefoot show-sm">
     <form method="post" action="/logout" class="logout show-sm"><button type="submit" title="Sign out of this device">Log out</button></form>
+    <button type="button" class="reorderbtn" id="reorderbtn2"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 20V5M4 9l4-4 4 4M16 4v15M12 15l4 4 4-4"/></svg>Reorder cards</button>
   </div>
   <button type="button" id="totop" class="show-sm" hidden aria-label="Back to top">↑ Top</button>
   <footer id="footer">
@@ -760,14 +797,163 @@ for (const sec of document.querySelectorAll(".grid > section.card")) {
   while (sec.firstChild) body.appendChild(sec.firstChild);
   hd.className = "sechd"; hd.tabIndex = 0; hd.setAttribute("role", "button"); hd.setAttribute("aria-controls", sec.id);
   fig.className = "kf"; fig.id = "kf-" + sec.id;
-  hd.append(h2, fig); sec.append(hd, body);
-  hd.addEventListener("click", () => setOpen(sec, sec.classList.contains("collapsed"), true));
-  hd.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); hd.click(); } });
+  const mv = document.createElement("span");  // shown in Reorder mode
+  mv.className = "mv";
+  for (const [d, dir, ch] of [[-1, "up", "▲"], [1, "down", "▼"]]) {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = ch; b.title = "Move " + dir; b.setAttribute("aria-label", `Move ${sec.dataset.nav} ${dir}`);
+    b.addEventListener("click", e => { e.stopPropagation(); stepSec(sec, d, b); });
+    mv.append(b);
+  }
+  hd.append(h2, fig, mv); sec.append(hd, body);
+  hd.addEventListener("click", () => { if (!reordering()) setOpen(sec, sec.classList.contains("collapsed"), true); });
+  hd.addEventListener("keydown", e => { if (e.target === hd && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); hd.click(); } });
   setOpen(sec, secState[sec.id] ?? (!PHONE.matches || PHONE_OPEN.includes(sec.id)));
   const b = document.createElement("button");
   b.type = "button"; b.textContent = sec.dataset.nav; b.dataset.sec = sec.id; b.addEventListener("click", () => goSec(sec.id));
   $("jump").append(b);
 }
+
+// The cards reorder: drag one by its heading with a mouse, or turn on Reorder for ▲/▼ buttons (touch, keyboard). The
+// order is this viewer's (wl.order, a list of section ids): unknown ids are ignored and a card the list doesn't name
+// keeps its default place. Nothing saved = the built-in order, untouched.
+const ORDER_KEY = "wl.order", GRID = document.querySelector(".grid"), reordering = () => document.body.classList.contains("reordering");
+const secs = () => [...GRID.querySelectorAll(":scope > section.card")], SEC_IDS = secs().map(s => s.id);
+// as laid out: until an order is saved, wide screens lift assets, trend and liabilities to the top with CSS order
+const onScreen = list => list.map((s, i) => [+getComputedStyle(s).order || 0, i, s]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map(a => a[2]);
+const shownSecs = () => onScreen(secs().filter(s => !s.hidden));
+// A custom order keeps the 12-column grid without holes: the last card of a row widens to fill it, and Assets still
+// stands two rows tall when the next two cards can stack beside it (as in the built-in order). --w is the span.
+function fitRows() {
+  if (!GRID.classList.contains("custom")) return;
+  const vis = shownSecs(), w = new Map(vis.map(s => [s, +(s.className.match(/\bspan-(\d+)/)?.[1] || 12)]));
+  let col = 0;
+  const fill = i => { if (col && col < 12) w.set(vis[i], w.get(vis[i]) + 12 - col); col = 0; };
+  for (let i = 0; i < vis.length; i++) {
+    const s = vis[i], n = w.get(s);
+    if (col + n > 12) fill(i - 1);
+    const side = 12 - n, tall = s.id === "alloccard" && !col && i + 2 < vis.length && w.get(vis[i + 1]) <= side && w.get(vis[i + 2]) <= side;
+    s.classList.toggle("tall", tall);
+    if (tall) { w.set(vis[i + 1], side); w.set(vis[i + 2], side); i += 2; } else col = (col + n) % 12;
+  }
+  fill(vis.length - 1);
+  for (const [s, n] of w) s.style.setProperty("--w", n);
+}
+function syncOrder() {  // after any change to the order, or to which cards show
+  for (const s of secs()) $("jump").append(document.querySelector(`#jump button[data-sec="${s.id}"]`));
+  $("jump").append($("reorderbtn"));
+  fitRows();
+  const vis = shownSecs();
+  vis.forEach((s, i) => { const [up, down] = s.querySelectorAll(".mv button"); up.disabled = !i; down.disabled = i === vis.length - 1; });
+  $("reorderreset").disabled = !GRID.classList.contains("custom");
+}
+function setOrder(ids) {  // null: the built-in order
+  const full = (ids || []).filter((id, i, a) => SEC_IDS.includes(id) && a.indexOf(id) === i);
+  SEC_IDS.forEach((id, i) => { if (!full.includes(id)) full.splice(i ? full.indexOf(SEC_IDS[i - 1]) + 1 : 0, 0, id); });
+  if (secs().some((s, i) => s.id !== full[i])) for (const id of full) GRID.append($(id));
+  GRID.classList.toggle("custom", !!ids);
+  syncOrder();
+}
+let lastMoved = null;
+function place(sec, target, after) {
+  if (!GRID.classList.contains("custom")) setOrder(onScreen(secs()).map(s => s.id));  // start from what's on screen
+  target[after ? "after" : "before"](sec);
+  try { localStorage.setItem(ORDER_KEY, JSON.stringify(secs().map(s => s.id))); } catch { /* storage blocked: it lasts until reload */ }
+  syncOrder();
+  const vis = shownSecs();
+  lastMoved = sec; $("reordermsg").textContent = `${sec.dataset.nav} is now ${vis.indexOf(sec) + 1} of ${vis.length}.`;
+}
+function stepSec(sec, d, btn) {
+  const vis = shownSecs(), to = vis[vis.indexOf(sec) + d];
+  if (!to) return;
+  place(sec, to, d > 0);
+  (btn.disabled ? btn.parentNode.querySelector("button:not(:disabled)") : btn)?.focus({preventScroll: true});  // moving a node drops focus
+  sec.scrollIntoView({block: "nearest"});
+}
+let reorderFrom = null;
+function setReorder(on) {
+  document.body.classList.toggle("reordering", on);
+  $("reorderbar").hidden = !on;
+  if (on) {
+    lastMoved = null; $("reordermsg").textContent = matchMedia("(pointer: coarse)").matches ? "Move a card with its arrows." : "Drag a heading, or use the arrows.";
+    $("reorderdone").focus({preventScroll: true});
+    if (GRID.getBoundingClientRect().top < 0) shownSecs()[0]?.scrollIntoView({block: "start"});
+  } else {
+    window.dispatchEvent(new Event("resize"));  // charts hidden with their cards take their size now
+    reorderFrom?.focus({preventScroll: true});
+    lastMoved?.scrollIntoView({block: "start"});
+  }
+}
+for (const b of document.querySelectorAll(".reorderbtn")) b.addEventListener("click", () => { reorderFrom = b; setReorder(true); });
+$("reorderdone").addEventListener("click", () => setReorder(false));
+$("reorderreset").addEventListener("click", () => {
+  try { localStorage.removeItem(ORDER_KEY); } catch { /* storage blocked */ }
+  setOrder(null);
+  lastMoved = null; $("reordermsg").textContent = "Back to the default order."; $("reorderdone").focus({preventScroll: true});
+});
+matchMedia("(min-width: 1001px)").addEventListener("change", syncOrder);  // which card is first follows the layout
+{
+  let saved = null;
+  try { const v = JSON.parse(localStorage.getItem(ORDER_KEY) || "null"); if (Array.isArray(v) && v.some(id => SEC_IDS.includes(id))) saved = v; } catch { /* storage blocked or bad value */ }
+  setOrder(saved);
+}
+// Dragging, mouse or pen only (a finger on a heading scrolls the page): a line shows where the card would land.
+let drag = null;
+const dropLine = document.createElement("div"), ghost = document.createElement("div");
+dropLine.id = "dropline"; ghost.id = "dragghost"; dropLine.hidden = ghost.hidden = true; document.body.append(dropLine, ghost);
+function dragAim() {
+  const d = drag, el = document.elementFromPoint(d.x, d.y)?.closest(".grid > section.card");
+  d.to = null;
+  if (el && el !== d.sec) {
+    const r = el.getBoundingClientRect(), beside = r.width < GRID.clientWidth - 24;  // shares its row: left/right halves
+    const after = beside ? d.x > r.left + r.width / 2 : d.y > r.top + r.height / 2, vis = shownSecs();
+    if (vis.indexOf(el) - vis.indexOf(d.sec) !== (after ? -1 : 1)) {  // not where it already is
+      const g = (parseFloat(getComputedStyle(GRID).rowGap) || 12) / 2 + 2, px = v => Math.round(v) + "px";
+      d.to = el; d.after = after;
+      Object.assign(dropLine.style, beside ? {left: px(after ? r.right + g - 4 : r.left - g), top: px(r.top), width: "4px", height: px(r.height)}
+        : {left: px(r.left), top: px(after ? r.bottom + g - 4 : r.top - g), width: px(r.width), height: "4px"});
+    }
+  }
+  dropLine.hidden = !d.to;
+  ghost.style.transform = `translate(${d.x + 14}px, ${d.y + 16}px)`;
+}
+function dragEnd(drop) {
+  const d = drag;
+  drag = null;
+  if (!d?.on) return;
+  document.body.classList.remove("dragging"); d.sec.classList.remove("dragsrc"); dropLine.hidden = ghost.hidden = true;
+  const stop = e => { e.stopPropagation(); e.preventDefault(); };  // the click that ends a drag must not fold the card
+  addEventListener("click", stop, {capture: true, once: true}); setTimeout(() => removeEventListener("click", stop, true));
+  if (drop && d.to) place(d.sec, d.to, d.after);
+}
+GRID.addEventListener("pointerdown", e => {
+  const hd = e.target.closest(".sechd");
+  if (hd && !e.button && e.pointerType !== "touch" && !e.target.closest("button")) drag = {sec: hd.parentNode, hd, id: e.pointerId, x0: e.clientX, y0: e.clientY};
+});
+addEventListener("pointermove", e => {
+  const d = drag;
+  if (!d || e.pointerId !== d.id) return;
+  d.x = e.clientX; d.y = e.clientY;
+  if (!d.on) {
+    if (Math.hypot(d.x - d.x0, d.y - d.y0) < 6) return;  // still a click
+    d.on = true;
+    try { d.hd.setPointerCapture(d.id); } catch { /* pointer already gone */ }
+    getSelection()?.removeAllRanges();
+    document.body.classList.add("dragging"); d.sec.classList.add("dragsrc");
+    ghost.textContent = d.sec.dataset.nav; ghost.hidden = false;
+    const edge = 64, tick = () => {  // scroll while the pointer is held near the top or bottom edge
+      if (drag !== d) return;  // dropped or cancelled: the loop ends itself
+      const dy = d.y < edge ? d.y - edge : d.y > innerHeight - edge ? d.y - (innerHeight - edge) : 0;
+      if (dy) { scrollBy({top: dy / 3, behavior: "instant"}); dragAim(); }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+  dragAim();
+});
+addEventListener("pointerup", e => { if (drag && e.pointerId === drag.id) dragEnd(true); });
+addEventListener("pointercancel", e => { if (drag && e.pointerId === drag.id) dragEnd(false); });
+addEventListener("keydown", e => { if (e.key === "Escape") { if (drag?.on) dragEnd(false); else if (reordering()) setReorder(false); } });
 for (const el of document.querySelectorAll(".hero .golink")) {
   const [sec, table] = el.dataset.go === "asset" ? ["alloccard", "cats"] : ["liabcard", "liabcats"];
   const go = () => {
@@ -845,6 +1031,7 @@ function renderSummary(s) {
     sec.hidden = off;
     const nb = document.querySelector(`#jump button[data-sec="${sec.id}"]`); if (nb) nb.hidden = off;
   }
+  syncOrder();
   if (s.sheetless) $("footer").innerHTML = "<b>Sources:</b> balances, holdings and transactions synced once a day from your linked accounts (SimpleFIN, read-only). Categories are matched from merchant names, so they are approximate.";
   const sync = (st.problems || []).filter(p => !OD_LINE.test(p));  // overdraft lines get their own banner
   const bad = (st.rc && st.rc !== 0) || sync.length;

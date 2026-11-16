@@ -490,6 +490,20 @@ def test_page_sections_fold_have_a_nav_label_and_a_key_figure_slot():
         assert f'kf("{sid}"' in html, sid
 
 
+def test_page_cards_reorder_by_drag_or_buttons_and_remember_the_order():
+    """Guard on the page source (behaviour is checked in a browser by hand): the order is the viewer's own, it can be
+    reset, every card gets labelled move buttons, and the wide-screen layout rules stand aside for a custom order."""
+    html = open(server.os.path.join(server.os.path.dirname(server.__file__), "index.html")).read()
+    for needle in ('const ORDER_KEY = "wl.order"', "localStorage.setItem(ORDER_KEY", "localStorage.removeItem(ORDER_KEY)",
+                   'id="reorderbtn"', 'id="reorderbtn2"', 'id="reorderdone"', '>Reset order</button>',
+                   'b.setAttribute("aria-label", `Move ${sec.dataset.nav} ${dir}`)', '[[-1, "up", "▲"], [1, "down", "▼"]]',
+                   'e.pointerType !== "touch"', 'id="reordermsg" role="status"', "SEC_IDS.includes(id)",
+                   ".grid:not(.custom) > :is(#alloccard, #trendcard, #liabcard) { order: -1; }",
+                   ".grid.custom > section.card { grid-column: span var(--w, 12); }"):
+        assert needle in html, needle
+    assert "draggable=" not in html and "dragstart" not in html  # pointer events: HTML5 drag-and-drop fails on touch
+
+
 def test_allocation_splits_the_crypto_total_by_wallet(dbfile, monkeypatch):
     """The crypto total drills down to one line per wallet; an exchange's own cash row is labelled as cash. When
     the valuation isn't the number in use, the total stays one line. A wallet read in full today is live even when
