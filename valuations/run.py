@@ -4,6 +4,8 @@
 Each provider is a module in this package exposing
     NAME: str                       short id, e.g. "metals"
     EVERY_DAYS: int                 1 = daily, 30 = monthly (skipped if a newer snapshot exists)
+    MONTHLY: bool                   optional: instead of EVERY_DAYS, once a month from the 1st (retried daily
+                                    until one succeeds that month)
     ASSETS: tuple[str, ...]         balance-sheet labels it produces (used for the freshness check)
     fetch() -> list[dict]           [{asset: <balance-sheet label>, value: float USD, source: str, detail: dict}]
 `asset` must be the exact balance-sheet row label in networth.py (e.g. "Total metals value", "Home");
@@ -39,8 +41,11 @@ def providers():
 
 
 def due(db, mod) -> bool:
-    every = getattr(mod, "EVERY_DAYS", 1)
-    cutoff = (date.today() - timedelta(days=every - 1)).isoformat()
+    today = date.today()
+    if getattr(mod, "MONTHLY", False):
+        cutoff = today.replace(day=1).isoformat()
+    else:
+        cutoff = (today - timedelta(days=getattr(mod, "EVERY_DAYS", 1) - 1)).isoformat()
     for asset in getattr(mod, "ASSETS", ()):
         if not db.execute("SELECT 1 FROM valuations WHERE asset=? AND snapshot_date>=?", (asset, cutoff)).fetchone():
             return True

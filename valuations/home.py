@@ -35,7 +35,7 @@ import personal  # noqa: E402
 
 _CFG = personal.section("home")
 NAME = "home"
-EVERY_DAYS = 30  # monthly: home estimates move slowly, and ComeHome's WAF tolerates rare visits better
+MONTHLY = True  # on the 1st: home estimates move slowly, and ComeHome's WAF tolerates rare visits better
 ASSET = personal.require("home", "asset")
 ASSETS = (ASSET,)
 

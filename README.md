@@ -20,6 +20,7 @@ details all live in `~/.config/wealth-ledger/personal.json`, outside the repo.
 | `plaid/plaid_sync.py` | Plaid -> SQLite, for accounts SimpleFIN can't reach (link / relink / sync); also stores card credit limits (`balances.limit`) |
 | `networth.py` | Net worth = live synced balances + the sheet's manual rows + valuations |
 | `sheet_marks.py` | Marks balance-sheet rows nothing keeps current (yellow label + note); unmarks them once they're live. Formatting only |
+| `sheet_estimates.py` | Writes the latest home valuation, its date and the estimates behind it to the sheet's `estimates` tab (only that tab; only when it changed), so the balance sheet can point at it |
 | `valuations/` | Daily/monthly estimates: `metals`, `crypto`, `home`, `cars`; `run.py` runs whichever are due |
 | `insights/overdraft.py` | Overdraft check: projects recurring bills, card autopays and pay 31 days ahead per checking account |
 | `insights/zelle_memos.py` | Adds the note typed on each Zelle (from the bank's Zelle emails, read with `gws`) to the matching transaction's memo |
