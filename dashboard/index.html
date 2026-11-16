@@ -155,6 +155,22 @@ tr.short td { background: color-mix(in srgb, var(--neg) 9%, transparent); }
 /* hero */
 .hero { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 12px; }
 .hero .card { padding: 16px 18px; }
+/* Assets / Liabilities open the Allocation card with that side's line items showing */
+.hero .golink { cursor: pointer; transition: border-color .12s; }
+.hero .golink:hover { border-color: var(--muted); }
+.hero .golink .label::after { content: " ›"; color: var(--muted); }
+/* public market closes (the sign-in page's line, filled in by the server): S&P 500, gold, bitcoin, inflation */
+.mktbar { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 18px; margin: 0 0 10px; font-variant-numeric: tabular-nums; }
+.mktbar:empty { display: none; }
+.mktbar .mkt { display: flex; flex-wrap: wrap; gap: 4px 18px; }
+.mktbar .mkt > div { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+.mktbar .n { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-2); align-self: center; }
+.mktbar svg { width: 14px; height: 14px; flex: none; }
+.mktbar b { font-size: 13px; font-weight: 600; }
+.mktbar i { font-style: normal; font-size: 11.5px; color: var(--muted); }
+.mktbar i.up { color: var(--pos); }
+.mktbar i.down { color: var(--neg); }
+.mktbar .upd { margin: 0; font-size: 11.5px; color: var(--muted); }
 .label { font-size: 12.5px; font-weight: 500; color: var(--text-2); }
 .big { font-size: 38px; font-weight: 650; letter-spacing: -.028em; line-height: 1.1; margin: 4px 0 8px; }
 .mid { font-size: 22px; font-weight: 600; letter-spacing: -.015em; margin: 4px 0 4px; }
@@ -218,6 +234,7 @@ tr.sub td:first-child { padding-left: 26px; }
 .filters input { flex: 1 1 200px; max-width: 320px; }
 .filters input:focus, .filters select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent); }
 tr.cat:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.hero .golink:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 img.ico { width: 16px; height: 16px; border-radius: 3px; vertical-align: -3px; margin-right: 6px; }
 tr.acct { cursor: pointer; }
 tr.acct:hover td { background: var(--surface-2); }
@@ -433,11 +450,13 @@ document.querySelector('meta[name="theme-color"]').content = getComputedStyle(do
 
   <section class="card" id="connect" hidden></section>
 
+  <div class="mktbar">{{markets}}</div>
+
   <section class="hero" id="hero">
     <div class="card"><div class="label">Net worth</div>
       <div class="big" id="nw">—</div><div class="nwunit num" id="nwunit"></div><div class="chips" id="chg"></div><div class="note" id="nwage" style="margin-top:6px"></div><div class="note" id="nwnote" style="margin-top:6px"></div></div>
-    <div class="card"><div class="label">Assets</div><div class="mid num" id="assets">—</div><div class="note" id="assetsnote"></div></div>
-    <div class="card"><div class="label">Liabilities</div><div class="mid num" id="liabs">—</div><div class="note" id="liabsnote"></div></div>
+    <div class="card golink" data-go="asset" tabindex="0" role="button" title="Show every asset"><div class="label">Assets</div><div class="mid num" id="assets">—</div><div class="note" id="assetsnote"></div></div>
+    <div class="card golink" data-go="liability" tabindex="0" role="button" title="Show every debt"><div class="label">Liabilities</div><div class="mid num" id="liabs">—</div><div class="note" id="liabsnote"></div></div>
   </section>
 
   <div class="grid" style="margin-top:12px">
@@ -741,6 +760,15 @@ for (const sec of document.querySelectorAll(".grid > section.card")) {
   b.type = "button"; b.textContent = sec.dataset.nav; b.dataset.sec = sec.id; b.addEventListener("click", () => goSec(sec.id));
   $("jump").append(b);
 }
+for (const el of document.querySelectorAll(".hero .golink")) {
+  const go = () => {
+    goSec("alloccard");
+    for (const tr of $("cats").querySelectorAll("tr.cat"))  // that side's line items open, the other side's closed
+      if ((tr.getAttribute("aria-expanded") === "true") !== (tr.dataset.t === el.dataset.go)) tr.onclick();
+  };
+  el.addEventListener("click", go);
+  el.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
+}
 $("odwarn").addEventListener("click", e => { if (e.target.closest("a")) { e.preventDefault(); goSec("draftscard"); } });
 document.addEventListener("click", e => { const p = e.target.closest(".card p.sub"); if (p && PHONE.matches) p.classList.toggle("open"); });
 $("totop").addEventListener("click", () => scrollTo({top: 0, behavior: "smooth"}));
@@ -863,7 +891,7 @@ function renderSummary(s) {
   for (const c of cats) {
     if (!c.value && !c.lines.length) continue;
     const color = c.type === "asset" ? `var(${CAT_COLOR[c.key]})` : "var(--liab)";
-    rows += `<tr class="cat" data-k="${c.key}" tabindex="0" role="button" aria-expanded="false"><td><span class="sw" style="background:${color}"></span>${esc(c.label)}</td>
+    rows += `<tr class="cat" data-k="${c.key}" data-t="${c.type}" tabindex="0" role="button" aria-expanded="false"><td><span class="sw" style="background:${color}"></span>${esc(c.label)}</td>
       <td class="r ${c.value < 0 ? "down" : ""}">${f0(c.value)}</td>
       <td class="r hide-sm">${c.type === "asset" ? (100 * c.value / assetTotal).toFixed(1) + "%" : ""}</td><td class="r">${srcBadge(c)}</td></tr>`;
     for (const l of c.lines) rows += `<tr class="sub" data-p="${c.key}" hidden><td class="name" title="${esc(l.line)}">${esc(l.line)}</td><td class="r">${f0(l.value)}</td><td class="hide-sm"></td><td class="r"><span class="badge b-${l.source}">${l.source}</span></td></tr>`;

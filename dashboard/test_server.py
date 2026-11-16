@@ -864,3 +864,9 @@ def test_login_markets_adds_the_inflation_nowcast_the_sync_stored(dbfile, monkey
         _meta(dbfile, "inflation", bad)
         monkeypatch.setattr(server, "_login_markets", None)
         assert "Inflation" not in server.login_markets() and "Bitcoin" in server.login_markets(), bad
+
+
+def test_dashboard_shows_the_sign_in_pages_market_closes_once():
+    index = open(server.os.path.join(server.os.path.dirname(server.__file__), "index.html")).read()
+    assert index.count("{{markets}}") == 1 and '<div class="mktbar">{{markets}}</div>' in index  # filled by login_markets()
+    assert index.count('class="card golink" data-go="asset"') == index.count('class="card golink" data-go="liability"') == 1

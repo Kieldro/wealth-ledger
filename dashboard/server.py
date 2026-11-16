@@ -1330,7 +1330,7 @@ def with_theme(page: str) -> str:
     return page if t == THEMES[0] else page.replace('<html lang="en">', f'<html lang="en" data-theme="{t}">', 1)
 
 
-# One line of public market closes for the sign-in page, read from the prices the daily sync already stores
+# One line of public market closes for the sign-in page (and the dashboard's top), read from the prices the daily sync already stores
 # (insights/prices.py): nothing is fetched at request time. The page is public, so the lookup is memoized.
 # The sign-in page is public, so its one line of market closes is limited to this fixed list of broad benchmarks
 # below. Nothing else in the prices table, and nothing from the ledger, can ever reach that page:
@@ -1571,7 +1571,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._deny(p)
             if p in ("/", "/index.html"):
                 with open(os.path.join(HERE, "index.html"), encoding="utf-8") as f:
-                    page = with_theme(f.read()).encode()
+                    page = with_theme(f.read()).replace("{{markets}}", login_markets(), 1).encode()
                 return self._send(200, page, "text/html; charset=utf-8", self._renewal(), index_csp(page))
             if p == "/healthz":
                 return self._send(200, b"ok\n", "text/plain")
