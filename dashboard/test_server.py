@@ -504,6 +504,14 @@ def test_page_cards_reorder_by_drag_or_buttons_and_remember_the_order():
     assert "draggable=" not in html and "dragstart" not in html  # pointer events: HTML5 drag-and-drop fails on touch
 
 
+def test_page_trend_has_a_one_week_range_before_one_month():
+    html = open(server.os.path.join(server.os.path.dirname(server.__file__), "index.html")).read()
+    rng = html[html.index('id="trendrng"'):html.index('id="trendchg"')]
+    assert rng.index('data-r="1W"') < rng.index('data-r="1M"') and '>1W</button>' in rng
+    assert 'const TREND_RANGES = ["1W", "1M",' in html  # a remembered choice is only kept when it's in this list
+    assert 'if (r === "1W") return new Date(y, m, d - 7, 12).getTime();' in html
+
+
 def test_allocation_splits_the_crypto_total_by_wallet(dbfile, monkeypatch):
     """The crypto total drills down to one line per wallet; an exchange's own cash row is labelled as cash. When
     the valuation isn't the number in use, the total stays one line. A wallet read in full today is live even when
