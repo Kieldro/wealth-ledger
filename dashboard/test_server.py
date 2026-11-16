@@ -519,7 +519,8 @@ def test_page_marks_an_estimated_correlation_so_it_cannot_pass_for_a_measured_on
     html = open(server.os.path.join(server.os.path.dirname(server.__file__), "index.html")).read()
     for needle in ("function benchCorrEst(t, u, pts, k)", 'el.classList.toggle("est", !!est)', 'est ? "≈" + num : num',
                    'el.insertAdjacentHTML("beforeend", "<small>est</small>")', 'id="trendcorrnote" hidden',
-                   '"≈ = estimate: net worth between snapshots is taken as a straight line', ": estimate only, ≈${num}",
+                   "net worth between snapshots is taken as a straight line, so these mostly reflect", ": estimate only, ≈${num}",
+                   "this range starts on a straight line${onLine}", "const path = lead ? [lead, ...real] : real",
                    "daily = pts.filter(p => p.kind === \"daily\"), d0 = daily[0]", "c.n < 8 ? \"few\""):
         assert needle in html, needle
     est = re.search(r"\.bench button \.corr\.est \{([^}]*)\}", html).group(1)
