@@ -10,7 +10,7 @@
 <title>Wealth Ledger</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%232a78d6'/%3E%3Cpath d='M3 11l3-3 2 2 5-5' stroke='white' stroke-width='1.8' fill='none'/%3E%3C/svg%3E">
 <style>
-/* Dark only. Graphite is the default; the others are picked in the footer (remembered per browser as wl.theme)
+/* Dark only. Graphite is the default; the others are picked from the dot in the header (remembered per browser as wl.theme)
    or set as this ledger's default by "dashboard.theme" in personal.json. Keep the names in step with THEMES in
    server.py and with the sign-in page there. --s1 follows the accent; the colour it replaces takes the old blue. */
 :root {
@@ -305,10 +305,14 @@ td.neg { color: var(--neg); font-weight: 600; }
 .pacehd { font-size: 13px; color: var(--text-2); margin: 2px 0 6px; min-height: 18px; }
 .pacehd b { font-weight: 600; color: var(--text); }
 #savechips .chip { white-space: normal; }
-/* theme picker: one swatch per theme (its accent on its own surface) */
-.pagefoot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 22px 0 0; padding-top: 14px; border-top: 1px solid var(--border); }
-.themes { display: flex; align-items: center; gap: 4px; }
-.themes .note { margin-right: 6px; }
+/* theme picker: a dot in the header (the current accent) opens one swatch per theme (its accent on its own surface) */
+.pagefoot { margin: 22px 0 0; padding-top: 14px; border-top: 1px solid var(--border); }
+.themepick { position: relative; }
+.themepick summary { list-style: none; display: grid; place-items: center; width: 30px; height: 30px; box-sizing: border-box; border-radius: 50%; border: 1px solid var(--border); background: var(--surface); cursor: pointer; transition: border-color .12s; }
+.themepick summary::-webkit-details-marker { display: none; }
+.themepick summary i { width: 13px; height: 13px; border-radius: 50%; background: var(--accent); }
+.themepick summary:hover, .themepick[open] summary { border-color: var(--accent); }
+.themes { position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; display: flex; align-items: center; gap: 2px; padding: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: 999px; box-shadow: 0 10px 28px rgb(0 0 0 / .4); }
 .themes button { display: grid; place-items: center; width: 30px; height: 30px; min-height: 0; padding: 0; border: 0; background: none; border-radius: 50%; }
 .themes i { width: 18px; height: 18px; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 3px var(--b); }
 .themes button[aria-pressed="true"] i { box-shadow: 0 0 0 3px var(--b), 0 0 0 5px var(--text); }
@@ -340,6 +344,7 @@ footer code { font-size: 11.5px; }
   .problems summary { padding: 12px 0; margin: -12px 0; }
   .alert summary { padding: 13px 8px; margin: -13px 0 -13px -2px; }
   .themes button { width: 44px; height: 44px; }
+  .themepick summary { width: 44px; height: 44px; }
   .themes i { width: 22px; height: 22px; }
   #connect input, #connect form button { height: 48px; }
 }
@@ -352,7 +357,12 @@ footer code { font-size: 11.5px; }
   header.top { flex-wrap: wrap; gap: 0 8px; margin-bottom: 10px; }
   .hdr-r, #status { display: contents; }
   header.top h1 { order: 1; margin-right: auto; }
-  #privbtn { order: 2; width: 44px; padding: 0; justify-content: center; }
+  #themepick, #privbtn { order: 2; }
+  /* the swatches drop down across the header's full width, under the first row */
+  header.top { position: relative; }
+  .themepick { position: static; }
+  .themes { left: 0; right: 0; top: 50px; justify-content: space-around; border-radius: 14px; }
+  #privbtn { width: 44px; padding: 0; justify-content: center; }
   #refresh { order: 3; }
   header.top::after { content: ""; order: 4; flex-basis: 100%; }
   #status .pill { order: 5; margin-top: 8px; min-height: 30px; }
@@ -408,6 +418,7 @@ document.querySelector('meta[name="theme-color"]').content = getComputedStyle(do
   <header class="top">
     <h1><svg viewBox="0 0 16 16" aria-hidden="true"><rect width="16" height="16" rx="4"/><path d="M3 11l3-3 2 2 5-5" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>Wealth Ledger</h1>
     <div class="hdr-r">
+      <details class="themepick" id="themepick"><summary title="Color theme" aria-label="Color theme"><i></i></summary><div class="themes" id="themes" role="group" aria-label="Color theme"><button type="button" data-t="graphite" aria-pressed="false" title="Graphite" aria-label="Graphite theme"><i></i></button><button type="button" data-t="rose" aria-pressed="false" title="Rose" aria-label="Rose theme"><i></i></button><button type="button" data-t="amethyst" aria-pressed="false" title="Amethyst" aria-label="Amethyst theme"><i></i></button><button type="button" data-t="plum" aria-pressed="false" title="Plum" aria-label="Plum theme"><i></i></button><button type="button" data-t="sage" aria-pressed="false" title="Sage" aria-label="Sage theme"><i></i></button></div></details>
       <button type="button" id="privbtn" class="privbtn" aria-pressed="false" title="Hide amounts (privacy mode)"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/><path class="slash" d="M4 4l16 16"/></svg><span class="hide-sm" id="privlbl">Hide amounts</span></button>
       <label class="unitpick" id="unitpick" hidden><span class="hide-sm">Values in </span><select id="unitsel" aria-label="Show every value in"></select><span class="note num hide-sm" id="unitprice"></span></label>
       <div class="status" id="status"><span class="pill">Loading…</span></div>
@@ -599,8 +610,7 @@ document.querySelector('meta[name="theme-color"]').content = getComputedStyle(do
     </section>
   </div>
 
-  <div class="pagefoot">
-    <div class="themes" id="themes" role="group" aria-label="Color theme"><span class="note">Theme</span><button type="button" data-t="graphite" aria-pressed="false" title="Graphite" aria-label="Graphite theme"><i></i></button><button type="button" data-t="rose" aria-pressed="false" title="Rose" aria-label="Rose theme"><i></i></button><button type="button" data-t="amethyst" aria-pressed="false" title="Amethyst" aria-label="Amethyst theme"><i></i></button><button type="button" data-t="plum" aria-pressed="false" title="Plum" aria-label="Plum theme"><i></i></button><button type="button" data-t="sage" aria-pressed="false" title="Sage" aria-label="Sage theme"><i></i></button></div>
+  <div class="pagefoot show-sm">
     <form method="post" action="/logout" class="logout show-sm"><button type="submit" title="Sign out of this device">Log out</button></form>
   </div>
   <button type="button" id="totop" class="show-sm" hidden aria-label="Back to top">↑ Top</button>
@@ -1908,10 +1918,13 @@ for (const b of document.querySelectorAll("#themes button")) b.onclick = () => {
   root.dataset.theme = b.dataset.t;
   try { localStorage.setItem(THEME_KEY, b.dataset.t); } catch { /* storage blocked */ }
   syncTheme();
+  $("themepick").open = false;
   renderAll();
   if (acctView) renderRecent(data.spending?.recent || []);
 };
 syncTheme();
+document.addEventListener("click", e => { if (!$("themepick").contains(e.target)) $("themepick").open = false; });
+document.addEventListener("keydown", e => { if (e.key === "Escape" && $("themepick").open) { $("themepick").open = false; $("themepick").querySelector("summary").focus(); } });
 load();
 </script>
 </body>
