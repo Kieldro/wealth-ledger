@@ -456,6 +456,48 @@ def test_page_reloads_itself_and_says_when_numbers_are_old():
         assert needle in html, needle
 
 
+def test_page_shows_loading_and_never_leaves_a_blank_after_a_failed_request():
+    """Guard on the page source (behaviour is checked in a headless browser): a bar while any request is in flight,
+    placeholders where a value has not arrived, a time limit on every request, and a failed or timed-out request
+    leaves words and a Retry button rather than an empty cell. Every card belongs to exactly one request."""
+    import re
+    html = open(server.os.path.join(server.os.path.dirname(server.__file__), "index.html")).read()
+    for needle in ('<div id="loadbar" role="progressbar" aria-label="Loading"></div>', '$("loadbar").hidden = !inflight;',
+                   "const TIMEOUT_MS = 20e3, SLOW_MS = 75e3", "signal: ac.signal", "setTimeout(() => ac.abort(), timeout)",
+                   "no answer after ${Math.round(timeout / 1000)} seconds", "can't reach the server",
+                   'id="nw"><span class="skel" role="status" aria-label="Loading"></span>',
+                   'id="assets"><span class="skel"', 'id="liabs"><span class="skel"',
+                   '<span class="pill"><span class="spin" aria-hidden="true"></span>Loading…</span>',
+                   "Couldn't load this section.", "Couldn't refresh this section. Showing what loaded earlier.",
+                   '<button type="button" data-retry="${k}">Retry</button>', 'e.target.closest("button[data-retry]")',
+                   'setLoad(k, had ? "stale" : "error", e.message)', 'id="acctretry"', "body.slowload .loadbox .lbl::after",
+                   '.card[data-load="loading"] > .secbody > :not(.loadbox), .card[data-load="error"] > .secbody > :not(.loadbox) { display: none !important; }',
+                   '.card[data-load="error"] > .sechd .kf::before { content: "Couldn\'t load";'):
+        assert needle in html, needle
+    assert '>—</div>' not in html[html.index('id="hero"'):html.index('<div class="grid"')]  # no dash standing in for a number
+    still = html[html.rindex("@media (prefers-reduced-motion: reduce)"):html.index("</style>")]
+    assert still.count("animation: none") == 3 and "#loadbar::before" in still and ".spin" in still and ".skel" in still
+    parts = html[html.index("const PARTS = {"):html.index("const SKEL =")]
+    owned = [i for cards in re.findall(r"cards: \[([^\]]*)\]", parts) for i in re.findall(r'"(\w+)"', cards)]
+    grid = html[html.index('<div class="grid"'):html.index('id="totop"')]
+    assert sorted(owned) == sorted(re.findall(r'<section class="card span-\d+" id="(\w+)"', grid)) and len(owned) == 14
+    assert len(re.findall(r'url: "/api/\w+", fn: render\w+', parts)) == 12
+    for slow in ("summary", "trend", "budget"):  # these wait on a sheet read, which the server allows 60 s
+        assert re.search(rf"\b{slow}: \{{[^}}]*slow: true\}}", parts), slow
+
+
+def test_page_says_sync_problem_in_words_not_an_exit_code():
+    """Guard on the page source: a failed sync reads "Sync problem" with the status file's problem lines in the
+    tooltip (and, with none, one line of our own); the bare "(rc=1)" is gone."""
+    html = open(server.os.path.join(server.os.path.dirname(server.__file__), "index.html")).read()
+    assert "(rc=" not in html and "rc=\" +" not in html
+    for needle in ('st.rc ? `Sync problem<span class="hide-sm"> · last ran ${esc(fmtShort(st.last_run))}</span>`',
+                   '(bad ? "\\n" + sync.map(p => "• " + p).join("\\n") : "")', '<span class="dot ${bad ? "bad" : ""}"></span>',
+                   "The last sync ended with an error (exit code ${st.rc}), so some accounts may not have updated.",
+                   'if (bad) $("syncpill").onclick'):
+        assert needle in html, needle
+
+
 def test_input_ages_names_the_oldest_live_balance_and_estimate():
     today = date(2026, 10, 27)
     lines = [{"line": "Checking", "used": 1000.0, "from": "live", "as_of": "2026-10-27"},
