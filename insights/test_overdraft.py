@@ -40,7 +40,7 @@ class Ledger:
         self.account(CHK, "Checking", "checking", 9000)
         self.account(CARD, "Visa (2222)", "credit", balance)
         if pay_rule:
-            self.db.execute("INSERT INTO txn_rules VALUES (10, '%EPAYMENT%', 'checking', 'out', 'card_payment', NULL)")
+            self.db.execute("INSERT OR IGNORE INTO txn_rules VALUES (10, '%EPAYMENT%', 'checking', 'out', 'card_payment', NULL)")
         for d, amt, desc in activity:
             self.txn(CARD, d, amt, desc)
             if amt > 0 and "PAYMENT" in desc.upper():
@@ -139,7 +139,7 @@ def test_card_autopay_sized_from_learned_statement_close(led):
     must be the $900 owed at that close, not the $1,400 owed today."""
     led.account(CHK, "Checking", "checking", 3000)
     led.account(CARD, "Visa (2222)", "credit", -1400)
-    led.db.execute("INSERT INTO txn_rules VALUES (10, '%EPAYMENT%', 'checking', 'out', 'card_payment', NULL)")
+    led.db.execute("INSERT OR IGNORE INTO txn_rules VALUES (10, '%EPAYMENT%', 'checking', 'out', 'card_payment', NULL)")
     for m in (7, 8, 9, 10):
         led.txn(CARD, date(2026, m, 1), -400, "STORE A")
         led.txn(CARD, date(2026, m, 15), -500, "STORE B")

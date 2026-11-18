@@ -131,7 +131,7 @@ def compute(today: str | None = None) -> dict:
         liab = kind in ("credit", "loan")
         lines.append({"line": name, "type": "liability" if liab else "asset", "sheet": None,
                       "live": -bal if liab else bal, "used": -bal if liab else bal, "from": "live (no sheet row)",
-                      "synced": True, "as_of": seen[aid]})
+                      "synced": True, "as_of": seen[aid], "kind": kind})
 
     newest = max((a[4] for a in accts if a[4]), default=None)
     for aid, name, bal, kind, snap, _ in accts:

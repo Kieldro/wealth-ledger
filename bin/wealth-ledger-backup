@@ -2,18 +2,19 @@
 # Daily copy of the database to another disk (run by wealth-ledger-sync after each sync). SimpleFIN only serves
 # ~90 days of history, so older history exists only in the database; this keeps it safe from losing that disk.
 # Where it goes comes from personal.json "backup": {"dir": "/path/on/another/disk", "keep_days": 30}
-# ($WEALTH_LEDGER_PERSONAL overrides the path, as in personal.py). No "backup" section = backups off.
+# ($WEALTH_LEDGER_PERSONAL or $WEALTH_LEDGER_CONFIG_DIR override the path, as in personal.py). No personal.json or no
+# "backup" section = backups off.
 # Writes <dir>/txns-YYYY-MM-DD.db.gz (mode 0600), checked with PRAGMA integrity_check before it replaces anything.
 # Keeps keep_days of dailies plus every 1st-of-month copy. The dir must already exist (it is never created, so an
 # unmounted drive is an error instead of a copy on the wrong disk). Exits non-zero with one error line on failure.
 set -uo pipefail
 umask 077
 DB=${WEALTH_LEDGER_DB:-$HOME/.local/share/wealth-ledger/txns.db}
-CFG=${WEALTH_LEDGER_PERSONAL:-$HOME/.config/wealth-ledger/personal.json}
+CFG=${WEALTH_LEDGER_PERSONAL:-${WEALTH_LEDGER_CONFIG_DIR:-$HOME/.config/wealth-ledger}/personal.json}
 TODAY=${WEALTH_LEDGER_TODAY:-$(date +%F)}
 fail() { echo "error: $1" >&2; exit 1; }
 
-[[ -f $CFG ]] || fail "$CFG not found"
+[[ -f $CFG ]] || { echo "backups off (no $CFG)"; exit 0; }
 read -r DIR KEEP < <(python3 -c 'import json,sys; b=json.load(open(sys.argv[1])).get("backup") or {}
 print(b.get("dir") or "-", int(b.get("keep_days") or 30))' "$CFG") || fail "can't read backup settings from $CFG"
 [[ $DIR == - ]] && { echo "backups off (no backup.dir in $CFG)"; exit 0; }

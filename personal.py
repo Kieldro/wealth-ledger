@@ -3,9 +3,14 @@
 Everything that identifies the owner (spreadsheet id, balance-sheet row labels, account-name patterns, extra
 classification rules, home/vehicle details, wallet names, ...) lives in a JSON file outside the repo:
 
-    ~/.config/wealth-ledger/personal.json      (override with $WEALTH_LEDGER_PERSONAL)
+    ~/.config/wealth-ledger/personal.json
 
-Start from personal.example.json in the repo root, copy it there and `chmod 600` it.
+($WEALTH_LEDGER_PERSONAL names another file; $WEALTH_LEDGER_CONFIG_DIR another folder holding personal.json.)
+
+The file is optional. Without it every setting takes its default: the ledger runs on its synced accounts alone,
+account types are guessed from account names, and every add-on that needs a setting (spreadsheet, valuations,
+backups, monthly email, ...) is off. personal.example.json in the repo root documents every key; copy the ones
+you want and `chmod 600` the file.
 """
 from __future__ import annotations
 
@@ -14,7 +19,7 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
-DEFAULT_PATH = "~/.config/wealth-ledger/personal.json"
+DEFAULT_DIR = "~/.config/wealth-ledger"
 
 
 class PersonalConfigError(RuntimeError):
@@ -22,16 +27,16 @@ class PersonalConfigError(RuntimeError):
 
 
 def path() -> Path:
-    return Path(os.environ.get("WEALTH_LEDGER_PERSONAL") or DEFAULT_PATH).expanduser()
+    if os.environ.get("WEALTH_LEDGER_PERSONAL"):
+        return Path(os.environ["WEALTH_LEDGER_PERSONAL"]).expanduser()
+    return Path(os.environ.get("WEALTH_LEDGER_CONFIG_DIR") or DEFAULT_DIR).expanduser() / "personal.json"
 
 
 @lru_cache(maxsize=None)
 def _load(p: str) -> dict:
     f = Path(p)
-    if not f.exists():
-        raise PersonalConfigError(
-            f"{f} not found. Copy personal.example.json from the wealth-ledger repo there, "
-            f"chmod 600 it and fill in your own values (or set WEALTH_LEDGER_PERSONAL).")
+    if not f.exists():  # optional: no file = every default
+        return {}
     try:
         data = json.loads(f.read_text())
     except ValueError as e:
@@ -42,7 +47,8 @@ def _load(p: str) -> dict:
 
 
 def load() -> dict:
-    """The whole personal.json (cached per path). Raises PersonalConfigError if it is missing or invalid."""
+    """The whole personal.json (cached per path); {} when there is no file. Raises PersonalConfigError if the
+    file is there but invalid."""
     return _load(str(path()))
 
 
@@ -62,6 +68,13 @@ def require(name: str, key: str):
 def has_sheet() -> bool:
     """False for a ledger that runs on synced accounts alone (no "sheet_id"): nothing then reads a spreadsheet."""
     return bool(load().get("sheet_id"))
+
+
+def auto_kind() -> bool:
+    """Whether account types are guessed from account names at each sync ("auto_kind"). Unset, it is on for a
+    ledger without a spreadsheet and off for one with "sheet_id", whose owner classifies accounts by hand."""
+    v = load().get("auto_kind")
+    return (not has_sheet()) if v is None else bool(v)
 
 
 def sheet_id() -> str:

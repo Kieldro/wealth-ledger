@@ -32,8 +32,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import ctdb  # noqa: E402  shared schema
 import personal  # noqa: E402
 
-CONFIG = Path(os.environ.get("PLAID_CONFIG", "~/.config/wealth-ledger/plaid.json")).expanduser()
-DEFAULT_DB = Path("~/.local/share/wealth-ledger/txns.db").expanduser()
+CONFIG = Path(os.environ.get("PLAID_CONFIG") or Path(
+    os.environ.get("WEALTH_LEDGER_CONFIG_DIR") or "~/.config/wealth-ledger") / "plaid.json").expanduser()
+DEFAULT_DB = Path(os.environ.get("WEALTH_LEDGER_DB") or "~/.local/share/wealth-ledger/txns.db").expanduser()
 HOSTS = {"production": "https://production.plaid.com", "sandbox": "https://sandbox.plaid.com"}
 LINK_PORT = 8899
 TIMEOUT = (10, 60)

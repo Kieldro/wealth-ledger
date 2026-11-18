@@ -2,10 +2,11 @@
 # Monthly: has an institution you are waiting for become linkable in SimpleFIN (MX) yet? Logs a FOUND line
 # (no notifications). What to search for comes from personal.json "simplefin_watch":
 #   {"label": "...", "queries": ["...", ...], "ignore": {"<query>": "<exact result already known>"}}
-# ($WEALTH_LEDGER_PERSONAL overrides the path, as in personal.py.)
+# ($WEALTH_LEDGER_PERSONAL or $WEALTH_LEDGER_CONFIG_DIR override the path, as in personal.py.) Nothing to watch = one
+# line and exit 0.
 set -uo pipefail
-CFG=${WEALTH_LEDGER_PERSONAL:-$HOME/.config/wealth-ledger/personal.json}
-[[ -f $CFG ]] || { echo "$(date -Is) error: $CFG not found (see personal.example.json)" >&2; exit 1; }
+CFG=${WEALTH_LEDGER_PERSONAL:-${WEALTH_LEDGER_CONFIG_DIR:-$HOME/.config/wealth-ledger}/personal.json}
+[[ -f $CFG ]] || { echo "$(date -Is) nothing to watch (no $CFG; see simplefin_watch in personal.example.json)"; exit 0; }
 watch() { python3 -c 'import json,sys; w=json.load(open(sys.argv[1])).get("simplefin_watch") or {}
 k=sys.argv[2]
 if k=="label": print(w.get("label") or "the watched institution")
@@ -13,7 +14,7 @@ elif k=="queries": print("\n".join(w.get("queries") or []))
 else: print((w.get("ignore") or {}).get(sys.argv[3], ""))' "$CFG" "$@"; }
 LABEL=$(watch label)
 mapfile -t QUERIES < <(watch queries)
-(( ${#QUERIES[@]} )) || { echo "$(date -Is) error: no simplefin_watch.queries in $CFG" >&2; exit 1; }
+(( ${#QUERIES[@]} )) || { echo "$(date -Is) nothing to watch (no simplefin_watch.queries in $CFG)"; exit 0; }
 
 JAR=$(mktemp); trap 'rm -f "$JAR"' EXIT
 BASE=https://beta-bridge.simplefin.org/search-institutions

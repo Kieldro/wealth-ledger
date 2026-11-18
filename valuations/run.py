@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import pkgutil
 import sys
 from datetime import date, datetime, timedelta, timezone
@@ -27,7 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import ctdb  # noqa: E402
 
-DB = Path.home() / ".local/share/wealth-ledger/txns.db"
+DB = Path(os.environ.get("WEALTH_LEDGER_DB") or Path.home() / ".local/share/wealth-ledger/txns.db")
 
 
 def providers():
@@ -35,7 +36,11 @@ def providers():
     for m in pkgutil.iter_modules([str(pkg)]):
         if m.name in ("run",) or m.name.startswith("_") or m.name.startswith("test"):
             continue
-        mod = importlib.import_module(f"valuations.{m.name}")
+        try:
+            mod = importlib.import_module(f"valuations.{m.name}")
+        except ctdb.personal.PersonalConfigError:  # e.g. no "home" or "cars" section in personal.json
+            print(f"{m.name}: not set up, skipped")
+            continue
         if hasattr(mod, "fetch"):
             yield mod
 

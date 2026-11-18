@@ -27,8 +27,9 @@ import requests
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import ctdb  # noqa: E402  shared schema
 
-DEFAULT_ACCESS_FILE = Path("~/.config/wealth-ledger/simplefin_access_url").expanduser()
-DEFAULT_DB = Path("~/.local/share/wealth-ledger/txns.db").expanduser()
+DEFAULT_ACCESS_FILE = Path(os.environ.get("WEALTH_LEDGER_ACCESS") or Path(
+    os.environ.get("WEALTH_LEDGER_CONFIG_DIR") or "~/.config/wealth-ledger") / "simplefin_access_url").expanduser()
+DEFAULT_DB = Path(os.environ.get("WEALTH_LEDGER_DB") or "~/.local/share/wealth-ledger/txns.db").expanduser()
 MAX_WINDOW_DAYS = 45  # hard limit 90d; server warns (gen.api) above 45d and may cap later
 TIMEOUT = (10, 60)
 RETRIES = 4
@@ -314,15 +315,17 @@ def sync(args) -> None:
         quiet = any(m in w for m in muted)
         print(f"{'note (superseded connection)' if quiet else 'WARNING'}: {w}", file=sys.stderr)
     new, updated = upsert(args.db, list(all_rows.values()), holdings, balances)
-    if ctdb.personal.load().get("auto_kind"):  # nobody classifies this ledger's accounts by hand
-        db = ctdb.connect(args.db)
+    db = ctdb.connect(args.db)
+    for name, kind in ctdb.apply_account_kinds(db):  # personal.json "account_kinds"
+        print(f"account type from personal.json: {name} -> {kind}", file=sys.stderr)
+    if ctdb.personal.auto_kind():  # nobody classifies this ledger's accounts by hand
         guessed, unknown = ctdb.guess_kinds(db)
-        db.close()
         for name, kind in guessed:
             print(f"account type guessed from its name: {name} -> {kind}", file=sys.stderr)
         for name in unknown:
-            print(f"WARNING: account \"{name}\" has no type yet, so it is left out of the totals "
-                  f"(add it to account_kind)", file=sys.stderr)
+            print(f"WARNING: account \"{name}\" has no type yet and is left out of the totals; name its type in "
+                  f"personal.json \"account_kinds\" (see README)", file=sys.stderr)
+    db.close()
     print(f"fetched={len(all_rows)} inserted={new} updated={updated} holdings={len(holdings)} "
           f"balances={len(balances)} db={args.db}")
 

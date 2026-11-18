@@ -432,7 +432,7 @@ def test_status_flags_a_sync_that_stopped_finishing(tmp_path, monkeypatch):
     assert server.read_status(now)["problems"] == ["The status file doesn't say when the sync last finished",
                                                    "something unexpected"]
     f.unlink()
-    assert server.read_status(now)["problems"][0].startswith("status file unreadable")
+    assert server.read_status(now)["problems"][0].startswith("No sync has run yet")
 
 
 def test_summary_shows_networth_warnings_with_the_sync_problems(tmp_path, monkeypatch):
@@ -1062,3 +1062,15 @@ def test_dashboard_shows_the_sign_in_pages_market_closes_once():
     index = open(server.os.path.join(server.os.path.dirname(server.__file__), "index.html")).read()
     assert index.count("{{markets}}") == 1 and '<div class="mktbar">{{markets}}</div>' in index  # filled by login_markets()
     assert index.count('class="card golink" data-go="asset"') == index.count('class="card golink" data-go="liability"') == 1
+
+
+def test_account_with_no_matching_label_is_filed_by_its_type():
+    """A ledger without a spreadsheet has no row labels: networth.py passes each account's kind instead."""
+    line = lambda name, kind, typ="asset": {"line": name, "type": typ, "kind": kind}
+    assert server.categorize(line("Account 7", "savings")) == "cash"
+    assert server.categorize(line("Account 7", "hsa")) == "retirement"
+    assert server.categorize(line("Account 7", "investment")) == "taxable"
+    assert server.categorize(line("Account 7", None)) == "other"
+    assert server.categorize({"line": "Account 7", "type": "asset"}) == "other"  # sheet rows carry no kind
+    assert server.categorize(line("Account 7", "credit", "liability")) == "cards"
+

@@ -9,8 +9,9 @@ balances      daily balance snapshots per account (credit cards/loans are negati
               card's limit when the feed reports one (Plaid balances.limit; SimpleFIN has no such field).
 credit_limits manual card limits from personal.json "credit_limits" (account_name LIKE pattern -> limit), rebuilt on
               every connect(); v_accounts.credit_limit falls back to them when the feed has no limit.
-account_kind  hand-maintained account type (credit/checking/savings/investment/retirement/hsa/loan/crypto);
-              new accounts appear in v_accounts with kind NULL until classified.
+account_kind  account type (credit/checking/savings/investment/retirement/hsa/loan/crypto/custodial): set from
+              personal.json "account_kinds", guessed from the account name at each sync (personal.auto_kind()), or
+              put in by hand; an account with none has kind NULL in v_accounts and is left out of the totals.
 txn_rules     description LIKE-patterns -> class (first match by priority wins; add rows to teach it).
               Seeded from BASE_RULES below plus the owner's own "rules" in personal.json.
 valuations    daily/monthly estimates for things no bank feed covers (metals, crypto wallets, home, cars),
@@ -190,6 +191,24 @@ BASE_RULES = [
     (10, "%PAYMENT%", "credit", "in", "card_payment", "payment received on a card"),
     (10, "%Returned Payment%", "credit", "out", "card_payment", "bounced payment reversed"),
     (10, "%PAYMENT%", "loan", "in", "transfer", "mortgage side of the payment (checking side is spend)"),
+    # the checking side of a card payment, as banks commonly word it (the purchases on the card are the spending);
+    # a debit-card purchase is spending whatever else its text says ("DEBIT CARD PAYMENT TO ...")
+    (14, "%DEBIT CARD%", "checking", "out", "spend", "debit-card purchase"),
+    (15, "%CREDIT CARD%", "checking", "out", "card_payment", "card payment from checking"),
+    (15, "%CREDIT CRD%", "checking", "out", "card_payment", "card payment from checking"),
+    (15, "%CRCARDPMT%", "checking", "out", "card_payment", "card payment from checking"),
+    (15, "%CARD PAYMENT%", "checking", "out", "card_payment", "card payment from checking"),
+    (15, "%CARD PMT%", "checking", "out", "card_payment", "card payment from checking"),
+    (15, "%CARD ONLINE PAYMENT%", "checking", "out", "card_payment", "card payment from checking"),
+    (15, "%EPAYMENT%", "checking", "out", "card_payment", "card payment from checking"),
+    (15, "%E-PAYMENT%", "checking", "out", "card_payment", "card payment from checking"),
+    # between the owner's own checking and savings
+    (20, "%TRANSFER TO SAV%", None, None, "transfer", "own checking <-> savings"),
+    (20, "%TRANSFER FROM SAV%", None, None, "transfer", "own checking <-> savings"),
+    (20, "%TRANSFER TO CHK%", None, None, "transfer", "own checking <-> savings"),
+    (20, "%TRANSFER FROM CHK%", None, None, "transfer", "own checking <-> savings"),
+    (20, "%TRANSFER TO CHECKING%", None, None, "transfer", "own checking <-> savings"),
+    (20, "%TRANSFER FROM CHECKING%", None, None, "transfer", "own checking <-> savings"),
     # moving money between the owner's own accounts (brokerage feed formats)
     (20, "%CORE ACCOUNT%", None, None, "transfer", "Fidelity cash sweep"),
     (20, "REINVESTMENT%", None, None, "transfer", "money-market reinvest"),
@@ -284,16 +303,58 @@ KIND_GUESSES = [
 ]
 
 
+KINDS = ("checking", "savings", "credit", "investment", "retirement", "hsa", "loan", "crypto", "custodial")
+FROM_CONFIG = "personal.json account_kinds"
+GUESSED = "guessed from the name"
+
+
+def personal_account_kinds() -> list[tuple[str, str]]:
+    """Account types set in personal.json ("account_kinds": {"<account_name LIKE pattern>": "<kind>"}).
+    Keys starting with _ are comments."""
+    out = []
+    for pat, kind in (personal.load().get("account_kinds") or {}).items():
+        if pat.startswith("_"):
+            continue
+        if kind not in KINDS:
+            raise personal.PersonalConfigError(
+                f"personal.json account_kinds[{pat!r}] must be one of: {', '.join(KINDS)}")
+        out.append((pat, kind))
+    return out
+
+
+def apply_account_kinds(db: sqlite3.Connection) -> list[tuple[str, str]]:
+    """Give accounts the type personal.json "account_kinds" names for them (longest matching pattern wins). It
+    fills in an account with no type and replaces a guessed or earlier configured one; a type someone put into
+    the account_kind table by hand is left alone. Returns [(account name, kind)] newly set or changed."""
+    pats = sorted(personal_account_kinds(), key=lambda pk: -len(pk[0]))
+    done = []
+    if not pats:
+        return done
+    rows = db.execute("SELECT a.account_id, a.account_name, k.kind, k.note FROM v_accounts a "
+                      "LEFT JOIN account_kind k USING (account_id)").fetchall()
+    for aid, name, kind, note in rows:
+        want = next((k for p, k in pats if db.execute("SELECT ? LIKE ?", (name or "", p)).fetchone()[0]), None)
+        if not want or want == kind or (kind and note not in (GUESSED, FROM_CONFIG, "holds positions")):
+            continue
+        db.execute("INSERT OR REPLACE INTO account_kind VALUES (?,?,?)", (aid, want, FROM_CONFIG))
+        done.append((name, want))
+    db.commit()
+    return done
+
+
 def guess_kinds(db: sqlite3.Connection) -> tuple[list[tuple[str, str]], list[str]]:
-    """Give every account that has no kind one guessed from its name (note 'guessed from the name'); for ledgers
-    nobody classifies by hand (personal.json "auto_kind": true). Returns ([(account name, kind)] newly set,
-    [names still unclassified])."""
+    """Give every account that has no kind one guessed from its name (note 'guessed from the name'), or
+    'investment' when the name says nothing but the feed lists positions in it; for ledgers nobody classifies by
+    hand (personal.auto_kind()). Returns ([(account name, kind)] newly set, [names still unclassified])."""
     import re
     done, left = [], []
     for aid, name in db.execute("SELECT account_id, account_name FROM v_accounts WHERE kind IS NULL").fetchall():
-        kind = next((k for rx, k in KIND_GUESSES if re.search(rx, name or "", re.I)), None)
+        kind, note = next((k for rx, k in KIND_GUESSES if re.search(rx, name or "", re.I)), None), GUESSED
+        if not kind and db.execute("SELECT 1 FROM v_holdings_latest WHERE account_id = ? AND value > 0 LIMIT 1",
+                                   (aid,)).fetchone():
+            kind, note = "investment", "holds positions"
         if kind:
-            db.execute("INSERT OR IGNORE INTO account_kind VALUES (?,?,?)", (aid, kind, "guessed from the name"))
+            db.execute("INSERT OR IGNORE INTO account_kind VALUES (?,?,?)", (aid, kind, note))
             done.append((name, kind))
         else:
             left.append(name or aid)

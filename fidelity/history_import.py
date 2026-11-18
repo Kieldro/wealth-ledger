@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -43,7 +44,7 @@ import ctdb  # noqa: E402  shared schema
 
 SOURCE = "fidelity_web"
 DEFAULT_DIR = Path("~/.local/share/wealth-ledger/imports/fidelity-history").expanduser()
-DEFAULT_DB = Path("~/.local/share/wealth-ledger/txns.db").expanduser()
+DEFAULT_DB = Path(os.environ.get("WEALTH_LEDGER_DB") or "~/.local/share/wealth-ledger/txns.db").expanduser()
 INSTITUTION = "Fidelity Investments"  # the live feed's name for Fidelity
 ACCOUNTS_FILE = "accounts.json"
 OVERLAP_DAYS = 92

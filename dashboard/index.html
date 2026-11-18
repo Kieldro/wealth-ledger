@@ -1828,7 +1828,7 @@ function renderCrypto(c) {
   $("ccoins").innerHTML = k + `<tr class="total"><td>Total</td><td></td><td class="r">${f0(c.total)}</td><td></td><td class="hide-sm"></td></tr></tbody>`;
 }
 
-// self-custody = keys Ian holds; exchange = an exchange holds the coins; fund = a spot bitcoin ETF share in an account
+// self-custody = keys the owner holds; exchange = an exchange holds the coins; fund = a spot bitcoin ETF share in an account
 const BTC_TYPES = {"self-custody": ["Self-custody", "var(--s3)", "You hold the keys"],
   exchange: ["Exchange", "var(--s4)", "The exchange holds the coins for you"],
   fund: ["Fund", "var(--s1)", "Bitcoin fund shares (ETF) in a brokerage or IRA account; BTC is the equivalent at today's price"]};
@@ -1837,7 +1837,7 @@ function renderBtcWhere(b) {
   if (!b || !b.locations.length) return;
   const btc = q => q == null ? "—" : privacy ? MASK : q.toLocaleString("en-US", {minimumFractionDigits: 4, maximumFractionDigits: q < 0.01 ? 8 : 4});
   const sum = (xs, k) => xs.reduce((a, x) => a + (x[k] || 0), 0);
-  // coins Ian owns (wallets + exchanges) vs bitcoin fund shares: funds are exposure, not bitcoin he holds
+  // coins the owner holds (wallets + exchanges) vs bitcoin fund shares: funds are exposure, not bitcoin held
   const coins = b.locations.filter(x => x.type !== "fund" && x.value >= 1), funds = b.locations.filter(x => x.type === "fund");
   const cBtc = sum(coins, "btc"), cVal = sum(coins, "value"), fBtc = sum(funds, "btc"), fVal = sum(funds, "value");
   $("btcsub").textContent = `You own ${btc(cBtc)} BTC ≈ ${f0(cVal)} at ${priceFmt(b.price)}.` +

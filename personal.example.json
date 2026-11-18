@@ -1,8 +1,15 @@
 {
- "_help": "Copy to ~/.config/wealth-ledger/personal.json (chmod 600) and replace every value with your own. Keys starting with _ are comments.",
+ "_help": "OPTIONAL FILE. With only a SimpleFIN connection the ledger needs no personal.json at all. Every key below is optional and independent: copy just the sections you want to ~/.config/wealth-ledger/personal.json (chmod 600), replace the values with your own, and leave the rest out. Keys starting with _ are comments. Each section's _help says what it is for and what else it needs.",
+ "_simplefin_only": "Useful without a spreadsheet: account_kinds, credit_limits, rules, dashboard (default_username, theme, ledger_start, web_connect), subscriptions, overdraft, rental, inherited_ira, backup, simplefin_watch. Needs the gws CLI signed in to Google: sheet_id and everything that reads the sheet (networth, home, cars, crypto, budget, amazon, networth_history), zelle_memos (Gmail) and monthly_email (Gmail).",
+ "_sheet_id": "Optional. A Google Sheet with a hand-kept 'balance sheet' tab (assets the feeds can't see: cash, metals, home, cars) and an 'income sheet' budget tab. Remove this key for a ledger of synced accounts only.",
  "sheet_id": "YOUR-GOOGLE-SHEET-ID",
+ "_auto_kind": "Optional key \"auto_kind\": true or false. true = each new account's type is guessed from its name at every sync. Default: true without sheet_id, false with it (you classify accounts yourself).",
+ "account_kinds": {
+  "_help": "Optional. An account's type when the name doesn't say it, or the guess is wrong: account_name LIKE pattern (as the Accounts card shows it; % matches anything) -> checking, savings, credit, investment, retirement, hsa, loan, crypto or custodial. The longest matching pattern wins. Only checking, savings, credit, investment, retirement, hsa and loan accounts count toward net worth: custodial is someone else's money, and crypto is counted through the spreadsheet's crypto total, so without a spreadsheet give an exchange wallet you want counted the type investment. Takes effect on the next sync.",
+  "Example Unnamed Account%": "savings"
+ },
  "networth": {
-  "_help": "Balance-sheet tab labels (column A, exact). synced: label -> account_name LIKE patterns (as shown in v_accounts) whose live balance replaces the sheet value.",
+  "_help": "Optional; needs sheet_id. Balance-sheet tab labels (column A, exact). synced: label -> account_name LIKE patterns (as shown in v_accounts) whose live balance replaces the sheet value.",
   "synced": {
    "Checking": ["Example Bank Checking (0000)"],
    "Savings": ["Example Bank Savings%"],
@@ -17,15 +24,17 @@
   "sheet_excluded": []
  },
  "credit_limits": {
-  "_help": "Card credit limits for cards whose feed reports none (Plaid sends its own; SimpleFIN never does): account_name LIKE pattern (as shown in v_accounts) -> limit in dollars. Takes effect on the next sync.",
+  "_help": "Optional. Card credit limits for cards whose feed reports none (Plaid sends its own; SimpleFIN never does): account_name LIKE pattern (as shown in v_accounts) -> limit in dollars. Takes effect on the next sync.",
   "Example Rewards Card%": 5000
  },
+ "_rules": "Optional. How a transaction is classed when the built-in rules (ctdb.py BASE_RULES) get it wrong: [priority (lowest wins), description LIKE pattern, account type or null, \"in\"/\"out\" or null, class, note]. Classes: spend, income, refund, transfer, card_payment, investment. Only spend counts as spending and only income as income. Takes effect on the next sync.",
  "rules": [
   [10, "%EXAMPLE CARD PYMT%", "checking", "out", "card_payment", "checking-side payment to your card"],
   [20, "%EXAMPLE BANK XFER%", null, null, "transfer", "transfer between your own accounts"],
   [30, "%EXAMPLE BULLION DEALER%", null, "out", "investment", "precious metals"]
  ],
  "home": {
+  "_help": "Optional; needs sheet_id. valuations/home.py: a monthly estimate of your home's value for the balance-sheet row named in asset.",
   "asset": "Home",
   "address": "123 Example St, Springfield, ST 00000",
   "search_text": "123 Example St, Springfield, ST",
@@ -37,6 +46,7 @@
   "cad_note": "appraisal-district market value as of Jan 1"
  },
  "cars": {
+  "_help": "Optional; needs sheet_id. valuations/cars.py: a monthly estimate of each car's value from comparable listings.",
   "zip": "00000",
   "radius": 150,
   "state": "ST",
@@ -62,14 +72,14 @@
   ]
  },
  "crypto": {
-  "_help": "exchange_rows: wallets that have their own balance-sheet row (only coins the crypto total counts are counted there).",
+  "_help": "Optional; needs sheet_id (the sheet's crypto tab). Wallet addresses and exchange keys go in crypto_wallets.json next to this file. exchange_rows: wallets that have their own balance-sheet row (only coins the crypto total counts are counted there).",
   "exchange_rows": ["ExchangeA", "ExchangeB"],
   "default_wallet": "Wallet",
   "xpub_export_dir": "",
   "xpub_export_wallet": "Wallet"
  },
  "dashboard": {
-  "_help": "web_connect: true lets a signed-in viewer paste a SimpleFIN setup token on the page while nothing is connected yet (for a second person's ledger). exact: networth.py line label -> category; rules: [regex, category] fallbacks tried in order. Categories: cash retirement taxable crypto metals realestate vehicles other. theme: the colour theme (all dark) for browsers that haven't picked one in the page footer: graphite (default), rose, amethyst, plum or sage.",
+  "_help": "Optional. default_username: the name set-password uses when none is given (default admin). ledger_start: first day of complete transaction data; spending before it is not shown (default: everything). web_connect: true lets a signed-in viewer paste a SimpleFIN setup token on the page while nothing is connected yet (for a second person's ledger). exact: networth.py line label -> category; rules: [regex, category] fallbacks tried in order. Categories: cash retirement taxable crypto metals realestate vehicles other. theme: the colour theme (all dark) for browsers that haven't picked one in the page footer: graphite (default), rose, amethyst, plum or sage.",
   "default_username": "admin",
   "web_connect": false,
   "theme": "graphite",
@@ -93,7 +103,7 @@
   ]
  },
  "budget": {
-  "_help": "insights/budget.py: [transaction regex on 'payee | description', budget-line regex on 'category/item' of the 'income sheet' tab]; tried before the generic defaults in budget.py. Put your landlord, utilities and people you pay here.",
+  "_help": "Optional; needs sheet_id. exclude_categories (not shown here): regex of budget categories that are saving, not spending. insights/budget.py: [transaction regex on 'payee | description', budget-line regex on 'category/item' of the 'income sheet' tab]; tried before the generic defaults in budget.py. Put your landlord, utilities and people you pay here.",
   "rules": [
    ["EXAMPLE PROPERTY MGMT", "rent"],
    ["ZELLE TRANSFER TO EXAMPLE PERSON", "childcare"],
@@ -101,13 +111,13 @@
   ]
  },
  "amazon": {
-  "_help": "insights/amazon.py: [item regex on 'department | product name', budget-line regex on 'category/item' of the 'income sheet' tab] for Amazon order items; tried before the generic ITEM_RULES. Put rules for your own hobbies, properties or brands here.",
+  "_help": "Optional; needs sheet_id and imported Amazon orders. points_band (not shown here): [lo, hi] discount fractions for orders part-paid with card points, default [0, 0.15]. insights/amazon.py: [item regex on 'department | product name', budget-line regex on 'category/item' of the 'income sheet' tab] for Amazon order items; tried before the generic ITEM_RULES. Put rules for your own hobbies, properties or brands here.",
   "rules": [
    ["EXAMPLE HOBBY SUPPLY|example-brand", "^fun/hobby"]
   ]
  },
  "inherited_ira": {
-  "_help": "insights/inherited_ira.py (dashboard 'Inherited IRA'). account: v_accounts name LIKE pattern (default: BDA/INHERITED/BENEFICIARY). Facts: death_year of the original owner, owner_started_rmds true/false (null = unknown), your beneficiary_birth_year, optional owner_birth_year, growth_rate for the plan, optional year_end_balances {\"YYYY\": balance} when no Dec 31 snapshot exists, optional manual_distributions [{date, amount}] for withdrawals from before the bank feed's history.",
+  "_help": "Optional; the card is hidden without this section. insights/inherited_ira.py (dashboard 'Inherited IRA'). account: v_accounts name LIKE pattern (default: BDA/INHERITED/BENEFICIARY). Facts: death_year of the original owner, owner_started_rmds true/false (null = unknown), your beneficiary_birth_year, optional owner_birth_year, growth_rate for the plan, optional year_end_balances {\"YYYY\": balance} when no Dec 31 snapshot exists, optional manual_distributions [{date, amount}] for withdrawals from before the bank feed's history.",
   "account": "Example Inherited IRA%",
   "death_year": null,
   "owner_started_rmds": null,
@@ -117,21 +127,35 @@
   "year_end_balances": {},
   "manual_distributions": [{"date": "2026-04-15", "amount": 5000}]
  },
- "monthly_email": {"_help": "insights/monthly_email.py: last month's summary from the ledger database (no spreadsheet), emailed once a month by the daily sync on or after 'day'. Off unless enabled is true. Sent with gws from the signed-in Gmail to itself; 'to' names another address. categories: [transaction regex on 'payee | description', category], tried before the generic defaults.", "enabled": false, "day": 3, "categories": [["EXAMPLE PROPERTY MGMT", "Housing"]]},
- "plaid": {"client_user_id": "wealth-ledger-user"},
- "networth_history": {"_help": "insights/nw_history.py (dashboard trend before the daily snapshots): Drive name of your yearly balance-sheet spreadsheets, each named '<name_query> YYYY' with a 'balance sheet' tab (dated columns, a 'Total Equity' row).", "name_query": "Financial Statements"},
- "zelle_memos": {"_help": "insights/zelle_memos.py: Gmail search for your bank's Zelle emails (default: zelle)", "query": "zelle"},
+ "rental": {
+  "_help": "Optional; the card is hidden without this section. insights/rental.py (dashboard 'Rental property'): income and expenses of a rental from your transactions. match: category -> description/payee LIKE patterns (bookings, rent, other_income, mortgage, cleaning, software, utilities, insurance, repairs, other); a pattern may be {\"pattern\": ..., \"direction\": \"in\"|\"out\", \"kinds\": [...]}. exclude: patterns that are never the rental. Also: start (first day counted), mortgage_account (LIKE on the loan's account name), defaults: false to drop the built-in booking-site rules.",
+  "label": "Rental property",
+  "match": {
+   "rent": [{"pattern": "%ZELLE%EXAMPLE TENANT%", "direction": "in"}],
+   "cleaning": ["%EXAMPLE CLEANING CO%"],
+   "utilities": ["%EXAMPLE CITY UTILITIES%"]
+  },
+  "exclude": ["%EXAMPLE PERSONAL TRIP%"]
+ },
+ "subscriptions": {
+  "_help": "Optional. insights/subscriptions.py: regexes for recurring charges that are bills (kept apart from cancellable subscriptions) beyond the built-in list.",
+  "bill_patterns": ["EXAMPLE PROPERTY MGMT", "EXAMPLE CITY UTILITIES"]
+ },
+ "monthly_email": {"_help": "Optional; needs the gws CLI signed in to Gmail. insights/monthly_email.py: last month's summary from the ledger database (no spreadsheet), emailed once a month by the daily sync on or after 'day'. Off unless enabled is true. Sent with gws from the signed-in Gmail to itself; 'to' names another address. categories: [transaction regex on 'payee | description', category], tried before the generic defaults.", "enabled": false, "day": 3, "categories": [["EXAMPLE PROPERTY MGMT", "Housing"]]},
+ "plaid": {"_help": "Optional; only read when plaid.json exists (plaid/plaid_sync.py setup). The user id sent to Plaid Link.", "client_user_id": "wealth-ledger-user"},
+ "networth_history": {"_help": "Optional; needs sheet_id. insights/nw_history.py (dashboard trend before the daily snapshots): Drive name of your yearly balance-sheet spreadsheets, each named '<name_query> YYYY' with a 'balance sheet' tab (dated columns, a 'Total Equity' row).", "name_query": "Financial Statements"},
+ "zelle_memos": {"_help": "Optional; needs sheet_id and the gws CLI signed in to Gmail. insights/zelle_memos.py: Gmail search for your bank's Zelle emails (default: zelle)", "query": "zelle"},
  "overdraft": {
-  "_help": "insights/overdraft.py. ends: a recurring bill's last possible draft day (description LIKE pattern -> YYYY-MM-DD), e.g. the end of a lease; nothing is projected for it after that day.",
+  "_help": "Optional. insights/overdraft.py (dashboard 'Upcoming drafts & pay') works without it. ends: a recurring bill's last possible draft day (description LIKE pattern -> YYYY-MM-DD), e.g. the end of a lease; nothing is projected for it after that day.",
   "ends": {"%EXAMPLE PROPERTY MGMT%": "2099-12-31"}
  },
  "backup": {
-  "_help": "bin/wealth-ledger-backup (run after each daily sync): gzipped copy of the database into dir, which should be on a different disk and must already exist. Keeps keep_days of dailies plus every 1st-of-month copy. Leave out to turn backups off.",
+  "_help": "Optional. bin/wealth-ledger-backup (run after each daily sync): gzipped copy of the database into dir, which should be on a different disk and must already exist. Keeps keep_days of dailies plus every 1st-of-month copy. Leave out to turn backups off.",
   "dir": "/mnt/other-disk/backups/wealth-ledger",
   "keep_days": 30
  },
  "simplefin_watch": {
-  "_help": "bin/simplefin-institution-check: search SimpleFIN's institution list for these queries; ignore maps a query to the exact result that is already known.",
+  "_help": "Optional. bin/simplefin-institution-check (run it from cron monthly): search SimpleFIN's institution list for these queries; ignore maps a query to the exact result that is already known.",
   "label": "the account you are waiting for",
   "queries": ["Example Card", "Example Issuer"],
   "ignore": {}

@@ -47,8 +47,8 @@ NAME = "crypto"
 EVERY_DAYS = 1
 ASSETS = ("Total cryptocurrency (USD)",)
 
-DB = Path.home() / ".local/share/wealth-ledger/txns.db"
-CONFIG = Path.home() / ".config/wealth-ledger/crypto_wallets.json"
+DB = Path(os.environ.get("WEALTH_LEDGER_DB") or "~/.local/share/wealth-ledger/txns.db").expanduser()
+CONFIG = Path(os.environ.get("WEALTH_LEDGER_CONFIG_DIR") or "~/.config/wealth-ledger").expanduser() / "crypto_wallets.json"
 # set these to override personal.json (tests do); None = read personal.json "crypto" when first needed
 XPUB_EXPORT_DIR: Path | None = None   # folder of wallet-export .txt files to scan for xpub/ypub/zpub keys
 UA = {"User-Agent": "Mozilla/5.0 (wealth-ledger valuations)"}

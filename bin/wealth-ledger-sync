@@ -1,28 +1,40 @@
 #!/usr/bin/env bash
-# Daily SimpleFIN + Plaid -> SQLite sync for wealth-ledger, then the valuation providers and a database backup.
-# Plaid covers accounts SimpleFIN can't reach; its keys + items are in ~/.config/wealth-ledger/plaid.json.
+# Daily SimpleFIN -> SQLite sync for wealth-ledger. A SimpleFIN access URL is all it needs; every other step is an
+# add-on that runs only when it is set up and otherwise prints one "not set up, skipped" line (never a problem):
+#   Plaid (accounts SimpleFIN can't reach)    $WEALTH_LEDGER_CONFIG_DIR/plaid.json
+#   spreadsheet, Gmail and wallet steps       "sheet_id" in personal.json (needs the gws CLI)
+#   monthly summary email                     "monthly_email" in personal.json
+#   database backup to another disk           "backup" in personal.json
 #   wealth-ledger-sync                 daily sync (cron). Never sends notifications (the opt-in monthly summary
 #                                     email aside): problems go to the log
 #                                     and to the status file ($WEALTH_LEDGER_STATUS, default ~/.cache/wealth-ledger-status).
 #   wealth-ledger-sync claim <token>   one-time: exchange SimpleFIN setup token, then 90-day backfill
 # Works when symlinked (e.g. ~/.local/bin/wealth-ledger-sync -> <repo>/bin/wealth-ledger-sync).
 set -uo pipefail
-# cron's PATH is bare; the valuations read the sheet with gws, which nvm installs under ~/.nvm
+# cron's PATH is bare: add the per-user bin folders that exist (nvm's node, ~/.local/bin) and anything listed in
+# $WEALTH_LEDGER_PATH, so optional tools such as gws are found
 for d in "$HOME"/.nvm/versions/node/*/bin "$HOME/.local/bin"; do [[ -d $d ]] && PATH="$d:$PATH"; done
+[[ -n ${WEALTH_LEDGER_PATH:-} ]] && PATH="$WEALTH_LEDGER_PATH:$PATH"
 export PATH
 
 ROOT=${WEALTH_LEDGER_ROOT:-$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)}
 CONF=${WEALTH_LEDGER_CONFIG_DIR:-$HOME/.config/wealth-ledger}
 PY=${WEALTH_LEDGER_PYTHON:-$ROOT/.venv/bin/python}
+[[ -x $PY ]] || PY=$(command -v python3)   # no venv in the checkout: the system python (needs "requests")
+# every helper reads these, so a ledger kept somewhere else needs only the variables set here
+export WEALTH_LEDGER_CONFIG_DIR=$CONF
 SCRIPT=$ROOT/simplefin/simplefin_sync.py
 ACCESS=${WEALTH_LEDGER_ACCESS:-$CONF/simplefin_access_url}
 DB=${WEALTH_LEDGER_DB:-$HOME/.local/share/wealth-ledger/txns.db}
+export WEALTH_LEDGER_DB=$DB
 PLAID=$ROOT/plaid/plaid_sync.py
 PLAID_CFG=${PLAID_CONFIG:-$CONF/plaid.json}
 LOCK=${WEALTH_LEDGER_LOCK:-$HOME/.cache/wealth-ledger-sync.lock}
 DAYS=${WEALTH_LEDGER_DAYS:-14}   # re-pull 2 weeks so pending -> posted updates land; 1 API request
 
 STATUS=${WEALTH_LEDGER_STATUS:-$HOME/.cache/wealth-ledger-status}
+export WEALTH_LEDGER_STATUS=$STATUS
+mkdir -p "$(dirname "$LOCK")" "$(dirname "$STATUS")"
 problems=()
 problem() { problems+=("$1"); echo "PROBLEM: $1"; }
 # whole file or nothing: the dashboard and the finances skill may read it at any moment
@@ -67,6 +79,8 @@ if [[ -f $PLAID_CFG ]]; then
   echo "$pout"
   (( prc != 0 )) && problem "Plaid sync failed: $(grep -m1 "^error" <<<"$pout" || tail -1 <<<"$pout"). If ITEM_LOGIN_REQUIRED: plaid_sync.py relink"
   (( rc == 0 )) && rc=$prc
+else
+  echo "plaid: not set up, skipped"
 fi
 # daily BTC, metal, currency and S&P 500/Nasdaq closes (dashboard units + trend benchmarks); keyless public APIs, 1 request each once backfilled
 pxout=$(cd "$ROOT" && "$PY" -m insights.prices --db "$DB" 2>&1) || problem "$(grep -m1 '^error' <<<"$pxout" || tail -1 <<<"$pxout")"
@@ -99,6 +113,8 @@ if (cd "$ROOT" && "$PY" -c 'import personal, sys; sys.exit(not personal.has_shee
   # yellow label + note on balance-sheet rows nothing keeps current (formatting only; never writes values)
   mout=$(cd "$ROOT" && "$PY" sheet_marks.py 2>&1) || problem "$(grep -m1 '^error' <<<"$mout" || tail -1 <<<"$mout")"
   echo "$mout" | tail -1
+else
+  echo "spreadsheet, valuations, Zelle memos, crypto wallets: not set up (no sheet_id in personal.json), skipped"
 fi
 
 # overdraft check: recurring auto-drafts vs checking balances; warning lines only, never a notification

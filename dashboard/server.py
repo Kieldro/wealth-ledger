@@ -45,7 +45,8 @@ from insights import prices as price_hist  # noqa: E402
 _DASH = personal.section("dashboard")
 DB = os.path.expanduser(os.environ.get("WEALTH_LEDGER_DB") or "~/.local/share/wealth-ledger/txns.db")
 STATUS = os.path.expanduser(os.environ.get("WEALTH_LEDGER_STATUS") or "~/.cache/wealth-ledger-status")
-NETWORTH = [os.path.join(ROOT, ".venv", "bin", "python"), os.path.join(ROOT, "networth.py"), "--json"]
+# networth.py runs under the interpreter serving this page (the checkout's venv, or whatever started it)
+NETWORTH = [os.environ.get("WEALTH_LEDGER_PYTHON") or sys.executable, os.path.join(ROOT, "networth.py"), "--json"]
 CACHE_TTL = 600
 STATUS_MAX_AGE_H = 36  # the sync runs daily; a last run older than this means it hung, died or isn't scheduled
 LEDGER_START = _DASH.get("ledger_start") or "1970-01-01"  # first day of complete transaction data
@@ -76,6 +77,9 @@ DEFAULT_RULES = [
     (r"car\b|truck|vehicle", "vehicles"),
     (r"brokerage|individual|taxable", "taxable"),
 ]
+# a synced account with no balance-sheet row that no rule above places: by its account type (networth.py "kind")
+KIND_CATEGORY = {"checking": "cash", "savings": "cash", "retirement": "retirement", "hsa": "retirement",
+                 "investment": "taxable"}
 CRYPTO_LINE = "Total cryptocurrency (USD)"  # networth.py line and valuations asset holding every coin
 CRYPTO_CASH_ROWS = set(personal.section("crypto").get("exchange_rows") or [])  # wallets with their own cash row
 READ_QTY = {"onchain", "exchange-api", "simplefin"}  # amounts read from a chain or exchange (mirrors networth.py)
@@ -92,7 +96,7 @@ def categorize(line: dict) -> str:
     for pat, cat in RULES:
         if re.search(pat, name, re.I):
             return cat
-    return "other"
+    return KIND_CATEGORY.get(line.get("kind"), "other")
 
 
 # ---------- data access ----------
@@ -137,6 +141,9 @@ def read_status(now: datetime | None = None) -> dict:
         c = connect_state()
         if c and (c["needed"] or c["running"]):  # nothing has synced yet: the page shows how to connect instead
             return {"last_run": None, "rc": None, "problems": []}
+        if isinstance(e, FileNotFoundError):  # a new ledger: say what to do, not which file is missing
+            return {"last_run": None, "rc": None,
+                    "problems": ["No sync has run yet: run bin/wealth-ledger-sync (see the README's quick start)"]}
         return {"last_run": None, "rc": None, "problems": [f"status file unreadable: {e.strerror}"]}
     m = re.match(r"last run (\S+) rc=(\d+)", lines[0]) if lines else None
     out = {"last_run": m.group(1) if m else None, "rc": int(m.group(2)) if m else None,
@@ -499,7 +506,7 @@ EXCHANGES = {"Gemini", "Coinbase", "Kraken", "Binance", "Fidelity Crypto", "Cash
 
 
 def btc_locations(wallets: list[dict], btc_price: float | None) -> dict:
-    """Where Ian's bitcoin is: wallets (self-custody or exchange) plus bitcoin funds in brokerage/IRA accounts,
+    """Where the owner's bitcoin is: wallets (self-custody or exchange) plus bitcoin funds in brokerage/IRA accounts,
     as BTC-equivalent at today's price (fund value / BTC price; close enough, the funds track spot)."""
     rows = [{"where": w["wallet"], "type": "exchange" if w["wallet"] in EXCHANGES else "self-custody",
              "btc": h["qty"], "value": h["value"], "source": h["qty_source"]}
@@ -709,9 +716,10 @@ def api_subscriptions(params) -> dict:
 
 
 def api_rental(params) -> dict:
+    cfg = personal.section("rental")
     con = db()
-    try:
-        return rental.summary(con, personal.section("rental"), LEDGER_START)
+    try:  # no "rental" section: the card is hidden, so this month only rather than every month since LEDGER_START
+        return rental.summary(con, cfg, LEDGER_START if cfg else date.today().replace(day=1).isoformat())
     finally:
         con.close()
 
@@ -1646,7 +1654,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, b"ok\n", "text/plain")
             if m := ICON_PATH.fullmatch(p):
                 icon = icon_bytes(m.group(1))
-                return self._send(200, icon, "image/png", cache="private, max-age=86400") if icon else self._json(404, {"error": "not found"})
+                if icon:
+                    return self._send(200, icon, "image/png", cache="private, max-age=86400")
+                # no icon for this institution is the usual case: an empty reply (the page drops the <img>), not a
+                # 404 that the browser reports as an error for every account
+                return self._send(204, b"", "image/png")
             if p == "/api/last":
                 return self._send(200, last_good(), "application/json")
             fn = ROUTES.get(p)
@@ -1741,6 +1753,10 @@ def main():
         threading.Thread(target=tailnet_binder, args=(a.port,), daemon=True).start()
     if AUTH.creds():
         log(f"auth: credentials loaded from {AUTH_FILE}")
+    if not os.path.exists(DB):  # started before the first sync: an empty ledger, so the page loads with nothing in it
+        import ctdb
+        os.makedirs(os.path.dirname(DB), exist_ok=True)
+        ctdb.connect(DB).close()
     threading.Thread(target=networth, daemon=True).start()  # warm the cache
     serve("127.0.0.1", a.port)
 

@@ -32,7 +32,7 @@ from typing import Any, Iterable, Optional
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 DEFAULT_TAB = "Transactions"
-DEFAULT_DB = Path("~/.local/share/wealth-ledger/txns.db").expanduser()
+DEFAULT_DB = Path(os.environ.get("WEALTH_LEDGER_DB") or "~/.local/share/wealth-ledger/txns.db").expanduser()
 SHEETS_EPOCH = date(1899, 12, 30)  # Sheets/Excel serial-date day 0
 
 log = logging.getLogger("tiller_sync")
