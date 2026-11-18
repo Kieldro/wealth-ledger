@@ -172,6 +172,16 @@ def test_statement_lag_is_the_one_most_autopays_agree_on(led):
     assert overdraft.statement_lag(led.db, card, pays[1:]) == 22  # with two payments, only what both fit
     assert overdraft.statement_lag(led.db, card, pays + [(date(2026, 10, 14), 200)]) == 21  # an outlier can't outvote
     assert overdraft.statement_lag(led.db, card, [(date(2026, 10, 14), 77)]) == overdraft.STATEMENT_LAG  # fits nothing
+    seen = []  # the card's rows are read once, not once per candidate close (that took the drafts request seconds)
+    led.db.set_trace_callback(seen.append)
+    assert overdraft.statement_lag(led.db, card, pays) == 21
+    led.db.set_trace_callback(None)
+    assert len(seen) == 1
+    rows = overdraft._posted(led.db, card)
+    for d in (date(2026, 8, 1), date(2026, 9, 20), date(2026, 10, 14)):  # the in-memory sums are the queries' sums
+        assert overdraft._owed_at(led.db, card, d, rows) == pytest.approx(overdraft._owed_at(led.db, card, d))
+        assert overdraft._paid_between(led.db, card, d, date(2026, 10, 30), rows) == pytest.approx(overdraft._paid_between(led.db, card, d, date(2026, 10, 30)))
+        assert overdraft._paid_between(led.db, card, d, None, rows) == pytest.approx(overdraft._paid_between(led.db, card, d))
     assert led.autopays() == [("2026-10-31", -400)]
 
 

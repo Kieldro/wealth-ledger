@@ -462,15 +462,15 @@ def test_page_shows_loading_and_never_leaves_a_blank_after_a_failed_request():
     leaves words and a Retry button rather than an empty cell. Every card belongs to exactly one request."""
     import re
     html = open(server.os.path.join(server.os.path.dirname(server.__file__), "index.html")).read()
-    for needle in ('<div id="loadbar" role="progressbar" aria-label="Loading"></div>', '$("loadbar").hidden = !inflight;',
+    for needle in ('<div id="loadbar" role="progressbar" aria-label="Loading"></div>', '$("loadbar").hidden = !list.length;',
                    "const TIMEOUT_MS = 20e3, SLOW_MS = 75e3", "signal: ac.signal", "setTimeout(() => ac.abort(), timeout)",
                    "no answer after ${Math.round(timeout / 1000)} seconds", "can't reach the server",
                    'id="nw"><span class="skel" role="status" aria-label="Loading"></span>',
                    'id="assets"><span class="skel"', 'id="liabs"><span class="skel"',
                    '<span class="pill"><span class="spin" aria-hidden="true"></span>Loading…</span>',
-                   "Couldn't load this section.", "Couldn't refresh this section. Showing what loaded earlier.",
+                   "Couldn't load this section.", "Couldn't refresh this section. Showing the numbers from ${esc(fmtFrom(shownAt[k]))}.",
                    '<button type="button" data-retry="${k}">Retry</button>', 'e.target.closest("button[data-retry]")',
-                   'setLoad(k, had ? "stale" : "error", e.message)', 'id="acctretry"', "body.slowload .loadbox .lbl::after",
+                   'setLoad(k, k in data ? "stale" : "error", e.message)', 'id="acctretry"',
                    '.card[data-load="loading"] > .secbody > :not(.loadbox), .card[data-load="error"] > .secbody > :not(.loadbox) { display: none !important; }',
                    '.card[data-load="error"] > .sechd .kf::before { content: "Couldn\'t load";'):
         assert needle in html, needle
@@ -482,8 +482,119 @@ def test_page_shows_loading_and_never_leaves_a_blank_after_a_failed_request():
     grid = html[html.index('<div class="grid"'):html.index('id="totop"')]
     assert sorted(owned) == sorted(re.findall(r'<section class="card span-\d+" id="(\w+)"', grid)) and len(owned) == 14
     assert len(re.findall(r'url: "/api/\w+", fn: render\w+', parts)) == 12
-    for slow in ("summary", "trend", "budget"):  # these wait on a sheet read, which the server allows 60 s
+    for slow in ("summary", "trend", "spending", "budget"):  # these wait on a sheet read, which the server allows 60 s
         assert re.search(rf"\b{slow}: \{{[^}}]*slow: true\}}", parts), slow
+
+
+def test_page_shows_the_last_numbers_first_and_says_what_it_is_waiting_on():
+    """Guard on the page source (behaviour is checked in a headless browser): the first load draws the server's last
+    good answers, dimmed until fresh ones land; each request in flight is named in plain words with its seconds so
+    far, its usual time and its time limit; a failed refresh keeps the numbers and says from when. Only how long
+    requests take is kept in the browser, never an answer."""
+    import re
+    html = open(server.os.path.join(server.os.path.dirname(server.__file__), "index.html")).read()
+    for needle in ('<div id="loadlist" hidden></div>', 'await get("/api/last", {timeout: 8e3})', "const last = everLoaded ? null : showLast();",
+                   'setLoad(k, k in data ? "old" : "loading")', 'setLoad(k, failed.has(k) ? "stale" : pending[k] ? "old" : null, failed.get(k))',
+                   '.card[data-load="old"] > .secbody, #hero[data-load="old"] :is(.big, .mid, .chips) { opacity: .55;',
+                   'const TIMES_KEY = "wl.loadtimes", TIMES_KEPT = 8;', "localStorage.setItem(TIMES_KEY, JSON.stringify(loadTimes))",
+                   '"usually " + secsText(u) + " · "', "gives up at ${Math.round(f.timeout / 1000)}s", "slower than usual",
+                   "ms > Math.max(2 * u, 2000)", 'Math.floor(ms / 1000) + "s"', 'title="${esc(f.method + " " + f.path)}"',
+                   "showing the numbers from ${fmtFrom(from)} meanwhile", "`+${more} more`", "Couldn't refresh · showing numbers from ${esc(fmtFrom(shownAt.summary))}",
+                   "Showing the numbers from ${esc(fmtFrom(Math.min(...parts.map(k => shownAt[k]))))}."):
+        assert needle in html, needle
+    names = html[html.index("const REQ_NAME = {"):html.index("// How long each request usually takes")]
+    named = set(re.findall(r"(\w+): \"", names))
+    parts = html[html.index("const PARTS = {"):html.index("const SKEL =")]
+    routes = re.findall(r'url: "/api/(\w+)"', parts)
+    assert sorted(routes) == sorted(server.LAST_KEYS)  # every request the page starts with has a kept answer
+    assert named == set(routes) | {"refresh", "account_txns", "last"} and "/api/" not in names  # words, not addresses
+    stored = set(re.findall(r"localStorage\.setItem\((\w+)", html))
+    assert stored == {"ARANGE_KEY", "BENCH_KEY", "ORDER_KEY", "PRIV_KEY", "SEC_KEY", "THEME_KEY", "TIMES_KEY", "TREND_KEY", "UNIT_KEY"}
+    assert "sessionStorage" not in html and "indexedDB" not in html and "caches." not in html
+
+
+def test_page_script_parses(tmp_path):
+    """A name declared twice or a stray brace stops the whole page: every card would sit on its placeholder."""
+    import re, shutil, subprocess
+    if not shutil.which("node"):
+        pytest.skip("node not installed")
+    html = open(server.os.path.join(server.os.path.dirname(server.__file__), "index.html")).read()
+    scripts = re.findall(r"<script>(.*?)</script>", html, re.S)
+    assert len(scripts) == 2
+    for i, js in enumerate(scripts):
+        f = tmp_path / f"page{i}.js"
+        f.write_text(js)
+        r = subprocess.run(["node", "--check", str(f)], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr[-600:]
+
+
+@pytest.fixture
+def lastdir(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "LAST_DIR", str(tmp_path / "conf" / "dashboard_last"))
+    monkeypatch.setattr(server, "_last", None)
+    monkeypatch.setattr(server, "_nw", {"data": {"lines": []}, "fetched": 1.0, "error": None})
+    return tmp_path / "conf" / "dashboard_last"
+
+
+def test_last_good_answers_are_kept_private_on_disk_and_survive_a_restart(lastdir, monkeypatch):
+    assert server.last_good() == b"{}" and not lastdir.exists()  # nothing kept yet, nothing created by asking
+    body = json.dumps({"accounts": [{"balance": 12.5}]}).encode()
+    monkeypatch.setattr(server.time, "time", lambda: 1000.0)
+    server.remember("accounts", json.loads(body), body)
+    server.remember("account_txns", {"txns": []}, b'{"txns": []}')  # one account's rows: not a page-load request
+    server.remember("../evil", {}, b"{}")
+    assert [p.name for p in lastdir.iterdir()] == ["accounts.json"] and (lastdir / "accounts.json").read_bytes() == body
+    assert (lastdir / "accounts.json").stat().st_mode & 0o777 == 0o600 and lastdir.stat().st_mode & 0o777 == 0o700
+    assert json.loads(server.last_good()) == {"accounts": {"saved": 1000.0, "data": {"accounts": [{"balance": 12.5}]}}}
+    ino = (lastdir / "accounts.json").stat().st_ino
+    monkeypatch.setattr(server.time, "time", lambda: 2000.0)
+    server.remember("accounts", json.loads(body), body)  # the same answer again: only its time moves
+    assert (lastdir / "accounts.json").stat().st_ino == ino and (lastdir / "accounts.json").stat().st_mtime == 2000.0
+    assert json.loads(server.last_good())["accounts"]["saved"] == 2000.0
+    (lastdir / "cards.json").write_text('{"cards": [')  # torn file
+    (lastdir / "rental.json").write_text("[1]")           # not an answer
+    monkeypatch.setattr(server, "_last", None)            # a restart: back from disk
+    assert json.loads(server.last_good()) == {"accounts": {"saved": 2000.0, "data": {"accounts": [{"balance": 12.5}]}}}
+    monkeypatch.setattr(server, "LAST_DIR", "/proc/nope/dashboard_last")  # can't write: still answered from memory
+    server.remember("holdings", {"count": 1}, b'{"count": 1}')
+    assert json.loads(server.last_good())["holdings"]["data"] == {"count": 1}
+
+
+def test_an_answer_with_nothing_to_show_does_not_replace_the_last_good_one(lastdir, monkeypatch):
+    good = b'{"net_worth": 5.0}'
+    server.remember("summary", {"net_worth": 5.0}, good)
+    server.remember("budget", {"error": None, "months": []}, b'{"months": []}')
+    monkeypatch.setattr(server, "_nw", {"data": None, "fetched": 0.0, "error": "networth.py failed: boom"})
+    server.remember("summary", {"net_worth": None, "networth_error": "networth.py failed: boom"}, b'{"net_worth": null}')
+    server.remember("trend", {"sheet_only_total": None}, b'{"sheet_only_total": null}')
+    server.remember("budget", {"error": "budget sheet read failed: boom"}, b'{"error": "boom"}')
+    kept = json.loads(server.last_good())
+    assert kept["summary"]["data"] == {"net_worth": 5.0} and kept["budget"]["data"] == {"months": []} and "trend" not in kept
+    monkeypatch.setattr(server, "_nw", {"data": None, "fetched": 0.0, "error": None})  # a ledger with nothing yet is still an answer
+    server.remember("trend", {"sheet_only_total": None}, b'{"sheet_only_total": null}')
+    server.remember("budget", {"error": None, "off": True}, b'{"off": true}')
+    assert set(json.loads(server.last_good())) == {"summary", "budget", "trend"} and json.loads(server.last_good())["budget"]["data"] == {"off": True}
+
+
+def test_requests_keep_their_answers_and_api_last_needs_a_session(lastdir, monkeypatch):
+    sent = []
+    h = server.Handler.__new__(server.Handler)
+    h._send = lambda code, body, ctype, headers=(), csp=None, cache=None: sent.append((code, body, ctype))
+    h._deny = lambda p: sent.append((401, p))
+    h._authed = lambda: False
+    h.path = "/api/last"
+    h.do_GET()
+    assert sent == [(401, "/api/last")] and not lastdir.exists()
+    h._authed = lambda: True
+    monkeypatch.setitem(server.ROUTES, "/api/cards", lambda params: {"cards": [1], "id": params.get("id")})
+    monkeypatch.setitem(server.ROUTES, "/api/rental", lambda params: 1 / 0)
+    for path in ("/api/cards", "/api/cards?id=7", "/api/rental", "/api/last"):
+        h.path = path
+        h.do_GET()
+    assert [c for c, *_ in sent[1:]] == [200, 200, 500, 200] and sent[1][1] == b'{"cards": [1], "id": null}'
+    kept = json.loads(sent[-1][1])
+    assert sent[-1][2] == "application/json" and list(kept) == ["cards"]  # not the filtered answer, not the failed one
+    assert kept["cards"]["data"] == {"cards": [1], "id": None} and kept["cards"]["saved"] > 0
 
 
 def test_page_says_sync_problem_in_words_not_an_exit_code():

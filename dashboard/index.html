@@ -395,14 +395,28 @@ footer code { font-size: 11.5px; }
 .loadbox .bars .skel { display: block; width: 100%; height: 12px; }
 .loadbox .bars .skel:nth-child(2) { width: 82%; }
 .loadbox .bars .skel:nth-child(3) { width: 64%; }
-body.slowload .loadbox .lbl::after { content: " Still working: a first read of the balance sheet can take up to a minute."; color: var(--muted); }
+.hint { color: var(--muted); }
+.slow { color: var(--warn); font-weight: 600; white-space: nowrap; }
+/* what is being waited on, once a request has taken a moment: its name, seconds so far, how long it usually takes
+   and when it gives up. A short list in the bottom corner, clear of the header; on a phone, one request across the
+   bottom edge. */
+#loadlist { position: fixed; right: 14px; bottom: 14px; z-index: 60; max-width: min(600px, calc(100vw - 24px)); padding: 7px 12px; border-radius: 10px;
+  font-size: 12px; line-height: 1.5; color: var(--text-2); font-variant-numeric: tabular-nums; border: 1px solid var(--border); box-shadow: 0 8px 24px rgb(0 0 0 / .35);
+  background: color-mix(in srgb, var(--surface-2) 92%, transparent); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+#loadlist[hidden] { display: none; }
+#loadlist div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#loadlist b { font-weight: 600; color: var(--text); }
+/* earlier numbers on screen while new ones load: dimmed, and only once the wait is long enough to notice */
+.card[data-load="old"] > .secbody, #hero[data-load="old"] :is(.big, .mid, .chips) { opacity: .55; transition: opacity .2s .35s; }
+@keyframes appear { from { opacity: 0; } }
 .loadbox.failed { color: var(--neg); }
 .loadbox.stale { margin-bottom: 10px; padding: 6px 10px; border-radius: 10px; background: var(--warn-bg); color: var(--warn); }
 .loadbox .why { flex-basis: 100%; font-size: 12px; color: var(--muted); }
 .loadbox.stale .why { color: inherit; opacity: .8; }
 .card[data-load="loading"] > .secbody > :not(.loadbox), .card[data-load="error"] > .secbody > :not(.loadbox) { display: none !important; }
-.card.collapsed[data-load="loading"] > .sechd .kf::before { content: ""; display: inline-block; width: 11px; height: 11px; margin-right: 6px; border-radius: 50%; vertical-align: -1px;
+.card.collapsed:is([data-load="loading"], [data-load="old"]) > .sechd .kf::before { content: ""; display: inline-block; width: 11px; height: 11px; margin-right: 6px; border-radius: 50%; vertical-align: -1px;
   border: 2px solid color-mix(in srgb, var(--accent) 28%, transparent); border-top-color: var(--accent); animation: spin .8s linear infinite; }
+.card.collapsed[data-load="old"] > .sechd .kf::before { animation: spin .8s linear infinite, appear .35s step-end; }
 .card[data-load="error"] > .sechd .kf { font-size: 0; }  /* a figure another request filled in must not read as this card's */
 .card[data-load="error"] > .sechd .kf::before { content: "Couldn't load"; font-size: 12.5px; color: var(--neg); }
 .card[data-load="stale"] > .sechd .kf::before { content: "Not refreshed · "; color: var(--warn); }
@@ -412,7 +426,7 @@ body.slowload .loadbox .lbl::after { content: " Still working: a first read of t
 .acctbar .spin { margin-right: 6px; }
 @media (prefers-reduced-motion: reduce) {  /* still says "loading", without the movement */
   #loadbar::before { animation: none; width: 100%; opacity: .75; }
-  .spin, .card.collapsed[data-load="loading"] > .sechd .kf::before { animation: none; border-color: var(--accent); border-style: dotted; }
+  .spin, .card.collapsed:is([data-load="loading"], [data-load="old"]) > .sechd .kf::before { animation: none; border-color: var(--accent); border-style: dotted; }
   .skel { animation: none; background: var(--surface-2); }
 }
 
@@ -483,6 +497,8 @@ body.slowload .loadbox .lbl::after { content: " Still working: a first read of t
   #holds .desc { max-width: none; white-space: normal; }
   .pill.old { white-space: normal; }
   .wrap { padding: 12px 12px 16px; }
+  #loadlist { left: 0; right: 0; bottom: 0; max-width: none; padding: 6px 12px calc(6px + env(safe-area-inset-bottom)); border-width: 1px 0 0; border-radius: 10px 10px 0 0; font-size: 11.5px; pointer-events: none; }
+  #loadlist div { white-space: normal; }
   .hero { grid-template-columns: 1fr 1fr; gap: 8px; }
   .hero .card:first-child { grid-column: span 2; }
   .big { font-size: 32px; }
@@ -510,6 +526,7 @@ document.querySelector('meta[name="theme-color"]').content = getComputedStyle(do
 </head>
 <body>
 <div id="loadbar" role="progressbar" aria-label="Loading"></div>
+<div id="loadlist" hidden></div>
 <div class="wrap">
   <header class="top">
     <h1><svg viewBox="0 0 16 16" aria-hidden="true"><rect width="16" height="16" rx="4"/><path d="M3 11l3-3 2 2 5-5" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>Wealth Ledger</h1>
@@ -809,28 +826,81 @@ document.addEventListener("error", e => { if (e.target.matches?.("img.ico")) e.t
 const stripNum = s => String(s || "").replace(/\s*\([0-9a-f-]+\)$/, "");
 // Every request shows in the bar at the top and gives up after a time limit, so nothing waits forever. The longer
 // limit is for the requests that may wait on the server reading the balance sheet (it allows that 60 s itself).
-const TIMEOUT_MS = 20e3, SLOW_MS = 75e3, STILL_MS = 8e3;
-let inflight = 0, stillTimer = 0;
-function busy(d) {
-  inflight += d;
-  $("loadbar").hidden = !inflight;
-  if (inflight === d) stillTimer = setTimeout(() => document.body.classList.add("slowload"), STILL_MS);  // the first one in
-  if (!inflight) { clearTimeout(stillTimer); document.body.classList.remove("slowload"); }
+const TIMEOUT_MS = 20e3, SLOW_MS = 75e3, LIST_AFTER_MS = 400;
+// what each request is waiting on, in plain words (by the last part of its address)
+const REQ_NAME = {summary: "net worth and balance sheet", trend: "net-worth history", accounts: "account balances", holdings: "holdings",
+  crypto: "crypto wallets", cards: "credit cards", spending: "spending and transactions", drafts: "upcoming drafts and pay", budget: "budget",
+  subscriptions: "subscriptions", rental: "rental income", inherited_ira: "inherited IRA", refresh: "balance sheet re-read",
+  account_txns: "account transactions", last: "last saved numbers"};
+// How long each request usually takes: its last few successful times, kept per browser (durations only, no data).
+const TIMES_KEY = "wl.loadtimes", TIMES_KEPT = 8;
+let loadTimes = {};
+try { const v = JSON.parse(localStorage.getItem(TIMES_KEY) || "{}"); if (v && typeof v === "object" && !Array.isArray(v)) loadTimes = v; } catch { /* storage blocked or a bad value */ }
+const timesOf = key => Array.isArray(loadTimes[key]) ? loadTimes[key].filter(x => Number.isFinite(x) && x >= 0) : [];
+function usualMs(key) {  // null: no history yet
+  const a = timesOf(key);
+  return a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
+}
+function noteTime(key, ms) {
+  loadTimes[key] = [...timesOf(key), Math.round(ms)].slice(-TIMES_KEPT);
+  try { localStorage.setItem(TIMES_KEY, JSON.stringify(loadTimes)); } catch { /* storage blocked: the averages last until reload */ }
+}
+const flights = new Map();  // requests in flight, oldest first: {key, part, path, method, name, t0, timeout}
+const shownAt = {};  // part → when the numbers on screen for it were true (ms): just loaded, or the server's saved copy
+let flightSeq = 0, tickTimer = 0;
+const secsText = ms => ms < 950 ? "under 1s" : "~" + Math.round(ms / 1000) + "s";
+// one request's wait in words: "Account balances… 4s (usually ~1s · gives up at 20s) slower than usual"
+function waitHTML(f, now, lead = "") {
+  const ms = now - f.t0, u = usualMs(f.key), name = lead ? lead + " " + f.name : f.name[0].toUpperCase() + f.name.slice(1);
+  return `${lead ? esc(name) : `<b>${esc(name)}</b>`}…${ms >= 1000 ? " " + Math.floor(ms / 1000) + "s" : ""} ` +
+    `<span class="hint">(${u == null ? "" : "usually " + secsText(u) + " · "}gives up at ${Math.round(f.timeout / 1000)}s)</span>` +
+    (u != null && ms > Math.max(2 * u, 2000) ? ' <span class="slow">slower than usual</span>' : "");
+}
+// when some numbers are from: the time alone for today, "yesterday 8:22 AM", else the date and time
+function fmtFrom(ms) {
+  const d = new Date(ms), y = new Date(), t = d.toLocaleTimeString("en-US", {hour: "numeric", minute: "2-digit"});
+  if (d.toDateString() === y.toDateString()) return t;
+  y.setDate(y.getDate() - 1);
+  return d.toDateString() === y.toDateString() ? "yesterday " + t : fmtTime(d.toISOString());
+}
+function tick() {  // on every change to what's in flight, and four times a second while anything is
+  const now = performance.now(), list = [...flights.values()];
+  $("loadbar").hidden = !list.length;
+  for (const el of document.querySelectorAll(".loadbox .lbl[data-key]")) {  // a card with nothing to show yet: its own request
+    const f = list.find(x => x.key === el.dataset.key);
+    if (f) el.innerHTML = waitHTML(f, now, "Loading");
+  }
+  const shown = list.filter(f => now - f.t0 >= LIST_AFTER_MS), box = $("loadlist"), max = PHONE.matches ? 1 : 4;
+  box.hidden = !shown.length;
+  if (!shown.length) return;
+  const more = shown.length - max, from = Math.min(...shown.map(f => shownAt[f.part]).filter(Boolean));
+  const tail = [more > 0 ? `+${more} more` : "", isFinite(from) ? `showing the numbers from ${fmtFrom(from)} meanwhile` : ""].filter(Boolean).join(" · ");
+  box.innerHTML = shown.slice(0, max).map(f => `<div title="${esc(f.method + " " + f.path)}">${waitHTML(f, now)}</div>`).join("") +
+    (tail ? `<div class="hint">${esc(cap(tail))}</div>` : "");
 }
 async function get(path, opts = {}) {
-  const {timeout = TIMEOUT_MS, ...init} = opts, ac = new AbortController();
+  const {timeout = TIMEOUT_MS, part = null, ...init} = opts, ac = new AbortController(), key = path.slice(5).split("?")[0], id = ++flightSeq;
+  const f = {key, part, path, method: init.method || "GET", name: REQ_NAME[key] || key, t0: performance.now(), timeout};
   const timer = setTimeout(() => ac.abort(), timeout);
-  busy(1);
+  flights.set(id, f);
+  if (flights.size === 1) tickTimer = setInterval(tick, 250);
+  tick();
   try {
     const r = await fetch(path, {cache: "no-store", credentials: "same-origin", signal: ac.signal, ...init});
     if (r.status === 401) { location.href = "/login"; throw new Error("signed out"); }
     if (!r.ok) throw new Error("the server answered with an error (HTTP " + r.status + ")");
-    return await r.json();
+    const d = await r.json();
+    noteTime(key, performance.now() - f.t0);
+    return d;
   } catch (e) {
     if (ac.signal.aborted) throw new Error(`no answer after ${Math.round(timeout / 1000)} seconds`);
     if (e instanceof TypeError) throw new Error("can't reach the server");
     throw e;
-  } finally { clearTimeout(timer); busy(-1); }
+  } finally {
+    clearTimeout(timer); flights.delete(id);
+    if (!flights.size) clearInterval(tickTimer);
+    tick();
+  }
 }
 const CAT_COLOR = {cash: "--s1", retirement: "--s2", taxable: "--s3", crypto: "--s4", metals: "--s5", realestate: "--s6", vehicles: "--s7", other: "--s8"};
 const charts = {};
@@ -2284,7 +2354,7 @@ const PARTS = {
   holdings: {url: "/api/holdings", fn: renderHoldings, cards: ["holdscard"]},
   crypto: {url: "/api/crypto", fn: renderCrypto, cards: ["cryptocard"]},
   cards: {url: "/api/cards", fn: renderCards, cards: ["cardscard"]},
-  spending: {url: "/api/spending", fn: renderSpending, cards: ["spendcard", "txcard"]},
+  spending: {url: "/api/spending", fn: renderSpending, cards: ["spendcard", "txcard"], slow: true},
   drafts: {url: "/api/drafts", fn: renderDrafts, cards: ["draftscard"]},
   budget: {url: "/api/budget", fn: renderBudget, cards: ["budget"], slow: true},
   subscriptions: {url: "/api/subscriptions", fn: renderSubscriptions, cards: ["subscard"]},
@@ -2293,20 +2363,26 @@ const PARTS = {
 };
 const SKEL = '<span class="skel" role="status" aria-label="Loading"></span>';
 const retryBtn = k => `<button type="button" data-retry="${k}">Retry</button>`;
-// A card's loading state: "loading" (a skeleton instead of its empty tables and charts), "error" (nothing to show:
-// the reason and Retry), "stale" (a refresh failed: the numbers loaded earlier stay, under a line saying so) or none.
+const routeKey = k => PARTS[k].url.slice(5);
+// A card's state while its request is out or after it failed: "loading" (nothing to show yet: what it is waiting on,
+// over a skeleton), "old" (earlier numbers stay, dimmed, until the new ones land), "error" (nothing to show: the
+// reason and Retry), "stale" (the refresh failed: the earlier numbers stay under a line saying from when), or none.
 function cardLoad(sec, state, k, why = "") {
   const body = sec.querySelector(".secbody");
   body.querySelector(":scope > .loadbox")?.remove();
+  sec.toggleAttribute("aria-busy", state === "loading" || state === "old");
   if (!state) { delete sec.dataset.load; return; }
   sec.dataset.load = state;
+  if (state === "old") return;
   body.insertAdjacentHTML("afterbegin", state === "loading"
-    ? `<div class="loadbox" role="status"><span class="spin" aria-hidden="true"></span><span class="lbl">Loading…</span><div class="bars" aria-hidden="true">${'<i class="skel"></i>'.repeat(3)}</div></div>`
-    : `<div class="loadbox ${state === "stale" ? "stale" : "failed"}" role="alert"><span>${state === "stale" ? "Couldn't refresh this section. Showing what loaded earlier." : "Couldn't load this section."}</span>${retryBtn(k)}<span class="why">Reason: ${esc(why)}.</span></div>`);
+    ? `<div class="loadbox"><span class="spin" aria-hidden="true"></span><span class="lbl" data-key="${routeKey(k)}" title="GET ${PARTS[k].url}">Loading ${esc(REQ_NAME[routeKey(k)])}…</span><div class="bars" aria-hidden="true">${'<i class="skel"></i>'.repeat(3)}</div></div>`
+    : `<div class="loadbox ${state === "stale" ? "stale" : "failed"}" role="alert"><span>${state === "stale" ? `Couldn't refresh this section. Showing the numbers from ${esc(fmtFrom(shownAt[k]))}.` : "Couldn't load this section."}</span>${retryBtn(k)}<span class="why">Reason: ${esc(why)}.</span></div>`);
 }
 function setLoad(k, state, why = "") {
   for (const id of PARTS[k].cards) cardLoad($(id), state, k, why);
-  if (k !== "summary" || !state || state === "stale") return;  // the headline: numbers already on screen stay
+  if (k !== "summary") return;
+  if (state) $("hero").dataset.load = state; else delete $("hero").dataset.load;
+  if (state !== "loading" && state !== "error") return;  // the headline: numbers already on screen stay
   const wait = state === "loading";
   $("nw").classList.remove("long"); $("nwunit").textContent = "";
   $("nw").innerHTML = wait ? SKEL : `<span class="loadfail" role="alert" title="${esc(why)}">Couldn't load ${retryBtn(k)}</span>`;
@@ -2316,33 +2392,55 @@ function setLoad(k, state, why = "") {
   if ($("fetched")) $("fetched").textContent = wait ? "loading…" : "couldn't load";
 }
 const pending = {}, failed = new Map();  // part → its request in flight (a retry and a reload never double up); part → why it failed
-function showFailed() {  // one line at the top naming what didn't load: kept apart from #problems, which renderSummary rewrites
-  const names = [...failed.keys()].filter(k => !PARTS[k] || !data.summary || PARTS[k].cards.some(id => !$(id).hidden))
-    .map(k => k === "refresh" ? "Balance sheet re-read" : k === "summary" ? "Net worth" : $(PARTS[k].cards[0]).dataset.nav);
-  $("loaderrors").innerHTML = !names.length ? "" : `<div class="err" role="alert" title="${esc([...failed].map(([k, m]) => k + ": " + m).join("\n"))}"><span>Couldn't load: ${esc(names.join(", "))}.</span>${retryBtn("all")}</div>`;
+// One line at the top naming what didn't load, and from when the numbers still on screen are. Kept apart from
+// #problems, which renderSummary rewrites.
+function showFailed() {
+  const ks = [...failed.keys()].filter(k => !PARTS[k] || !data.summary || PARTS[k].cards.some(id => !$(id).hidden));
+  const names = ks.map(k => k === "refresh" ? "Balance sheet re-read" : k === "summary" ? "Net worth" : $(PARTS[k].cards[0]).dataset.nav);
+  const parts = ks.filter(k => PARTS[k]), kept = parts.length && parts.every(k => k in data);
+  $("loaderrors").innerHTML = !ks.length ? "" : `<div class="err" role="alert" title="${esc([...failed].map(([k, m]) => k + ": " + m).join("\n"))}">` +
+    `<span>Couldn't ${kept || !parts.length ? "refresh" : "load"}: ${esc(names.join(", "))}.${kept ? ` Showing the numbers from ${esc(fmtFrom(Math.min(...parts.map(k => shownAt[k]))))}.` : ""}</span>${retryBtn("all")}</div>`;
 }
 function loadPart(k, refresh = false) {
   return pending[k] ||= (async () => {
-    const p = PARTS[k], had = k in data;
-    if (!had) setLoad(k, "loading");
+    const p = PARTS[k];
+    setLoad(k, k in data ? "old" : "loading");
     try {
-      const d = await get(refresh ? "/api/refresh" : p.url, {timeout: p.slow ? SLOW_MS : TIMEOUT_MS, ...(refresh ? {method: "POST"} : {})});
-      data[k] = d; failed.delete(k); setLoad(k, null);  // before drawing: a chart sizes itself to a card that shows
+      const d = await get(refresh ? "/api/refresh" : p.url, {part: k, timeout: p.slow ? SLOW_MS : TIMEOUT_MS, ...(refresh ? {method: "POST"} : {})});
+      data[k] = d; shownAt[k] = Date.now(); failed.delete(k); setLoad(k, null);  // before drawing: a chart sizes itself to a card that shows
       p.fn(d);
       if (k === "summary") loadedAt = Date.now();
       if (k === "trend" && curUnit() !== "USD") renderAll();
       return true;
     } catch (e) {
       console.error(k, e);
-      failed.set(k, e.message); setLoad(k, had ? "stale" : "error", e.message);
+      failed.set(k, e.message); setLoad(k, k in data ? "stale" : "error", e.message);
       return false;
     } finally { delete pending[k]; showFailed(); }
   })();
 }
+// The numbers from the last time each request was answered (the server keeps them: /api/last), shown at once on the
+// page's first load while the real requests run. Whatever has already arrived fresh is left alone.
+async function showLast() {
+  let last;
+  try { last = await get("/api/last", {timeout: 8e3}); } catch (e) { console.error("last", e); return; }
+  const ks = Object.keys(PARTS).filter(k => !(k in data) && last[routeKey(k)]?.data && last[routeKey(k)].saved > 0);
+  for (const k of ks) { data[k] = last[routeKey(k)].data; shownAt[k] = last[routeKey(k)].saved * 1000; }
+  ks.sort((a, b) => (b === "summary") - (a === "summary"));  // first: it decides which cards show
+  for (const k of ks) {
+    setLoad(k, failed.has(k) ? "stale" : pending[k] ? "old" : null, failed.get(k));
+    try { PARTS[k].fn(data[k]); } catch (e) { console.error(k, e); }
+  }
+  if (ks.includes("trend") && curUnit() !== "USD") renderAll();
+  showFailed();
+}
+let everLoaded = false;
 async function load(refresh = false) {
   if (loading) return;
   loading = true;
   const btn = $("refresh"); if (btn) { btn.disabled = true; btn.textContent = "Refreshing…"; }
+  const last = everLoaded ? null : showLast();
+  everLoaded = true;
   let summaryOk = false, reread = null;
   try {
     // summary first when refreshing, so the trend uses the new sheet total; if the re-read fails, the plain summary still loads
@@ -2350,13 +2448,14 @@ async function load(refresh = false) {
     const ks = Object.keys(PARTS).filter(k => !(summaryOk && k === "summary"));
     const oks = await Promise.all(ks.map(k => loadPart(k)));
     summaryOk ||= !!oks[ks.indexOf("summary")];
+    await last;
   } finally {
     loading = false;
     if (reread && summaryOk) failed.set("refresh", reread); else failed.delete("refresh");
     showFailed();
     const b = $("refresh"); if (b) { b.disabled = false; b.textContent = "Refresh"; }
-    if (!summaryOk && loadedAt && !$("unrefreshed")) $("agebar").insertAdjacentHTML("afterbegin",
-      `<span class="pill old" id="unrefreshed">Couldn't refresh · showing numbers loaded ${esc(fmtTime(new Date(loadedAt).toISOString()))}</span>`);
+    if (!summaryOk && data.summary && !$("unrefreshed")) $("agebar").insertAdjacentHTML("afterbegin",
+      `<span class="pill old" id="unrefreshed">Couldn't refresh · showing numbers from ${esc(fmtFrom(shownAt.summary))}</span>`);
     document.body.dataset.ready = "1";
   }
 }

@@ -8,7 +8,7 @@ Every path needs a login session (cookie) except /login, /logout (POST) and /rob
 Endpoints: /api/summary, POST /api/refresh (re-runs networth.py), /api/trend, /api/accounts,
 /api/holdings, /api/crypto, /api/cards, /api/spending, /api/drafts (overdraft forecast), /api/budget (budget vs actual),
 /api/subscriptions (recurring charges + unusual charges), /api/rental (rental P&L),
-/api/inherited_ira (10-year rule tracker), /healthz. Page: /
+/api/inherited_ira (10-year rule tracker), /api/last (the last good answer to each of those, kept on disk), /healthz. Page: /
 """
 from __future__ import annotations
 
@@ -883,6 +883,75 @@ MAX_SESSIONS = 100
 COOKIE_RE = re.compile(r"v1\.[A-Za-z0-9_-]{43}\.\d{10}\.[A-Za-z0-9_-]{43}")
 
 
+# ---------- last good answers ----------
+# The page shows the previous numbers at once and swaps in fresh ones as they arrive (some requests wait ten seconds
+# on a Google Sheet read). So every successful answer to a page-load request is kept: in memory, and as one 0600
+# file per route under this instance's config dir (never the repo), so a restart doesn't lose them. GET /api/last
+# hands them all back without computing anything. Nothing is kept in the browser.
+LAST_DIR = os.path.join(CONF_DIR, "dashboard_last")
+LAST_KEYS = ("summary", "trend", "accounts", "holdings", "crypto", "cards", "spending", "drafts", "budget",
+             "subscriptions", "rental", "inherited_ira")
+_last_lock = threading.Lock()
+_last: dict[str, tuple[float, bytes]] | None = None  # route → (when it was answered, its JSON); None = disk not read yet
+
+
+def _last_loaded() -> dict[str, tuple[float, bytes]]:
+    """The kept answers, read from disk the first time. Call with _last_lock held."""
+    global _last
+    if _last is None:
+        _last = {}
+        for key in LAST_KEYS:
+            path = os.path.join(LAST_DIR, key + ".json")
+            try:
+                with open(path, "rb") as f:
+                    body = f.read()
+                if isinstance(json.loads(body), dict):  # a torn or hand-edited file is ignored
+                    _last[key] = (os.path.getmtime(path), body)
+            except (OSError, ValueError):
+                pass
+    return _last
+
+
+def worth_keeping(key: str, res: dict) -> bool:
+    """An answer with nothing to show must not replace one that had numbers: the summary and trend when networth.py
+    failed and there is no earlier copy in memory (right after a restart), the budget when its sheet can't be read."""
+    if key in ("summary", "trend"):
+        return not (_nw["data"] is None and _nw["error"])
+    if key == "budget":
+        return not (res.get("error") and "months" not in res)
+    return True
+
+
+def remember(key: str, res: dict, body: bytes) -> None:
+    """Keep a successful answer for /api/last. Never raises: the request it rides on is still answered."""
+    if key not in LAST_KEYS or not worth_keeping(key, res):
+        return
+    with _last_lock:
+        last, now, path = _last_loaded(), time.time(), os.path.join(LAST_DIR, key + ".json")
+        same = key in last and last[key][1] == body
+        last[key] = (now, body)
+        try:
+            if same and os.path.exists(path):
+                os.utime(path, (now, now))  # unchanged: only the time it was last true moves
+                return
+            os.makedirs(LAST_DIR, mode=0o700, exist_ok=True)
+            tmp = f"{path}.{os.getpid()}.tmp"
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "wb") as f:
+                f.write(body)
+            os.replace(tmp, path)
+        except OSError as e:
+            log(f"last good answers: can't save {key}: {e!r}")
+
+
+def last_good() -> bytes:
+    """Body of GET /api/last: {route: {"saved": epoch seconds, "data": that route's last answer}}."""
+    with _last_lock:
+        last = dict(_last_loaded())
+    return b"{" + b",".join(b'"%s":{"saved":%s,"data":%s}' % (k.encode(), str(round(t, 3)).encode(), body)
+                           for k, (t, body) in last.items()) + b"}"
+
+
 def icon_bytes(slug: str) -> bytes | None:
     """The PNG for an institution slug, or None when there is no such icon."""
     try:
@@ -1578,12 +1647,18 @@ class Handler(BaseHTTPRequestHandler):
             if m := ICON_PATH.fullmatch(p):
                 icon = icon_bytes(m.group(1))
                 return self._send(200, icon, "image/png", cache="private, max-age=86400") if icon else self._json(404, {"error": "not found"})
+            if p == "/api/last":
+                return self._send(200, last_good(), "application/json")
             fn = ROUTES.get(p)
             if not fn:
                 return self._json(404, {"error": "not found"})
             params = parse_qs(u.query)
             params.pop("refresh", None)  # refresh is POST /api/refresh only
-            return self._json(200, fn(params))
+            res = fn(params)
+            body = json.dumps(res).encode()
+            if not params:
+                remember(p.removeprefix("/api/"), res, body)
+            return self._send(200, body, "application/json")
         except Exception as e:
             log(f"error on GET {p}: {e!r}")
             return self._json(500, {"error": str(e) if self._authed() else "internal error"})
@@ -1618,7 +1693,10 @@ class Handler(BaseHTTPRequestHandler):
                 code, body = start_connect(form.get("token", [""])[0][:2048])
                 return self._json(code, body)
             if p == "/api/refresh":  # re-reads the balance sheet via networth.py; POST so it can't be triggered cross-site
-                return self._json(200, api_summary({"refresh": ["1"]}))
+                res = api_summary({"refresh": ["1"]})
+                body = json.dumps(res).encode()
+                remember("summary", res, body)
+                return self._send(200, body, "application/json")
             return self._json(404, {"error": "not found"})
         except Exception as e:
             log(f"error on POST {p}: {e!r}")

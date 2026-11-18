@@ -179,18 +179,32 @@ def _rows(con, sql, args=()):
     return [dict(r) for r in con.execute(sql, args)]
 
 
-def _owed_at(con, card: dict, d: date) -> float:
-    """Balance owed on a card at the end of day d, rebuilt from today's balance and the transactions since."""
-    after = con.execute("SELECT COALESCE(SUM(amt),0) FROM v_ledger WHERE account_id=? AND pending=0 AND date>?",
-                        (card["account_id"], d.isoformat())).fetchone()[0]
+def _posted(con, card: dict) -> list[tuple[str, float, str]]:
+    """A card's posted ledger rows as (date, amount, class), read once. statement_lag() asks about a couple of
+    hundred dates per card; one query per date made the forecast take seconds."""
+    return [(str(r[0]), float(r[1]), r[2]) for r in con.execute(
+        "SELECT date, amt, class FROM v_ledger WHERE account_id=? AND pending=0 AND date IS NOT NULL AND amt IS NOT NULL",
+        (card["account_id"],))]
+
+
+def _owed_at(con, card: dict, d: date, rows: list | None = None) -> float:
+    """Balance owed on a card at the end of day d, rebuilt from today's balance and the transactions since.
+    `rows` (from _posted) answers from memory instead of a query; same for _paid_between."""
+    if rows is not None:
+        after = math.fsum(a for dt, a, _ in rows if dt > d.isoformat())
+    else:
+        after = con.execute("SELECT COALESCE(SUM(amt),0) FROM v_ledger WHERE account_id=? AND pending=0 AND date>?",
+                            (card["account_id"], d.isoformat())).fetchone()[0]
     return -(card["balance"] - after)
 
 
-def _paid_between(con, card: dict, d: date, before: date | None = None) -> float:
+def _paid_between(con, card: dict, d: date, before: date | None = None, rows: list | None = None) -> float:
     """Payments credited after d (and before `before`), net of bounced ones."""
+    lo, hi = d.isoformat(), (before or date.max).isoformat()
+    if rows is not None:
+        return math.fsum(a for dt, a, cls in rows if cls == "card_payment" and lo < dt < hi)
     return con.execute("SELECT COALESCE(SUM(amt),0) FROM v_ledger WHERE account_id=? AND class='card_payment' "
-                       "AND pending=0 AND date>? AND date<?",
-                       (card["account_id"], d.isoformat(), (before or date.max).isoformat())).fetchone()[0]
+                       "AND pending=0 AND date>? AND date<?", (card["account_id"], lo, hi)).fetchone()[0]
 
 
 def _daily_charges(con, card: dict, today: date) -> float:
@@ -212,10 +226,11 @@ def statement_lag(con, card: dict, pays: list[tuple[date, float]]) -> int:
     those, the lag nearest the usual STATEMENT_LAG, then the shorter (a later close counts more charges: the
     safer side). Expect the result to be a day's charges off now and then."""
     votes: dict[int, int] = defaultdict(int)
+    rows = _posted(con, card)
     for pd, amt in pays[-6:]:
         for L in range(3, 41):
             close = pd - timedelta(L)
-            if abs(_owed_at(con, card, close) - _paid_between(con, card, close, pd) - amt) <= max(1.0, 0.02 * amt):
+            if abs(_owed_at(con, card, close, rows) - _paid_between(con, card, close, pd, rows) - amt) <= max(1.0, 0.02 * amt):
                 votes[L] += 1
     if not votes:
         return STATEMENT_LAG
