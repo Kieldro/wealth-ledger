@@ -53,6 +53,8 @@ API key).
 - **Somewhere else.** `WEALTH_LEDGER_CONFIG_DIR`, `WEALTH_LEDGER_DB` and `WEALTH_LEDGER_STATUS` move those three
   (set them for both the sync and the dashboard); `WEALTH_LEDGER_PYTHON` names another Python, and
   `WEALTH_LEDGER_PATH` adds folders to the sync's `PATH` under cron.
+- **Sync on demand.** The dashboard's **Sync now** button runs the same sync at once (not within 15 minutes of
+  the last one, at most 8 times a day, to stay inside SimpleFIN's allowance); see `dashboard/README.md`.
 - **Keep it running.** A systemd user unit for the dashboard is in `dashboard/README.md`. It listens on
   127.0.0.1 only (plus the machine's Tailscale address when Tailscale is installed; `--no-tailscale` turns that
   off).
@@ -147,7 +149,8 @@ The tests use made-up data and `personal.example.json` (see `conftest.py`), neve
 
 Every path can be overridden, so one checkout can serve a separate ledger for someone else: set
 `WEALTH_LEDGER_CONFIG_DIR`, `WEALTH_LEDGER_PERSONAL`, `WEALTH_LEDGER_DB`, `WEALTH_LEDGER_STATUS`, `WEALTH_LEDGER_LOCK`,
-`WEALTH_LEDGER_EMAIL_STATE` and `PLAID_CONFIG` for its sync (cron) and its dashboard (another port).
+`WEALTH_LEDGER_EMAIL_STATE`, `WEALTH_LEDGER_SYNC_LOG` and `PLAID_CONFIG` for its sync (cron) and its dashboard
+(another port); that dashboard's Sync now button then syncs that ledger.
 
 A ledger with no `personal.json`, or one without `sheet_id`, runs on synced accounts alone: the sync skips every step that reads a
 spreadsheet, Gmail or wallets, and the dashboard hides the sections that need them. Useful keys for such a ledger:

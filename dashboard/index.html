@@ -150,7 +150,7 @@ table:empty::before { content: "Loading…"; font-size: 12px; color: var(--muted
 #totop[hidden] { display: none; }
 .grid > section.card[hidden], .jump button[hidden], #connect[hidden] { display: none; }
 /* nothing linked yet: only the connect card, not a page of zeroes */
-body.unconnected :is(#hero, .grid, #jump, #reorderbtn2, #agebar, #status .pill) { display: none; }
+body.unconnected :is(#hero, .grid, #jump, #reorderbtn2, #agebar, #status .pill, #syncnow) { display: none; }
 #connect { margin: 0 0 12px; padding: 22px 22px 18px; max-width: 720px; }
 #connect h2 { font-size: 17px; font-weight: 650; letter-spacing: -.01em; color: var(--text); margin: 0 0 4px; }
 body.sheetless .sheetnote { display: none; }
@@ -423,6 +423,14 @@ footer code { font-size: 11.5px; }
 .loadfail { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; font-weight: 400; letter-spacing: 0; line-height: 1.4; color: var(--neg); }
 #loaderrors .err { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .pill.syncbad { cursor: pointer; }
+#syncnow { font-variant-numeric: tabular-nums; }
+/* what Sync now answered: why not yet, that it is following a sync already running, or how the sync ended */
+.syncnote { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 12px; padding: 7px 8px 7px 12px; border-radius: 10px; font-size: 13px; color: var(--text-2); background: var(--surface); border: 1px solid var(--border); }
+.syncnote:empty { display: none; }
+.syncnote.bad { background: var(--warn-bg); color: var(--warn); border-color: transparent; }
+.syncnote > div { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.syncnote ul { margin: 4px 0 0; padding-left: 18px; }
+.syncnote button { flex: none; padding: 0 7px; border: 0; background: none; color: inherit; font-size: 16px; line-height: 1.2; }
 .acctbar .spin { margin-right: 6px; }
 @media (prefers-reduced-motion: reduce) {  /* still says "loading", without the movement */
   #loadbar::before { animation: none; width: 100%; opacity: .75; }
@@ -461,7 +469,7 @@ footer code { font-size: 11.5px; }
   .card p.sub { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; cursor: pointer; }
   .card p.sub.open { display: block; }
   #accts td.name, #drafts td.name, #recent td.name, #cards td.name { max-width: 0; width: 99%; }
-  /* header in two rows: name, hide-amounts and refresh; then the sync pill and the unit picker */
+  /* header in two rows: name, hide-amounts and re-read; then the sync pill, Sync now and the unit picker */
   header.top { flex-wrap: wrap; gap: 0 8px; margin-bottom: 10px; }
   .hdr-r, #status { display: contents; }
   header.top h1 { order: 1; margin-right: auto; }
@@ -475,8 +483,10 @@ footer code { font-size: 11.5px; }
   header.top::after { content: ""; order: 4; flex-basis: 100%; }
   #status .pill { order: 5; margin-top: 8px; min-height: 30px; }
   #status .pill .hide-sm { display: inline; }
-  #unitpick { order: 6; margin: 8px 0 0 auto; }
-  .unitpick select { max-width: 190px; border-radius: 999px; font-size: 13px; }
+  #status > #syncnow { order: 5; margin-top: 8px; }
+  /* the picker takes what the pill and Sync now leave, and drops to a row of its own only when that is too little */
+  #unitpick { order: 6; margin: 8px 0 0 auto; flex: 1 1 112px; max-width: 190px; }
+  .unitpick select { width: 100%; border-radius: 999px; font-size: 13px; }
   /* the benchmarks in one even row; an estimate drops under its name rather than push the chip wider */
   .bench { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
   .bench button { min-width: 0; padding: 0 4px; justify-content: center; flex-wrap: wrap; align-content: center; gap: 0 4px; font-size: 11.5px; white-space: nowrap; }
@@ -538,6 +548,7 @@ document.querySelector('meta[name="theme-color"]').content = getComputedStyle(do
       <form method="post" action="/logout" class="logout hide-sm"><button type="submit" title="Sign out of this device">Log out</button></form>
     </div>
   </header>
+  <div class="syncnote" id="syncnote" role="status"></div>
   <nav class="jump hide-sm" id="jump" aria-label="Jump to a section"><button type="button" class="reorderbtn" id="reorderbtn" title="Reorder the cards (or drag a card by its heading)"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 20V5M4 9l4-4 4 4M16 4v15M12 15l4 4 4-4"/></svg>Reorder</button></nav>
   <div class="reorderbar" id="reorderbar" role="group" aria-label="Reorder the cards" hidden>
     <b class="hide-sm">Reorder cards</b><span class="note" id="reordermsg" role="status"></span>
@@ -831,7 +842,7 @@ const TIMEOUT_MS = 20e3, SLOW_MS = 75e3, LIST_AFTER_MS = 400;
 const REQ_NAME = {summary: "net worth and balance sheet", trend: "net-worth history", accounts: "account balances", holdings: "holdings",
   crypto: "crypto wallets", cards: "credit cards", spending: "spending and transactions", drafts: "upcoming drafts and pay", budget: "budget",
   subscriptions: "subscriptions", rental: "rental income", inherited_ira: "inherited IRA", refresh: "balance sheet re-read",
-  account_txns: "account transactions", last: "last saved numbers"};
+  account_txns: "account transactions", last: "last saved numbers", sync: "bank sync progress", syncrun: "syncing banks"};
 // How long each request usually takes: its last few successful times, kept per browser (durations only, no data).
 const TIMES_KEY = "wl.loadtimes", TIMES_KEPT = 8;
 let loadTimes = {};
@@ -853,7 +864,8 @@ const secsText = ms => ms < 950 ? "under 1s" : "~" + Math.round(ms / 1000) + "s"
 function waitHTML(f, now, lead = "") {
   const ms = now - f.t0, u = usualMs(f.key), name = lead ? lead + " " + f.name : f.name[0].toUpperCase() + f.name.slice(1);
   return `${lead ? esc(name) : `<b>${esc(name)}</b>`}…${ms >= 1000 ? " " + Math.floor(ms / 1000) + "s" : ""} ` +
-    `<span class="hint">(${u == null ? "" : "usually " + secsText(u) + " · "}gives up at ${Math.round(f.timeout / 1000)}s)</span>` +
+    (f.timeout ? `<span class="hint">(${u == null ? "" : "usually " + secsText(u) + " · "}gives up at ${Math.round(f.timeout / 1000)}s)</span>`
+      : u == null ? "" : `<span class="hint">(usually ${secsText(u)})</span>`) +
     (u != null && ms > Math.max(2 * u, 2000) ? ' <span class="slow">slower than usual</span>' : "");
 }
 // when some numbers are from: the time alone for today, "yesterday 8:22 AM", else the date and time
@@ -866,6 +878,7 @@ function fmtFrom(ms) {
 function tick() {  // on every change to what's in flight, and four times a second while anything is
   const now = performance.now(), list = [...flights.values()];
   $("loadbar").hidden = !list.length;
+  paintSync(now);
   for (const el of document.querySelectorAll(".loadbox .lbl[data-key]")) {  // a card with nothing to show yet: its own request
     const f = list.find(x => x.key === el.dataset.key);
     if (f) el.innerHTML = waitHTML(f, now, "Loading");
@@ -878,13 +891,23 @@ function tick() {  // on every change to what's in flight, and four times a seco
   box.innerHTML = shown.slice(0, max).map(f => `<div title="${esc(f.method + " " + f.path)}">${waitHTML(f, now)}</div>`).join("") +
     (tail ? `<div class="hint">${esc(cap(tail))}</div>` : "");
 }
-async function get(path, opts = {}) {
-  const {timeout = TIMEOUT_MS, part = null, ...init} = opts, ac = new AbortController(), key = path.slice(5).split("?")[0], id = ++flightSeq;
-  const f = {key, part, path, method: init.method || "GET", name: REQ_NAME[key] || key, t0: performance.now(), timeout};
-  const timer = setTimeout(() => ac.abort(), timeout);
+function flightStart(f) {
+  const id = ++flightSeq;
   flights.set(id, f);
   if (flights.size === 1) tickTimer = setInterval(tick, 250);
   tick();
+  return id;
+}
+function flightEnd(id) {
+  flights.delete(id);
+  if (!flights.size) clearInterval(tickTimer);
+  tick();
+}
+async function get(path, opts = {}) {
+  const {timeout = TIMEOUT_MS, part = null, ...init} = opts, ac = new AbortController(), key = path.slice(5).split("?")[0];
+  const f = {key, part, path, method: init.method || "GET", name: REQ_NAME[key] || key, t0: performance.now(), timeout};
+  const timer = setTimeout(() => ac.abort(), timeout);
+  const id = flightStart(f);
   try {
     const r = await fetch(path, {cache: "no-store", credentials: "same-origin", signal: ac.signal, ...init});
     if (r.status === 401) { location.href = "/login"; throw new Error("signed out"); }
@@ -897,10 +920,90 @@ async function get(path, opts = {}) {
     if (e instanceof TypeError) throw new Error("can't reach the server");
     throw e;
   } finally {
-    clearTimeout(timer); flights.delete(id);
-    if (!flights.size) clearInterval(tickTimer);
-    tick();
+    clearTimeout(timer);
+    flightEnd(id);
   }
+}
+// Sync now: starts the bank sync on the server (POST /api/sync) and follows it (GET /api/sync) until it ends, then
+// reloads every number. The wait shows like any other request, with how long a sync usually takes. A sync already
+// running (the daily one, or one started in another tab) is followed the same way.
+const SYNC_POLL_MS = 2000, SYNC_SLOW_POLL_MS = 10e3, SYNC_SLOW_AFTER_MS = 3 * 60e3, SYNC_GIVE_UP_FAILS = 5, SYNC_NOTE_MS = 12e3;
+let syncRun = null, syncAsking = false, syncNoteTimer = 0;  // syncRun: {id, t0, timed, fails} while one is followed
+function paintSync(now = performance.now()) {
+  const b = $("syncnow");
+  if (!b) return;
+  b.disabled = syncAsking || !!syncRun;
+  // a phone leaves the seconds to the wait line at the bottom, so the header's second row keeps its width
+  const label = syncRun ? `Syncing…<span class="hide-sm"> ${Math.floor((now - syncRun.t0) / 1000)}s</span>` : syncAsking ? "Starting…" : "Sync now";
+  if (b.innerHTML !== label) b.innerHTML = label;
+}
+function setSyncNote(text, {bad = false, lines = [], hideAfter = 0} = {}) {
+  clearTimeout(syncNoteTimer);
+  const el = $("syncnote");
+  el.classList.toggle("bad", bad);
+  el.innerHTML = !text ? "" : `<div>${esc(text)}${lines.length ? `<ul>${lines.map(l => `<li>${esc(l)}</li>`).join("")}</ul>` : ""}</div>` +
+    `<button type="button" aria-label="Dismiss" title="Dismiss">×</button>`;
+  if (text && hideAfter) syncNoteTimer = setTimeout(() => setSyncNote(""), hideAfter);
+}
+$("syncnote").onclick = e => { if (e.target.closest("button")) setSyncNote(""); };
+// elapsedS: how long the sync has run when the server knows (it started it); null for one it only found running
+function followSync(elapsedS, note = "") {
+  if (syncRun) return;
+  const t0 = performance.now() - (elapsedS || 0) * 1000;
+  syncRun = {t0, timed: elapsedS != null, fails: 0};
+  syncRun.id = flightStart({key: "syncrun", part: null, path: "/api/sync", method: "POST", name: REQ_NAME.syncrun, t0, timeout: 0});
+  setSyncNote(note);
+  setTimeout(pollSync, SYNC_POLL_MS);
+}
+async function pollSync() {
+  const run = syncRun;
+  let st = null;
+  try { st = await get("/api/sync"); run.fails = 0; } catch (e) {
+    if (++run.fails >= SYNC_GIVE_UP_FAILS) {
+      flightEnd(run.id); syncRun = null; paintSync();
+      return setSyncNote(`Lost track of the sync (${e.message}). It may still be running: reload the page in a minute to see how it went.`, {bad: true});
+    }
+  }
+  if (st && !st.running) return syncDone(run, st);
+  setTimeout(pollSync, performance.now() - run.t0 > SYNC_SLOW_AFTER_MS ? SYNC_SLOW_POLL_MS : SYNC_POLL_MS);
+}
+async function syncDone(run, st) {
+  const took = performance.now() - run.t0, last = run.timed ? st.last : null, s = st.status || {};
+  flightEnd(run.id); syncRun = null; paintSync();
+  const probs = (s.problems || []).filter(p => !OD_LINE.test(p));
+  const failed = !!s.rc || (last && last.rc !== 0), rc = s.rc || last?.rc;
+  if (run.timed && st.last && !failed) noteTime("syncrun", took);
+  const done = "Sync finished" + (run.timed ? ` in ${Math.round(took / 1000)}s` : "");
+  // started by the dashboard, which no longer knows of it: the dashboard restarted meanwhile, and that stops its sync
+  const lost = run.timed && !st.last;
+  if (lost) setSyncNote("The dashboard restarted while the sync was running, so the sync may have been cut short. Check the sync time above and try again later.", {bad: true});
+  else if (failed) setSyncNote(probs.length ? "The sync ended with an error:" : `The sync ended with an error (exit code ${rc}), so some accounts may not have updated.`, {bad: true, lines: probs.slice(0, 4)});
+  else setSyncNote(done + " · updating the numbers…");
+  while (loading) await new Promise(r => setTimeout(r, 200));
+  await load(true);
+  if (!failed && !lost) setSyncNote(done + " · numbers updated" + (probs.length ? ` · ${probs.length} warning${probs.length > 1 ? "s" : ""} below` : ""), {hideAfter: SYNC_NOTE_MS});
+}
+async function syncNow() {
+  if (syncAsking || syncRun) return;
+  syncAsking = true; setSyncNote(""); paintSync();
+  let d = {}, limited = false;
+  try {
+    const r = await fetch("/api/sync", {method: "POST", cache: "no-store", credentials: "same-origin"});
+    if (r.status === 401) { location.href = "/login"; return; }
+    d = await r.json().catch(() => ({}));
+    limited = r.status === 429;
+    if (!d.running && !d.message) d.message = `Couldn't start the sync: the server answered with an error (HTTP ${r.status})`;
+  } catch { d = {message: "Couldn't start the sync: can't reach the server"}; }
+  finally { syncAsking = false; paintSync(); }
+  if (d.running) followSync(d.started ? 0 : null, d.started ? "" : d.message + " · this page will update when it finishes");
+  else setSyncNote(d.message, {bad: !limited});
+}
+// once per page load: a sync already under way (the daily one, another tab's) shows here too
+async function checkSync() {
+  try {
+    const st = await get("/api/sync");
+    if (st.running) followSync(st.elapsed_s, "A sync is already running · this page will update when it finishes");
+  } catch (e) { console.error("sync", e); }
 }
 const CAT_COLOR = {cash: "--s1", retirement: "--s2", taxable: "--s3", crypto: "--s4", metals: "--s5", realestate: "--s6", vehicles: "--s7", other: "--s8"};
 const charts = {};
@@ -1154,6 +1257,8 @@ function renderConnect(c, empty) {
   };
 }
 let SHEETLESS = false;  // this ledger has no spreadsheet behind it: synced accounts only
+// not "Refresh": it never calls the banks (Sync now does). HTML: a phone shows the first word only
+const refreshLabel = () => SHEETLESS ? "Reload" : 'Re-read<span class="hide-sm"> sheet</span>';
 function renderSummary(s) {
   const st = s.status || {};
   const was = SHEETLESS;
@@ -1175,8 +1280,10 @@ function renderSummary(s) {
   $("status").innerHTML =
     `<span class="pill${bad ? " syncbad" : ""}" id="syncpill" title="${esc(`Last finished sync: ${fmtTime(st.last_run)}` + (bad ? "\n" + sync.map(p => "• " + p).join("\n") : ""))}"><span class="dot ${bad ? "bad" : ""}"></span>` +
     (st.rc ? `Sync problem<span class="hide-sm"> · last ran ${esc(fmtShort(st.last_run))}</span>` : `<span class="hide-sm">Synced </span>${esc(fmtShort(st.last_run))}`) + `</span>` +
-    `<button id="refresh" title="Re-read the balance sheet (networth.py); does not call the banks">Refresh</button>`;
+    `<button id="syncnow" title="Fetch new balances and transactions from the banks now (the daily sync, run early)">Sync now</button>` +
+    `<button id="refresh" title="${SHEETLESS ? "Recompute the totals from the last sync" : "Re-read the balance sheet (networth.py)"}; does not call the banks">${refreshLabel()}</button>`;
   $("refresh").onclick = () => load(true);
+  $("syncnow").onclick = syncNow; paintSync();
   // a touch screen has no tooltip: tapping the pill opens the same list in the warnings banner
   if (bad) $("syncpill").onclick = () => { const d = $("problems").querySelector("details"); if (d) { d.open = true; d.scrollIntoView({behavior: "smooth", block: "center"}); } };
   const probs = [...sync];
@@ -2438,7 +2545,7 @@ let everLoaded = false;
 async function load(refresh = false) {
   if (loading) return;
   loading = true;
-  const btn = $("refresh"); if (btn) { btn.disabled = true; btn.textContent = "Refreshing…"; }
+  const btn = $("refresh"); if (btn) { btn.disabled = true; btn.textContent = SHEETLESS ? "Reloading…" : "Re-reading…"; }
   const last = everLoaded ? null : showLast();
   everLoaded = true;
   let summaryOk = false, reread = null;
@@ -2453,7 +2560,7 @@ async function load(refresh = false) {
     loading = false;
     if (reread && summaryOk) failed.set("refresh", reread); else failed.delete("refresh");
     showFailed();
-    const b = $("refresh"); if (b) { b.disabled = false; b.textContent = "Refresh"; }
+    const b = $("refresh"); if (b) { b.disabled = false; b.innerHTML = refreshLabel(); }
     if (!summaryOk && data.summary && !$("unrefreshed")) $("agebar").insertAdjacentHTML("afterbegin",
       `<span class="pill old" id="unrefreshed">Couldn't refresh · showing numbers from ${esc(fmtFrom(shownAt.summary))}</span>`);
     document.body.dataset.ready = "1";
@@ -2494,6 +2601,7 @@ syncTheme();
 document.addEventListener("click", e => { if (!$("themepick").contains(e.target)) $("themepick").open = false; });
 document.addEventListener("keydown", e => { if (e.key === "Escape" && $("themepick").open) { $("themepick").open = false; $("themepick").querySelector("summary").focus(); } });
 load();
+checkSync();
 </script>
 </body>
 </html>

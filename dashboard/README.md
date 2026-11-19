@@ -13,15 +13,22 @@ Every path needs a login, including requests from 127.0.0.1 (a Cloudflare Tunnel
 - **Set or rotate the password** (signs out every device; the running service picks it up, no restart):
   `.venv/bin/python dashboard/server.py set-password [--username NAME]` (prompts), or add `--generate` to print a random 24-letter passphrase once. Without `--username` it keeps the current one, else uses `dashboard.default_username` from personal.json.
 - **Brute force:** 5 failures per client IP in 15 min, then 429 until the window clears; 50 failures in an hour from anywhere locks all logins for 15 min. Client IP = `Cf-Connecting-IP` when the request comes from loopback (cloudflared), else the socket peer. Limits live in memory: restarting the service clears a lockout (sessions survive restarts). Failed logins are logged with IP (never passwords): `journalctl --user -u wealth-ledger-dashboard | grep auth:`.
-- **Headers/CSRF:** CSP (scripts limited to each page's inline-script hashes + the pinned cdnjs Chart.js on the dashboard; the sign-in page loads nothing external), `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `nosniff`, `Cache-Control: no-store`, `X-Robots-Tag: noindex`, HSTS over HTTPS. Refresh (`POST /api/refresh`) and logout are POST-only, and cross-site POSTs (`Sec-Fetch-Site`) are refused.
+- **Headers/CSRF:** CSP (scripts limited to each page's inline-script hashes + the pinned cdnjs Chart.js on the dashboard; the sign-in page loads nothing external), `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `nosniff`, `Cache-Control: no-store`, `X-Robots-Tag: noindex`, HSTS over HTTPS. Re-read sheet (`POST /api/refresh`), Sync now (`POST /api/sync`) and logout are POST-only, and cross-site POSTs (`Sec-Fetch-Site`) are refused.
 
 ## Data
-- `~/.local/share/wealth-ledger/txns.db`, opened `mode=ro`. The dashboard never writes to it and never runs a sync.
-- `networth.py --json` (reads the balance-sheet tab of the Google Sheet in personal.json via `gws`), cached 10 min. **Refresh** (`POST /api/refresh`) re-reads the sheet only; it does not call SimpleFIN or Plaid.
+- `~/.local/share/wealth-ledger/txns.db`, opened `mode=ro`. The dashboard never writes to it; the sync does, from cron or from the page's **Sync now** (below).
+- `networth.py --json` (reads the balance-sheet tab of the Google Sheet in personal.json via `gws`), cached 10 min. **Re-read sheet** (`POST /api/refresh`; **Reload** on a ledger without a sheet) re-reads the sheet only; it does not call SimpleFIN or Plaid.
 - `~/.cache/wealth-ledger-status` for the last sync time and problems.
 
+## Sync now
+The button starts the same sync cron runs, in the background (`POST /api/sync`), and the page follows it (`GET /api/sync`) and reloads its numbers when it ends; problems show in the page's warnings. Nothing is notified.
+- **Which sync:** `bin/wealth-ledger-sync`, run with the dashboard's own environment, so an instance started with its own `WEALTH_LEDGER_*` variables syncs its own ledger. Set `WEALTH_LEDGER_SYNC_CMD` (a command line) to run a wrapper of your own instead.
+- **Log:** output is appended to `WEALTH_LEDGER_SYNC_LOG` (default `~/.cache/wealth-ledger-sync.log`, the file the README's cron line writes).
+- **Limits** (SimpleFIN allows about 24 requests a day across cron and the button): no sync within 15 minutes of the last one, and at most 8 from the button in any 24 hours (`SYNC_MIN_GAP_S`, `SYNC_MAX_PER_DAY` in `server.py`; the count is kept in `dashboard_sync.json` in the config dir). A sync that is already running (it holds `WEALTH_LEDGER_LOCK`) is followed, not started twice.
+- The sync is a child of the dashboard service, so restarting the service while one runs stops that sync; the next one picks up where the feed is.
+
 ## API
-`/api/summary`, `POST /api/refresh`, `/api/trend`, `/api/accounts`, `/api/holdings`, `/api/cards`, `/api/spending`, `/healthz`.
+`/api/summary`, `POST /api/refresh`, `POST /api/sync` + `GET /api/sync`, `/api/trend`, `/api/accounts`, `/api/holdings`, `/api/cards`, `/api/spending`, `/healthz`.
 
 ## Notes
 - Credit cards show owed / limit and utilization per card, plus overall utilization across cards with a known limit. The limit is `v_accounts.credit_limit` (feed, or `credit_limits` in personal.json, badged `manual limit`); without one it is estimated as owed + available credit (`est.`).

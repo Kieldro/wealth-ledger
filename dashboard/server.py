@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Private finance dashboard for wealth-ledger. Read-only; serves on 127.0.0.1 + the Tailscale IP only.
+"""Private finance dashboard for wealth-ledger. Reads the ledger, never writes it (the one thing it can start is the
+bank sync, from the page's "Sync now"); serves on 127.0.0.1 + the Tailscale IP only.
 
   server.py [--port 8766]
   server.py set-password [--generate]     # set/rotate the login password (signs out all sessions)
 
 Every path needs a login session (cookie) except /login, /logout (POST) and /robots.txt.
-Endpoints: /api/summary, POST /api/refresh (re-runs networth.py), /api/trend, /api/accounts,
+Endpoints: /api/summary, POST /api/refresh (re-runs networth.py), POST /api/sync (starts the bank sync in the
+background; GET /api/sync says how it is going), /api/trend, /api/accounts,
 /api/holdings, /api/crypto, /api/cards, /api/spending, /api/drafts (overdraft forecast), /api/budget (budget vs actual),
 /api/subscriptions (recurring charges + unusual charges), /api/rental (rental P&L),
 /api/inherited_ira (10-year rule tracker), /api/last (the last good answer to each of those, kept on disk), /healthz. Page: /
@@ -14,14 +16,17 @@ from __future__ import annotations
 
 import argparse
 import base64
+import fcntl
 import getpass
 import hashlib
 import hmac
 import ipaddress
 import json
+import math
 import os
 import re
 import secrets
+import shlex
 import sqlite3
 import string
 import subprocess
@@ -970,6 +975,136 @@ def icon_bytes(slug: str) -> bytes | None:
     return body if body.startswith(b"\x89PNG") else None
 
 
+# ---------- syncing from the page ----------
+# "Sync now" starts the same sync the daily cron job runs: WEALTH_LEDGER_SYNC_CMD (a command line, for a wrapper of
+# your own) or else bin/wealth-ledger-sync. It gets the dashboard's own environment, so an instance started with its
+# own WEALTH_LEDGER_* variables syncs its own ledger. Output goes to the sync log the cron line appends to; nothing is
+# ever notified. SimpleFIN allows about 24 requests a day across cron and the button (a sync is 1, at most 3), hence
+# the limits.
+def sync_command(env=os.environ) -> list[str]:
+    return shlex.split(env.get("WEALTH_LEDGER_SYNC_CMD") or "") or [SYNC]
+
+
+SYNC_CMD = sync_command()
+SYNC_LOG = os.path.expanduser(os.environ.get("WEALTH_LEDGER_SYNC_LOG") or "~/.cache/wealth-ledger-sync.log")
+SYNC_LOCK = os.path.expanduser(os.environ.get("WEALTH_LEDGER_LOCK") or "~/.cache/wealth-ledger-sync.lock")
+SYNC_MIN_GAP_S = 15 * 60  # no sync from the page this soon after the last one (cron's or the button's)
+SYNC_MAX_PER_DAY = 8      # syncs the button may start in any 24 hours
+SYNC_STATE_FILE = os.path.join(CONF_DIR, "dashboard_sync.json")  # when the button's syncs started; survives a restart
+_sync_lock = threading.Lock()
+# proc: the sync started here while it runs; last: how the latest one started here ended (None: none since the restart)
+_sync = {"proc": None, "started": None, "last": None}
+
+
+def sync_lock_held() -> bool:
+    """Whether a sync, cron's or the button's, holds the sync script's lock right now."""
+    try:
+        fd = os.open(SYNC_LOCK, os.O_RDONLY)
+    except OSError:
+        return False  # no lock file: no sync has run yet
+    try:
+        # shared, so two checks at once don't see each other; it still fails while the script holds its exclusive lock
+        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        return False
+    except BlockingIOError:
+        return True
+    except OSError:
+        return False
+    finally:
+        os.close(fd)  # also drops the lock taken by a check that succeeded
+
+
+def _sync_starts(now: float) -> list[float]:
+    """When the button started a sync in the last 24 hours, oldest first."""
+    try:
+        with open(SYNC_STATE_FILE) as f:
+            starts = json.load(f)["starts"]
+        return sorted(float(t) for t in starts if now - 86400 < float(t) <= now)
+    except (OSError, ValueError, TypeError, KeyError):
+        return []
+
+
+def _dur(seconds: float) -> str:
+    m = max(1, math.ceil(seconds / 60))
+    return f"{m} min" if m < 60 else f"{m // 60} h {m % 60:02d} min"
+
+
+def _sync_wait(now: float, st: dict, starts: list[float]) -> tuple[int, str]:
+    """Seconds until the button may start a sync (0: now) and the sentence the page shows meanwhile."""
+    try:
+        finished = datetime.fromisoformat(st["last_run"]).timestamp()
+    except (TypeError, ValueError):
+        finished = 0.0
+    last = min(now, max([finished, *starts]))
+    if now - last < SYNC_MIN_GAP_S:
+        left = SYNC_MIN_GAP_S - (now - last)
+        ago = "less than a minute ago" if now - last < 60 else f"{int((now - last) // 60)} min ago"
+        what = "Synced" if finished >= last and st.get("rc") == 0 else "Last sync ran"
+        return math.ceil(left), f"{what} {ago} — try again in {_dur(left)}"
+    if len(starts) >= SYNC_MAX_PER_DAY:
+        left = starts[-SYNC_MAX_PER_DAY] + 86400 - now
+        return math.ceil(left), (f"Sync now has run {SYNC_MAX_PER_DAY} times in the last 24 hours, its daily limit "
+                                 f"— try again in {_dur(left)}")
+    return 0, ""
+
+
+def sync_state(now: float | None = None) -> dict:
+    """Body of GET /api/sync: is a sync running, how the last one started here ended, when the next may start."""
+    now = now or time.time()
+    st = read_status()
+    with _sync_lock:
+        mine = _sync["proc"] is not None
+        wait, why = _sync_wait(now, st, _sync_starts(now))
+        return {"running": mine or sync_lock_held(), "elapsed_s": round(now - _sync["started"], 1) if mine else None,
+                "last": _sync["last"], "status": st, "wait_s": wait, "message": why}
+
+
+def _spawn_sync() -> subprocess.Popen:
+    """Start the sync on its own (own session, no terminal), appending to the sync log like the cron line does."""
+    os.makedirs(os.path.dirname(SYNC_LOG), exist_ok=True)
+    with open(SYNC_LOG, "a") as out:
+        return subprocess.Popen(SYNC_CMD, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
+                                cwd=os.path.expanduser("~"), start_new_session=True)
+
+
+def _watch_sync(proc: subprocess.Popen, started: float):
+    rc = proc.wait()
+    with _sync_lock:
+        _sync.update(proc=None, started=None, last={"started": started, "finished": time.time(), "rc": rc, "error": None})
+    _nw["fetched"] = 0.0  # the next summary recomputes the net worth from the new balances
+    log(f"sync: the sync started from the page ended rc={rc} after {time.time() - started:.0f}s")
+
+
+def start_sync(now: float | None = None) -> tuple[int, dict]:
+    """POST /api/sync: start a sync unless one is running or the limits say wait. (HTTP status, body)."""
+    now = now or time.time()
+    with _sync_lock:
+        if _sync["proc"] is not None or sync_lock_held():
+            return 200, {"started": False, "running": True, "message": "A sync is already running"}
+        if not os.path.exists(ACCESS_FILE):
+            return 409, {"started": False, "running": False,
+                         "message": "No bank connection yet: link SimpleFIN first (see the README's quick start)"}
+        starts = _sync_starts(now)
+        wait, why = _sync_wait(now, read_status(), starts)
+        if wait:
+            return 429, {"started": False, "running": False, "message": why, "wait_s": wait}
+        try:
+            proc = _spawn_sync()
+        except OSError as e:
+            log(f"sync: could not start {SYNC_CMD[0]}: {e!r}")
+            msg = f"The sync could not be started ({e.strerror or e})"
+            _sync["last"] = {"started": now, "finished": now, "rc": None, "error": msg}
+            return 500, {"started": False, "running": False, "message": msg}
+        try:
+            _write_private(SYNC_STATE_FILE, {"starts": starts + [now]})
+        except OSError as e:  # the sync is running all the same; only the daily count misses this one
+            log(f"sync: could not save {SYNC_STATE_FILE}: {e!r}")
+        _sync.update(proc=proc, started=now, last=None)
+        threading.Thread(target=_watch_sync, args=(proc, now), daemon=True).start()
+        log(f"sync: started from the page ({len(starts) + 1} of {SYNC_MAX_PER_DAY} in 24 h)")
+        return 200, {"started": True, "running": True, "message": ""}
+
+
 def log(msg: str):
     print(msg, file=sys.stderr, flush=True)
 
@@ -1661,6 +1796,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(204, b"", "image/png")
             if p == "/api/last":
                 return self._send(200, last_good(), "application/json")
+            if p == "/api/sync":
+                return self._json(200, sync_state())
             fn = ROUTES.get(p)
             if not fn:
                 return self._json(404, {"error": "not found"})
@@ -1703,6 +1840,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._deny(p)
             if p == "/api/connect":
                 code, body = start_connect(form.get("token", [""])[0][:2048])
+                return self._json(code, body)
+            if p == "/api/sync":  # runs the bank sync in the background; POST so it can't be triggered cross-site
+                code, body = start_sync()
                 return self._json(code, body)
             if p == "/api/refresh":  # re-reads the balance sheet via networth.py; POST so it can't be triggered cross-site
                 res = api_summary({"refresh": ["1"]})

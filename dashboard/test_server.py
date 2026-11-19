@@ -507,7 +507,7 @@ def test_page_shows_the_last_numbers_first_and_says_what_it_is_waiting_on():
     parts = html[html.index("const PARTS = {"):html.index("const SKEL =")]
     routes = re.findall(r'url: "/api/(\w+)"', parts)
     assert sorted(routes) == sorted(server.LAST_KEYS)  # every request the page starts with has a kept answer
-    assert named == set(routes) | {"refresh", "account_txns", "last"} and "/api/" not in names  # words, not addresses
+    assert named == set(routes) | {"refresh", "account_txns", "last", "sync", "syncrun"} and "/api/" not in names  # words, not addresses
     stored = set(re.findall(r"localStorage\.setItem\((\w+)", html))
     assert stored == {"ARANGE_KEY", "BENCH_KEY", "ORDER_KEY", "PRIV_KEY", "SEC_KEY", "THEME_KEY", "TIMES_KEY", "TREND_KEY", "UNIT_KEY"}
     assert "sessionStorage" not in html and "indexedDB" not in html and "caches." not in html
@@ -828,6 +828,194 @@ def test_connect_claims_once_then_starts_the_first_sync(connect):
     assert server.connect_state() == {"needed": False, "running": True, "error": None}
     assert server.start_connect(tok)[0] == 409  # an existing connection can't be replaced from the page
     assert claimed == [tok]
+
+
+# ---------- Sync now ----------
+class _FakeSync:
+    """Stands in for the sync process: nothing is ever run."""
+    def __init__(self, rc=0):
+        self.rc = rc
+
+    def wait(self):
+        return self.rc
+
+
+@pytest.fixture
+def sync(tmp_path, monkeypatch):
+    """Every path Sync now touches in a temp folder, the process start replaced, the watcher thread not started."""
+    import threading
+    spawned, threads = [], []
+    (tmp_path / "access").write_text("x")
+    monkeypatch.setattr(server, "ACCESS_FILE", str(tmp_path / "access"))
+    monkeypatch.setattr(server, "STATUS", str(tmp_path / "status"))
+    monkeypatch.setattr(server, "SYNC_LOCK", str(tmp_path / "lock"))
+    monkeypatch.setattr(server, "SYNC_LOG", str(tmp_path / "logs" / "sync.log"))
+    monkeypatch.setattr(server, "SYNC_STATE_FILE", str(tmp_path / "conf" / "dashboard_sync.json"))
+    monkeypatch.setattr(server, "SYNC_CMD", [str(tmp_path / "never-run")])
+    monkeypatch.setattr(server, "WEB_CONNECT", False)
+    monkeypatch.setattr(server, "_sync", {"proc": None, "started": None, "last": None})
+    monkeypatch.setattr(server, "_spawn_sync", lambda: spawned.append(_FakeSync()) or spawned[-1])
+    monkeypatch.setattr(threading.Thread, "start", lambda self: threads.append(self))
+    return spawned, threads
+
+
+def _status(tmp_path, minutes_ago: float, rc: int = 0, now: float | None = None):
+    from datetime import datetime
+    t = datetime.fromtimestamp((now or server.time.time()) - minutes_ago * 60).astimezone().isoformat(timespec="seconds")
+    (tmp_path / "status").write_text(f"last run {t} rc={rc}\n")
+
+
+def test_sync_now_runs_the_instances_own_sync_command():
+    default = server.sync_command({})
+    assert default == [server.os.path.join(server.ROOT, "bin", "wealth-ledger-sync")] and server.os.access(default[0], server.os.X_OK)
+    assert server.sync_command({"WEALTH_LEDGER_SYNC_CMD": "/opt/my sync/run --days 3"}) == ["/opt/my", "sync/run", "--days", "3"]
+    assert server.sync_command({"WEALTH_LEDGER_SYNC_CMD": "'/opt/my sync/run' --days 3"}) == ["/opt/my sync/run", "--days", "3"]
+    assert server.sync_command({"WEALTH_LEDGER_SYNC_CMD": ""}) == default
+    assert (server.SYNC_MIN_GAP_S, server.SYNC_MAX_PER_DAY) == (900, 8)
+
+
+def test_sync_now_starts_one_sync_in_the_background_and_reports_how_it_ended(sync, tmp_path, monkeypatch):
+    spawned, threads = sync
+    monkeypatch.setattr(server, "_nw", {"data": {"x": 1}, "fetched": 123.0, "error": None})
+    assert server.sync_state()["running"] is False and server.sync_state()["last"] is None
+    assert server.start_sync() == (200, {"started": True, "running": True, "message": ""})
+    assert len(spawned) == 1 and len(threads) == 1  # started, and a thread waits for it: the request doesn't
+    saved = tmp_path / "conf" / "dashboard_sync.json"
+    assert len(json.loads(saved.read_text())["starts"]) == 1 and saved.stat().st_mode & 0o777 == 0o600
+    st = server.sync_state()
+    assert st["running"] is True and 0 <= st["elapsed_s"] < 5 and st["last"] is None
+    # a second click while it runs starts nothing and is not counted
+    assert server.start_sync() == (200, {"started": False, "running": True, "message": "A sync is already running"})
+    assert len(spawned) == 1 and len(json.loads(saved.read_text())["starts"]) == 1
+    spawned[0].rc = 3
+    threads[0].run()  # the sync ends
+    st = server.sync_state()
+    assert st["running"] is False and st["elapsed_s"] is None
+    assert st["last"]["rc"] == 3 and st["last"]["error"] is None and st["last"]["finished"] >= st["last"]["started"]
+    assert server._nw["fetched"] == 0.0  # the next summary recomputes the net worth
+
+
+def test_sync_now_waits_15_minutes_after_any_sync(sync, tmp_path):
+    spawned, _ = sync
+    _status(tmp_path, 5)  # the cron run finished 5 minutes ago
+    code, body = server.start_sync()
+    assert code == 429 and body["message"] == "Synced 5 min ago — try again in 10 min" and body["started"] is False
+    assert 9 * 60 < body["wait_s"] <= 10 * 60 and not spawned and not (tmp_path / "conf").exists()
+    assert server.sync_state()["message"] == body["message"] and server.sync_state()["running"] is False
+    _status(tmp_path, 5, rc=1)  # a failed run counts too, and isn't called "synced"
+    assert server.start_sync()[1]["message"] == "Last sync ran 5 min ago — try again in 10 min"
+    _status(tmp_path, 16)
+    assert server.start_sync()[0] == 200 and len(spawned) == 1
+    server._sync.update(proc=None, started=None)  # it ended without rewriting the status file
+    code, body = server.start_sync()
+    assert code == 429 and body["message"] == "Last sync ran less than a minute ago — try again in 15 min" and len(spawned) == 1
+    now = server.time.time()
+    assert server.start_sync(now + 14 * 60)[0] == 429
+    assert server.start_sync(now + 16 * 60)[0] == 200 and len(spawned) == 2
+
+
+def test_sync_now_is_capped_per_day_and_the_count_survives_a_restart(sync, tmp_path):
+    spawned, _ = sync
+    now = 1_800_000_000.0
+    saved = tmp_path / "conf" / "dashboard_sync.json"
+    saved.parent.mkdir()
+    # 8 clicks in the last 24 hours (the oldest 23 h ago, the newest 2 h ago) and one from two days back
+    starts = [now - 2 * 86400] + [now - 3600 * h for h in (23, 20, 17, 14, 11, 8, 5, 2)]
+    saved.write_text(json.dumps({"starts": starts}))
+    code, body = server.start_sync(now)
+    assert code == 429 and not spawned
+    assert body["message"] == "Sync now has run 8 times in the last 24 hours, its daily limit — try again in 1 h 00 min"
+    assert server.sync_state(now)["wait_s"] == 3600
+    assert server.start_sync(now + 3601)[0] == 200 and len(spawned) == 1  # the oldest click is now over a day old
+    assert len(json.loads(saved.read_text())["starts"]) == 8  # and the two-day-old one is dropped
+    saved.write_text("not json")  # an unreadable count never blocks the button
+    server._sync.update(proc=None, started=None)
+    assert server.start_sync(now + 3 * 3600)[0] == 200
+
+
+def test_sync_now_follows_a_sync_that_is_already_running(sync, tmp_path):
+    """The sync script holds an exclusive flock while it runs (cron's run, or another dashboard's)."""
+    import fcntl
+    spawned, _ = sync
+    assert server.sync_lock_held() is False  # no lock file yet
+    with open(tmp_path / "lock", "w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        assert server.sync_lock_held() is True
+        assert server.start_sync() == (200, {"started": False, "running": True, "message": "A sync is already running"})
+        st = server.sync_state()
+        assert st["running"] is True and st["elapsed_s"] is None  # not started here: no start time to count from
+    assert not spawned and not (tmp_path / "conf").exists()  # not counted against the daily limit
+    assert server.sync_lock_held() is False and server.sync_state()["running"] is False
+    assert server.sync_lock_held() is False  # the check itself leaves nothing locked
+    assert server.start_sync()[0] == 200 and len(spawned) == 1
+
+
+def test_sync_now_says_when_the_sync_cannot_start_or_nothing_is_connected(sync, tmp_path, monkeypatch):
+    spawned, threads = sync
+
+    def boom():
+        raise FileNotFoundError(2, "No such file or directory")
+    monkeypatch.setattr(server, "_spawn_sync", boom)
+    code, body = server.start_sync()
+    assert code == 500 and body == {"started": False, "running": False,
+                                    "message": "The sync could not be started (No such file or directory)"}
+    st = server.sync_state()
+    assert st["running"] is False and st["last"]["rc"] is None and st["last"]["error"] == body["message"]
+    assert not threads and not (tmp_path / "conf").exists() and st["wait_s"] == 0  # not counted: try again at once
+    (tmp_path / "access").unlink()
+    code, body = server.start_sync()
+    assert code == 409 and body["message"].startswith("No bank connection yet") and not spawned
+
+
+def test_sync_now_process_is_detached_and_appends_to_the_sync_log(sync, tmp_path, monkeypatch):
+    """The real start, with a stand-in command (never the sync script): own session, output appended to the log."""
+    monkeypatch.undo()
+    log = tmp_path / "logs" / "sync.log"
+    log.parent.mkdir()
+    log.write_text("earlier run\n")
+    monkeypatch.setattr(server, "SYNC_LOG", str(log))
+    monkeypatch.setattr(server, "SYNC_CMD", ["sh", "-c", "echo out; echo err >&2; ps -o sid= -p $$"])
+    proc = server._spawn_sync()
+    assert proc.wait(timeout=10) == 0
+    lines = log.read_text().split()
+    assert lines[:4] == ["earlier", "run", "out", "err"] and int(lines[4]) == proc.pid != server.os.getsid(0)
+
+
+def test_sync_endpoint_needs_a_session_is_post_only_and_refuses_cross_site(sync):
+    spawned, _ = sync
+    sent = []
+    h = server.Handler.__new__(server.Handler)
+    h._json = lambda code, obj, headers=(): sent.append((code, obj))
+    h._deny = lambda p: sent.append((401, p))
+    h.client_address = ("127.0.0.1", 1)
+    h.path = "/api/sync"
+    h.headers, h._authed = {}, lambda: False
+    h.do_GET(); h.do_POST()
+    assert sent == [(401, "/api/sync"), (401, "/api/sync")] and not spawned
+    h._authed = lambda: True
+    h.headers = {"Sec-Fetch-Site": "cross-site"}
+    h.do_POST()
+    assert sent[-1] == (403, {"error": "cross-site request refused"}) and not spawned
+    h.headers = {"Sec-Fetch-Site": "same-origin"}
+    h.do_GET()  # asking how it is going never starts one
+    assert sent[-1][0] == 200 and sent[-1][1]["running"] is False and sent[-1][1]["wait_s"] == 0 and not spawned
+    h.do_POST()
+    assert sent[-1] == (200, {"started": True, "running": True, "message": ""}) and len(spawned) == 1
+    h.do_GET()
+    assert sent[-1][1]["running"] is True and len(spawned) == 1
+
+
+def test_page_has_sync_now_that_follows_the_sync_and_reloads():
+    """Guard on the page source (behaviour is checked in a browser by hand): Sync now posts, follows the sync with the
+    same wait line as any request, says why when refused, and reloads when it ends; Refresh has a name of its own."""
+    html = open(server.os.path.join(server.os.path.dirname(server.__file__), "index.html")).read()
+    for needle in ('<button id="syncnow"', '>Sync now</button>', 'fetch("/api/sync", {method: "POST"', 'await get("/api/sync")',
+                   'key: "syncrun"', 'noteTime("syncrun", took)', "`Syncing…<span class=\"hide-sm\"> ${Math.floor((now - syncRun.t0) / 1000)}s</span>`",
+                   "`<span class=\"hint\">(usually ${secsText(u)})</span>`", "await load(true);", 'id="syncnote" role="status"',
+                   "limited = r.status === 429", "SHEETLESS ? \"Reload\" : 'Re-read<span class=\"hide-sm\"> sheet</span>'", "\ncheckSync();\n",
+                   "#status .pill, #syncnow) { display: none; }"):
+        assert needle in html, needle
+    assert ">Refresh</button>" not in html
 
 
 def test_sections_without_data_are_hidden_for_a_sheetless_ledger(monkeypatch):
