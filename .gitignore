@@ -44,3 +44,6 @@ dashboard/screenshots/
 *.jpg
 *.jpeg
 *.webp
+
+# what the browser tests save when one fails (synthetic data)
+dashboard/ui-artifacts/

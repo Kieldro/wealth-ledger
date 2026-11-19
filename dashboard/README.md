@@ -27,6 +27,24 @@ The button starts the same sync cron runs, in the background (`POST /api/sync`),
 - **Limits** (SimpleFIN allows about 24 requests a day across cron and the button): no sync within 15 minutes of the last one, and at most 8 from the button in any 24 hours (`SYNC_MIN_GAP_S`, `SYNC_MAX_PER_DAY` in `server.py`; the count is kept in `dashboard_sync.json` in the config dir). A sync that is already running (it holds `WEALTH_LEDGER_LOCK`) is followed, not started twice.
 - **Restarts:** with systemd, the sync (and the first sync after connecting from the page) runs as a user unit of its own (`systemd-run --user`, named `wealth-ledger-sync-btn-…`), so restarting the dashboard service doesn't stop a sync under way and the page keeps following it. Without systemd (or without a user manager to talk to) it is a detached child of the dashboard, and stopping the dashboard service stops it too.
 
+## Browser tests
+`test_ui.py` drives the real page in headless Chromium (Playwright) against a throwaway dashboard on made-up data, so a change to the page can be checked without clicking through it by hand.
+
+```sh
+.venv/bin/pip install -r dashboard/requirements-test.txt && .venv/bin/playwright install chromium   # once
+.venv/bin/python -m pytest -m ui             # only the browser tests (about 40 s)
+.venv/bin/python -m pytest -m "not ui"       # everything else
+.venv/bin/python dashboard/ui_fixture.py     # the same made-up dashboard to look at yourself (--simplefin-only for no personal.json)
+```
+
+- **What they cover:** sign-in, sign-out and the 401s; every card with its data at desktop (1280) and phone (390) widths, with no sideways scrolling and the controls reachable; loading bars and skeletons while an answer is slow; failed, refused and unanswered requests (error with Retry, and the last good numbers kept); the sync pill; Sync now (running, finished, failed, too soon, daily limit, already running, no bank connection); trend ranges and correlation chips; card reordering and folding; the hero tiles; themes, reduced motion and privacy mode; and SimpleFIN-only mode.
+- **Always checked:** every test fails on an uncaught page error, a console error or warning, a failed request, an HTTP error, or a request to another host, unless the test said to expect it (`page.watch.expect(...)`).
+- **Nothing real:** `ui_fixture.py` builds a synthetic ledger, `personal.json`, status file and login in a temp folder and starts `server.py` with every `WEALTH_LEDGER_*` path and `HOME` pointed there. `gws`, `systemd-run` and the sync command are stand-in scripts, so no spreadsheet, bank or price source is called, and the page's one outside file (Chart.js) is served from `testdata/` (a test checks that copy against the hash the page pins).
+- **No sleeps:** a slow server is a request the test holds and releases, and the page's timers (the 20-second give-up, the 2-second sync poll) are moved with `page.clock`.
+- **When one fails:** a full-page screenshot and the page's console/network log (plus the tail of the dashboard's log) are saved to `dashboard/ui-artifacts/` (git-ignored; `WEALTH_LEDGER_UI_ARTIFACTS` to put them elsewhere), and the failure report prints the paths.
+- **Without Playwright or its Chromium** the browser tests skip, and the rest of the suite runs as before.
+- **New controls:** give the test something stable to find (an `id`, a role and name), and add the card's telltale text to `CARD_SAYS` in `test_ui.py` when adding a card.
+
 ## API
 `/api/summary`, `POST /api/refresh`, `POST /api/sync` + `GET /api/sync`, `/api/trend`, `/api/accounts`, `/api/holdings`, `/api/cards`, `/api/spending`, `/healthz`.
 

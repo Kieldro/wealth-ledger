@@ -118,7 +118,7 @@ The quick start above is enough for a ledger of synced accounts. For the spreads
 ```sh
 python3 -m venv .venv
 .venv/bin/pip install requests playwright pytest keyring google-api-python-client google-auth
-.venv/bin/playwright install chromium          # home/cars valuations and the scraper
+.venv/bin/playwright install chromium          # home/cars valuations, the scraper, and the dashboard's browser tests
 
 mkdir -p ~/.config/wealth-ledger && chmod 700 ~/.config/wealth-ledger
 cp personal.example.json ~/.config/wealth-ledger/personal.json
@@ -140,10 +140,13 @@ CLI. Example cron entries (symlink the `bin/` scripts into `~/.local/bin` first)
 ## Tests
 
 ```sh
-.venv/bin/python -m pytest -q
+.venv/bin/python -m pytest -q             # everything
+.venv/bin/python -m pytest -q -m ui       # only the dashboard's browser tests (Playwright + Chromium; skipped without them)
+.venv/bin/python -m pytest -q -m "not ui" # everything else
 ```
 
-The tests use made-up data and `personal.example.json` (see `conftest.py`), never your real `personal.json`.
+The tests use made-up data and `personal.example.json` (see `conftest.py`), never your real `personal.json`. The
+browser tests run the dashboard page against a throwaway ledger: see [dashboard/README.md](dashboard/README.md#browser-tests).
 
 ## A second ledger (another person, no spreadsheet)
 
@@ -171,3 +174,6 @@ Public License as published by the Free Software Foundation, version 3. It is di
 useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
 PURPOSE. See [LICENSE](LICENSE) for the full text. If you run a modified version as a network service, the AGPL
 requires you to offer its users the modified source.
+
+One file is someone else's: `dashboard/testdata/chart-4.4.1.umd.min.js` is an unmodified copy of Chart.js, used only
+by the browser tests, under the MIT license in the `.LICENSE.txt` file beside it.
