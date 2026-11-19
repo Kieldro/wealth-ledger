@@ -30,7 +30,9 @@ export WEALTH_LEDGER_DB=$DB
 PLAID=$ROOT/plaid/plaid_sync.py
 PLAID_CFG=${PLAID_CONFIG:-$CONF/plaid.json}
 LOCK=${WEALTH_LEDGER_LOCK:-$HOME/.cache/wealth-ledger-sync.lock}
-DAYS=${WEALTH_LEDGER_DAYS:-14}   # re-pull 2 weeks so pending -> posted updates land; 1 API request
+# re-pull 2 weeks so pending -> posted updates land; 1 API request. An account that comes back after a longer gap
+# (or is new) gets the days in between fetched too, by simplefin_sync.py itself (up to 90 days, 1-2 more requests).
+DAYS=${WEALTH_LEDGER_DAYS:-14}
 
 STATUS=${WEALTH_LEDGER_STATUS:-$HOME/.cache/wealth-ledger-status}
 export WEALTH_LEDGER_STATUS=$STATUS
@@ -78,6 +80,8 @@ if [[ -f $PLAID_CFG ]]; then
   pout=$("$PY" "$PLAID" sync --db "$DB" 2>&1); prc=$?
   echo "$pout"
   (( prc != 0 )) && problem "Plaid sync failed: $(grep -m1 "^error" <<<"$pout" || tail -1 <<<"$pout"). If ITEM_LOGIN_REQUIRED: plaid_sync.py relink"
+  # stale cached balances, positions that stopped arriving: the sync still exits 0 on these
+  while IFS= read -r w; do problem "Plaid ${w:0:200}"; done < <(grep '^WARNING' <<<"$pout")
   (( rc == 0 )) && rc=$prc
 else
   echo "plaid: not set up, skipped"
@@ -101,6 +105,8 @@ if (cd "$ROOT" && "$PY" -c 'import personal, sys; sys.exit(not personal.has_shee
   vout=$(cd "$ROOT" && "$PY" -m valuations.run 2>&1); vrc=$?
   echo "$vout"
   (( vrc != 0 )) && problem "Valuations: $(grep -m1 '^error' <<<"$vout" || tail -1 <<<"$vout")"
+  # a coin left out for want of a price, a wallet lookup that fell back to the sheet: the estimate is still stored
+  while IFS= read -r w; do problem "Valuations ${w:9:200}"; done < <(grep '^WARNING: ' <<<"$vout")
 
   # the latest home valuation and its date into the sheet's "estimates" tab (only that tab is written; only on change)
   eout=$(cd "$ROOT" && "$PY" sheet_estimates.py 2>&1) || problem "$(grep -m1 '^error' <<<"$eout" || tail -1 <<<"$eout")"

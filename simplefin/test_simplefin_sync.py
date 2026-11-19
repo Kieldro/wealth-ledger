@@ -23,6 +23,31 @@ def test_one_fresh_account_keeps_a_connection_fresh_and_weekends_are_ok():
     assert sf.stale_warnings(resp(("c1", 3), ("c2", 30), ("c2", 1)), NOW) == []
 
 
+def test_account_left_behind_in_a_fresh_connection_is_named_when_it_holds_money():
+    data = resp(("c1", 0), ("c1", 30), ("c1", 30), ("c1", 30))
+    data["accounts"][1]["balance"] = "0.00"   # closed: not worth a line
+    data["accounts"][2].update(balance="1500.25", name="Old Savings")
+    data["accounts"][3]["balance"] = "-20"
+    old, owed = sf.stale_warnings(data, NOW)
+    assert old.startswith("stale: Account Old Savings at Bank A has not updated since 2026-10-02 (30 days)")
+    assert "acct=a2)" in old and "acct=a3)" in owed
+
+
+def test_backfill_reaches_back_to_where_a_returning_account_stopped():
+    from datetime import date
+    start, end = date(2026, 10, 18), date(2026, 11, 2)
+    known = {"a0": "2026-10-31T10:00:00+00:00", "a1": "2026-09-20T10:00:00+00:00", "a2": "2026-09-01T10:00:00+00:00"}
+    fresh = resp(("c1", 0), ("c2", 0), ("c2", 0))
+    assert sf.backfill_from(fresh, {"a0": known["a0"]}, {"a1", "a2"}, start, end) is None   # nothing came back
+    assert sf.backfill_from(fresh, known, {"a2"}, start, end) == date(2026, 9, 13)   # a1's gap, less 7 days
+    assert sf.backfill_from(fresh, known, set(), start, end) == date(2026, 8, 25)    # a2's
+    still_stuck = resp(("c1", 0), ("c2", 42))
+    assert sf.backfill_from(still_stuck, known, set(), start, end) is None           # wait until it moves
+    assert sf.backfill_from(fresh, {"a0": known["a0"], "a1": known["a0"]}, set(), start, end) == date(2026, 8, 4)  # a2 new: 90 days
+    long_gap = dict(known, a1="2026-01-01T00:00:00+00:00")
+    assert sf.backfill_from(fresh, long_gap, {"a2"}, start, end) == date(2026, 8, 4)  # capped at 90 days
+
+
 def test_missing_balance_date_is_not_stale():
     data = resp(("c1", 0))
     data["accounts"].append({"id": "x", "conn_id": "c2"})
@@ -110,3 +135,64 @@ def test_checking_side_card_payments_and_own_transfers_are_not_spending(tmp_path
     assert got == {"CARD PAYMENT THANK YOU": "card_payment", "EXAMPLE BANK CREDIT CRD EPAYMENT": "card_payment",
                    "ONLINE TRANSFER TO SAV ...1234": "transfer", "GROCERY MART #123": "spend",
                    "GIFT CARD STORE": "spend", "DEBIT CARD PAYMENT TO EXAMPLE GYM": "spend"}
+
+
+def test_holdings_view_keeps_an_account_the_feed_skipped_and_drops_an_emptied_one(tmp_path):
+    import ctdb
+    db = ctdb.connect(str(tmp_path / "t.db"))
+
+    def hold(day, acct, value):
+        db.execute("INSERT INTO holdings (snapshot_date, source, account_id, account_name, holding_key, symbol, "
+                   "market_value) VALUES (?, 'simplefin', ?, ?, ?, 'VTI', ?)", (day, acct, acct.upper(), acct + "-h", value))
+
+    def bal(day, acct, value):
+        db.execute(ctdb.UPSERT_BALANCE, (day, "simplefin", acct, acct.upper(), "Broker", value, None, "USD", None))
+
+    for acct in ("live", "skipped", "emptied"):
+        hold("2026-11-01", acct, "100.00")
+        bal("2026-11-01", acct, "100.00")
+    hold("2026-11-10", "live", "110.00")          # only this account is in the newest snapshot
+    bal("2026-11-10", "live", "110.00")
+    bal("2026-11-10", "emptied", "0.00")          # rolled over: balance still reported, at zero
+    db.commit()
+    got = {r[0]: r[1:] for r in db.execute("SELECT account_id, snapshot_date, value, lag_days FROM v_holdings_latest")}
+    assert got == {"live": ("2026-11-10", 110.0, 0), "skipped": ("2026-11-01", 100.0, 9)}
+    assert ctdb.lagging_holdings(db, "simplefin") == [("SKIPPED", "2026-11-01", 9)]
+    assert ctdb.lagging_holdings(db, "plaid") == []
+
+
+def test_sync_fetches_the_gap_once_when_an_account_comes_back(tmp_path, monkeypatch, capsys):
+    import types
+    from datetime import timedelta
+
+    import ctdb
+    now = datetime.now(timezone.utc)
+    path = tmp_path / "t.db"
+    db = ctdb.connect(path)
+    db.execute(ctdb.UPSERT_BALANCE, ((now - timedelta(days=40)).date().isoformat(), "simplefin", "a0", "Checking",
+                                     "Bank A", "5.00", None, "USD", (now - timedelta(days=40)).isoformat()))
+    db.commit()
+    db.close()
+    asked = []
+
+    def fetch(url, ws, we):
+        asked.append((now.date() - ws.date()).days)
+        gap = (now - timedelta(days=30)).timestamp()
+        txns = [{"id": "t-gap", "posted": int(gap), "amount": "-9.00", "description": "Missed"}] if ws.timestamp() < gap else []
+        return {"connections": [{"conn_id": "c1", "name": "Bank A"}],
+                "accounts": [{"id": "a0", "conn_id": "c1", "name": "Checking", "balance": "7.00", "currency": "USD",
+                              "balance-date": int(now.timestamp()), "transactions": txns}]}
+
+    monkeypatch.setattr(sf, "load_access_url", lambda f: "https://u:p@example.test/simplefin")
+    monkeypatch.setattr(sf, "fetch_window", fetch)
+    args = types.SimpleNamespace(access_file=None, db=path, days=14, start=None, end=None)
+    sf.sync(args)
+    usual, older = asked  # the usual window, then from 7 days before the old balance-date up to it
+    assert usual in (13, 14) and older in (46, 47, 48)  # a day either way: UTC against the local date
+    assert "backfill:" in capsys.readouterr().err
+    con = ctdb.connect(path)
+    assert [r[0] for r in con.execute("SELECT description FROM txns")] == ["Missed"]
+    con.close()
+    asked.clear()
+    sf.sync(args)
+    assert asked == [usual]  # the new balance-date is stored: no second backfill

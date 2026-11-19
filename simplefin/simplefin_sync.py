@@ -4,6 +4,9 @@
   simplefin_sync.py claim <setup-token>       # one-time; saves Access URL (0600)
   simplefin_sync.py sync [--days 30] [--start YYYY-MM-DD --end YYYY-MM-DD]
 
+sync re-pulls the last --days days. When an account comes back after a longer gap (its connection was stuck, the
+sync didn't run) or is new, it also fetches the days in between, up to SimpleFIN's 90-day history, in the same run.
+
 The Access URL embeds basic-auth credentials: treat it as a password. It is
 never printed in full; override its location with --access-file or the
 SIMPLEFIN_ACCESS_URL env var.
@@ -170,7 +173,9 @@ STALE_DAYS = 4  # a connection whose newest balance is older than this is stuck 
 
 def stale_warnings(data: dict, now: datetime, max_days: int = STALE_DAYS) -> list[str]:
     """One warning per connection whose accounts all have an old balance-date. SimpleFIN keeps reporting such a
-    connection as OK with no errlist entry (Coinbase stuck 10/16..11/01), so this is the only sign of it."""
+    connection as OK with no errlist entry (Coinbase stuck 10/16..11/01), so this is the only sign of it.
+    Inside a connection that is otherwise fresh, each account that holds money and has an old balance-date gets
+    its own warning: the fresh siblings would hide it."""
     conns = {c.get("conn_id"): c.get("name") for c in data.get("connections") or []}
     newest: dict[str, datetime] = {}
     for a in data.get("accounts") or []:
@@ -184,7 +189,63 @@ def stale_warnings(data: dict, now: datetime, max_days: int = STALE_DAYS) -> lis
         if age > max_days:
             out.append(f"stale: Connection to {conns.get(c) or c} has not updated since {bd.date()} ({age} days); "
                        f"open beta-bridge.simplefin.org > My account > Adjust on it to refresh (conn={c})")
+    for a in data.get("accounts") or []:
+        bd, c = _ts(a.get("balance-date")), a.get("conn_id")
+        if not bd or (now - bd).days <= max_days or (now - newest[c]).days > max_days:
+            continue  # fresh, or its whole connection is already named above
+        try:
+            empty = not Decimal(str(a.get("balance") or 0))
+        except InvalidOperation:
+            empty = False
+        if not empty:
+            out.append(f"stale: Account {a.get('name') or a.get('id')} at {conns.get(c) or c} has not updated since "
+                       f"{bd.date()} ({(now - bd).days} days) while the rest of its connection has; its balance is "
+                       f"from then (conn={c}, acct={a.get('id')})")
     return out
+
+
+BACKFILL_MAX_DAYS = 90     # SimpleFIN keeps about 90 days of history
+BACKFILL_OVERLAP_DAYS = 7  # re-read this many days before the gap, for rows that were pending when it began
+
+
+def known_accounts(db_path: Path) -> dict[str, str | None]:
+    """account_id -> newest balance-date (ISO, None if the feed never gave one) stored by earlier syncs."""
+    if not db_path.exists():
+        return {}
+    db = ctdb.connect(db_path)
+    try:
+        return dict(db.execute("SELECT account_id, MAX(as_of) FROM balances WHERE source = 'simplefin' "
+                               "GROUP BY account_id"))
+    finally:
+        db.close()
+
+
+def backfill_from(data: dict, known: dict[str, str | None], skip: set[str], start: date, end: date) -> date | None:
+    """The day to fetch back to when the usual window [start, end) leaves a hole, else None.
+
+    A fixed window only works while every account is read at least that often. An account whose balance-date just
+    moved forward after standing still since before `start` (connection stuck or broken, or no sync ran) has
+    transactions between its old balance-date and `start` that no later run would ever ask for. An account never
+    seen before has its whole history missing. Either way go back to that point (less an overlap), at most
+    BACKFILL_MAX_DAYS. It happens once: the new balance-date is stored by this run. Accounts in `skip` (fed by
+    another source now) never count."""
+    floor = end - timedelta(days=BACKFILL_MAX_DAYS)
+    need = []
+    for a in data.get("accounts") or []:
+        bd = _ts(a.get("balance-date"))
+        if a["id"] in skip or not bd:
+            continue
+        if a["id"] not in known:
+            need.append(floor)
+            continue
+        try:
+            prev = datetime.fromisoformat(known[a["id"]]).date()
+        except (TypeError, ValueError):
+            continue
+        if prev < start and bd.date() > prev:
+            need.append(prev - timedelta(days=BACKFILL_OVERLAP_DAYS))
+    back = max(floor, min(need)) if need else None
+    return back if back and back < start else None
 
 
 def normalize(data: dict) -> list[Txn]:
@@ -296,6 +357,8 @@ def sync(args) -> None:
     holdings: list[tuple] = []
     balances: list[tuple] = []
     conn_accts: dict[str, set[str]] = {}
+    gone = superseded_ids(args.db)
+    known = known_accounts(args.db)
     for ws, we in windows(start, end):
         data = fetch_window(access_url, ws, we)
         warns.update(warnings_from(data))
@@ -306,10 +369,20 @@ def sync(args) -> None:
         for r in normalize(data):
             all_rows[r.txn_id] = r
         print(f"window {ws.date()}..{we.date()}: {len(data.get('accounts') or [])} accounts", file=sys.stderr)
+    # `data` is the newest window: does it show an account that came back after a gap this window doesn't cover?
+    back = None if args.start else backfill_from(data, known, gone, start, end)
+    if back:
+        print(f"backfill: an account is new or came back after a gap; also fetching {back}..{start}", file=sys.stderr)
+        for ws, we in windows(back, start):
+            older = fetch_window(access_url, ws, we)
+            warns.update(warnings_from(older))
+            for r in normalize(older):
+                all_rows.setdefault(r.txn_id, r)  # the newest window's copy of a row wins
+            print(f"window {ws.date()}..{we.date()}: {len(older.get('accounts') or [])} accounts", file=sys.stderr)
     # connections whose every account moved to another feed (ctdb.superseded) can't hurt us: no phone alert
     # (a broken connection may return no accounts, so also match the institution name in the message)
-    gone = superseded_ids(args.db)
     muted = {f"conn={c}" for c, ids in conn_accts.items() if c and ids <= gone}
+    muted |= {f"acct={a})" for a in gone}
     muted |= {f"Connection to {i} " for i in superseded_institutions(args.db)}
     for w in sorted(warns):
         quiet = any(m in w for m in muted)
@@ -325,6 +398,9 @@ def sync(args) -> None:
         for name in unknown:
             print(f"WARNING: account \"{name}\" has no type yet and is left out of the totals; name its type in "
                   f"personal.json \"account_kinds\" (see README)", file=sys.stderr)
+    for name, day, lag in ctdb.lagging_holdings(db, "simplefin"):
+        print(f"WARNING: holdings: {name} positions were last reported {day} ({lag} days behind the feed); shown as "
+              f"of that day", file=sys.stderr)
     db.close()
     print(f"fetched={len(all_rows)} inserted={new} updated={updated} holdings={len(holdings)} "
           f"balances={len(balances)} db={args.db}")
