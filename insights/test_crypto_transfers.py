@@ -1,5 +1,6 @@
 """Crypto transfers from a made-up Exodus export, send log and on-chain data (no real data)."""
 import json
+from datetime import datetime, timezone
 
 import pytest
 
@@ -26,12 +27,25 @@ def write_csv(tmp_path, rows=ROWS):
     return f
 
 
-def test_exodus_rows_directions_portfolios_and_local_time(tmp_path):
+def test_exodus_rows_directions_portfolios_and_local_time(tmp_path, monkeypatch):
+    monkeypatch.setenv("WEALTH_LEDGER_TZ", "America/Denver")
     rows = ct.exodus_rows(write_csv(tmp_path))
     assert [(r["wallet"], r["direction"], r["amount"], r["fee"], r["memo"]) for r in rows] == [
         ("Exodus", "in", 0.5, None, "from exchange"), ("Exodus", "out", 0.01, 0.0001, "gift"),
         ("Exodus 2", "out", 0.02, 0.0001, "")]
-    assert rows[0]["date"] == "2026-03-01T12:00:00-06:00"
+    assert rows[0]["date"] == "2026-03-01T11:00:00-07:00"
+
+
+def test_timezone_from_env_then_config_else_this_machine(monkeypatch):
+    utc = "2026-03-01T18:00:00.000Z"
+    monkeypatch.delenv("WEALTH_LEDGER_TZ", raising=False)
+    monkeypatch.setattr(ct.crypto, "_crypto_cfg", lambda: {})
+    assert ct.tz() is None
+    assert ct._local(utc) == datetime(2026, 3, 1, 18, tzinfo=timezone.utc).astimezone().isoformat(timespec="seconds")
+    monkeypatch.setattr(ct.crypto, "_crypto_cfg", lambda: {"timezone": "Asia/Tokyo"})
+    assert ct._local(utc) == "2026-03-02T03:00:00+09:00"
+    monkeypatch.setenv("WEALTH_LEDGER_TZ", "UTC")
+    assert ct._local(utc) == "2026-03-01T18:00:00+00:00"
 
 
 def test_send_log_follows_fee_bumps(tmp_path):
@@ -41,16 +55,27 @@ def test_send_log_follows_fee_bumps(tmp_path):
          "usd": "80", "fee_btc": "0.00000141"},
         {"time": "2026-03-05T10:05:00-06:00", "type": "bump", "replaces": "t1", "txid": "t2", "usd": "0",
          "fee_btc": "0.000005"}]) + "\n")
-    [r] = ct.claude_rows(log)
-    assert (r["txid"], r["fee"], r["memo"], r["wallet"]) == ("t2", 0.000005, "gift", "Claude")
+    [r] = ct.send_log_rows(log, "Spending")
+    assert (r["txid"], r["fee"], r["memo"], r["wallet"]) == ("t2", 0.000005, "gift", "Spending")
+    assert ct.send_log_rows(None, "Spending") == [] and ct.send_log_rows(tmp_path / "none.jsonl", "Spending") == []
+
+
+def test_send_log_is_off_unless_configured(tmp_path, monkeypatch):
+    log = tmp_path / "sends.jsonl"
+    log.write_text(json.dumps({"time": "2026-03-05T10:00:00-06:00", "txid": "t1", "to": "bc1qfriend", "btc": "0.001"}))
+    monkeypatch.setattr(ct.crypto, "_crypto_cfg", lambda: {})
+    assert ct.send_log() == (None, "Wallet") and ct.gather(None, {}) == []
+    monkeypatch.setattr(ct.crypto, "_crypto_cfg", lambda: {"send_log": str(log), "send_log_wallet": "Spending"})
+    assert ct.send_log() == (log, "Spending")
+    assert [(r["wallet"], r["txid"], r["source"]) for r in ct.gather(None, {})] == [("Spending", "t1", "send-log")]
 
 
 def test_send_to_own_wallet_is_labelled_and_mirrored():
     rows = ct.link_own([{"wallet": "Exodus", "coin": "BTC", "txid": "bbb", "direction": "out", "date": "d",
                          "amount": 0.01, "fee": 0.0001, "address": "bc1qmine", "memo": "top up", "source": "x"}],
-                       {"bc1qmine": "Claude"})
+                       {"bc1qmine": "Spending"})
     assert [(r["wallet"], r["direction"], r.get("counterparty"), r["fee"]) for r in rows] == [
-        ("Exodus", "out", "Claude", 0.0001), ("Claude", "in", "Exodus", None)]
+        ("Exodus", "out", "Spending", 0.0001), ("Spending", "in", "Exodus", None)]
 
 
 def test_onchain_net_amounts_and_self_moves():

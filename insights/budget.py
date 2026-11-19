@@ -40,56 +40,47 @@ UNMAPPED = "Other (unmapped)"
 EXCLUDE_CATEGORIES = r"^(saving|savings|investing|investments?)$"  # money set aside, not spent: no actuals
 NO_CATEGORY = "Uncategorized"
 
-# Generic merchant patterns (businesses anyone might use). Rules that name the owner's landlord, utilities,
-# or people they pay go in personal.json "budget.rules", which are tried first.
+# Generic merchant patterns (national chains and services anyone might use). Regional chains, your own landlord,
+# lender, insurer, utilities, hobbies and the people you pay go in personal.json "budget.rules", which are tried first.
 DEFAULT_RULES: list[tuple[str, str]] = [
-    (r"H-E-B\s*GAS|\bSHELL\b|EXXON|VALERO|BUC-?EE|CHEVRON|\bCIRCLE K\b|\bTEXACO\b|\bSUNOCO\b|SPEEDY STOP"
+    (r"\bSHELL\b|EXXON|VALERO|CHEVRON|\bCIRCLE K\b|\bTEXACO\b|\bSUNOCO\b"
      r"|COSTCO GAS|QUIKTRIP|\bQT\b|\b7-ELEVEN\b|\bPHILLIPS 66\b|\bCONOCO\b|\bMOBIL\b", r"gasoline|fuel"),
     (r"COSTCO.*MEMBER", r"costco membership"),
-    (r"\bH-E-B\b|COSTCO|WHOLE ?FOODS|TRADER JOE|SPROUTS|WALMART|\bALDI\b|CENTRAL MARKET|KROGER|SAFEWAY"
+    (r"COSTCO|WHOLE ?FOODS|TRADER JOE|SPROUTS|WALMART|\bALDI\b|KROGER|SAFEWAY"
      r"|SUPERMERCA|SUPERMARKET|GROCER|INSTACART", r"groceries"),
-    (r"EZ ?TAG|TOLL ?ROAD|TXTAG|\bNTTA\b|E-?ZPASS|SUNPASS|FASTRAK", r"tolls"),
-    (r"JPMORGAN ?CHASE.*ACH|MORTGAGE", r"mortgage"),
-    (r"HOMESITE|HOMEOWNERS INS", r"home insurance"),
+    (r"TOLL ?ROAD|E-?ZPASS|SUNPASS|FASTRAK", r"tolls"),
+    (r"MORTGAGE", r"mortgage"),
+    (r"HOMEOWNERS INS", r"home insurance"),
     (r"PROGRESSIVE|STATE FARM|ALLSTATE|\bGEICO\b", r"car insurance"),
     (r"JIFFY LUBE|VALVOLINE|TAKE 5 OIL|OIL CHANGE", r"oil change"),
     (r"CAR ?WASH", r"car wash"),
     (r"DISCOUNT TIRE|\bTIRES?\b", r"tires"),
     (r"PARKMOBILE|PARKING|\bPARK ?WHIZ\b|SPOTHERO", r"(^|/)parking$"),
-    (r"\bDMV\b|VEHICLE REG|TXDMV", r"registration"),
+    (r"\bDMV\b|VEHICLE REG", r"registration"),
     (r"\bUBER\b(?!.*EATS)|\bLYFT\b|LIME\*", r"\bubers?\b|rideshare"),
     (r"AIRLINES?\b|AMERICAN AIR|UNITED AIR|DELTA AIR|SOUTHWEST|SPIRIT AIR|FRONTIER AIR|JETBLUE|ALASKA AIR",
      r"flights?"),
     (r"ANTHROPIC|CLAUDE\.AI", r"claude"),
-    (r"OPENROUTER", r"open ?router"),
     (r"YOUTUBE", r"youtube"),
     (r"GOOGLE ?ONE|GOOGLE STORAGE", r"google one"),
     (r"SPOTIFY", r"spotify"),
     (r"AMAZON PRIME|PRIME VIDEO", r"amazon prime"),
-    (r"\bBATHE\b", r"bathe"),
     (r"CLOUDFLARE", r"cloudflare"),
     (r"SIMPLEFIN", r"simplefin"),
     (r"\bPLAID\b", r"\bplaid\b"),
-    (r"HOSTEX", r"hostex"),
-    (r"MONARCH", r"monarch"),
     (r"WELLHUB|GYMPASS", r"wellhub|\bgym\b"),
     (r"PATREON", r"patreon"),
-    (r"SUPERWHISPER", r"superwhisper"),
-    (r"VENICE\.?AI", r"venice"),
     (r"PRIVATE INTERNET|NORDVPN|MULLVAD|EXPRESSVPN|PROTONVPN", r"\bvpn\b"),
     (r"T-?MOBILE|VERIZON|AT&T WIRELESS|MINT MOBILE|CRICKET", r"cell service|\bphone\b"),
     (r"SPECTRUM|XFINITY|COMCAST|GOOGLE FIBER|AT&T INTERNET|FRONTIER COMM", r"internet"),
     (r"H ?& ?R BLOCK|\bHRB\b|TURBOTAX", r"tax assistance|tax prep"),
     (r"HOME DEPOT|LOWE'?S|APPLIANCE PARTS|ACE HARDWARE", r"house repairs|home improvement"),
-    (r"JIU|JITSU|\bBJJ\b|GRACIE", r"jiu jitsu"),
-    (r"PINS ?& ?WHEELS|ROLLER|SKATE", r"skating"),
-    (r"GRABAGUN|GUNMAG|\bAMMO|MAG SHACK", r"ammunition"),
     (r"BARBER|SUPERCUTS|GREAT CLIPS|HAIRCUT", r"haircut"),
     (r"LAUNDR", r"laundry"),
     (r"GLOBAL ENTRY", r"global entry"),
     (r"PASSPORT|\bPSPT\b", r"passport"),
-    (r"RESTAURANT|GRILL|TAQUER|BURGER|PIZZA|\bCAFE\b|COFFEE|STARBUCKS|CHIPOTLE|IN-N-OUT|P\.? ?TERRY|WHATABURGER"
-     r"|CHICK-FIL-A|MCDONALD|TACO|\bBBQ\b|SUSHI|RAMEN|DOORDASH|UBER ?EATS|GRUBHUB|SA-T[EÉ]N|LOS VAQUEROS"
+    (r"RESTAURANT|GRILL|TAQUER|BURGER|PIZZA|\bCAFE\b|COFFEE|STARBUCKS|CHIPOTLE|IN-N-OUT"
+     r"|CHICK-FIL-A|MCDONALD|TACO|\bBBQ\b|SUSHI|RAMEN|DOORDASH|UBER ?EATS|GRUBHUB"
      r"|DINER|CANTINA|BAKERY|DONUT", r"restaurant"),
 ]
 

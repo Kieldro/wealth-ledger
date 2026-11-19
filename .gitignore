@@ -8,6 +8,7 @@ __pycache__/
 .ruff_cache/
 .env
 .env.*
+.claude/
 
 # personal data and secrets: these live in ~/.config/wealth-ledger and ~/.local/share/wealth-ledger, never here
 personal.json
@@ -17,6 +18,7 @@ personal.json
 plaid.json
 crypto_wallets.json
 simplefin_access_url
+apify_token
 *.secret
 *.key
 *.pem

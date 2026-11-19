@@ -1559,7 +1559,7 @@ document.querySelector('meta[name="theme-color"]').content = getComputedStyle(do
   <p class="foot">You stay signed in on this device until you log out.</p>
 </main>
 {{markets}}
-<p class="by">Built by Keolabs</p>
+{{credit}}
 <script>
 "use strict";
 (function () {
@@ -1604,6 +1604,16 @@ def with_theme(page: str) -> str:
     """The page with the ledger's default theme on <html> (its own script then applies the viewer's saved choice)."""
     t = default_theme()
     return page if t == THEMES[0] else page.replace('<html lang="en">', f'<html lang="en" data-theme="{t}">', 1)
+
+
+def credit_line() -> str:
+    """Optional line of plain text under the sign-in page and the dashboard (personal.json "dashboard.credit");
+    nothing unless it is set."""
+    try:
+        c = personal.section("dashboard").get("credit")
+    except Exception:  # as default_theme: the sign-in page must still open
+        return ""
+    return f'<p class="by">{html_escape(c.strip())}</p>' if isinstance(c, str) and c.strip() else ""
 
 
 # One line of public market closes for the sign-in page (and the dashboard's top), read from the prices the daily sync already stores
@@ -1825,10 +1835,10 @@ class Handler(BaseHTTPRequestHandler):
     def _login_page(self, code: int = 200, error: str = "", headers=(), username: str = ""):
         # a failed attempt keeps the typed username (never the password), so only the password is retyped
         err = f'<p class="err" role="alert">{LOGIN_ERR_ICON}<span>{html_escape(error)}</span></p>' if error else ""
-        # the page is public: besides the theme it shows only the allowlisted market closes, the error and the typed
-        # username (replaced last, so typed text can't smuggle in a placeholder)
+        # the page is public: besides the theme it shows only the allowlisted market closes, the optional credit
+        # line, the error and the typed username (replaced last, so typed text can't smuggle in a placeholder)
         page = (with_theme(LOGIN_HTML).replace("{{error}}", err).replace("{{markets}}", login_markets())
-                .replace("{{username}}", html_escape(username)))
+                .replace("{{credit}}", credit_line()).replace("{{username}}", html_escape(username)))
         return self._send(code, page.encode(), "text/html; charset=utf-8", headers, CSP_LOGIN)
 
     # --- routes
@@ -1847,7 +1857,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._deny(p)
             if p in ("/", "/index.html"):
                 with open(os.path.join(HERE, "index.html"), encoding="utf-8") as f:
-                    page = with_theme(f.read()).replace("{{markets}}", login_markets(), 1).encode()
+                    page = (with_theme(f.read()).replace("{{markets}}", login_markets(), 1)
+                            .replace("{{credit}}", credit_line(), 1).encode())
                 return self._send(200, page, "text/html; charset=utf-8", self._renewal(), index_csp(page))
             if p == "/healthz":
                 return self._send(200, b"ok\n", "text/plain")

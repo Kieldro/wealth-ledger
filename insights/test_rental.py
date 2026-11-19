@@ -7,13 +7,15 @@ import ctdb
 from insights import rental
 
 TODAY = date(2026, 10, 27)
-START = "2026-07-20"
+START = "2026-07-15"
 CHK, CARD, LOAN = "chk", "card", "loan"
 CFG = {"label": "Test house",
        "match": {"rent": ["%PAT TENANT%"], "cleaning": ["%SAM SWEEPER%"], "utilities": ["%EXAMPLE POWER%"],
-                 "repairs": [{"pattern": "%HARDWARE BARN%", "kinds": ["credit"]}]},
-       "exclude": ["%HOSTEX GIFT CARD%"]}
-MORTGAGE = "DIRECT DEBIT JPMORGAN CHASECHASE ACH (Cash)"
+                 "repairs": [{"pattern": "%HARDWARE BARN%", "kinds": ["credit"]}],
+                 "mortgage": [{"pattern": "%EXAMPLE HOME LOANS%ACH%", "direction": "out",
+                               "kinds": ["checking", "savings"]}]},
+       "exclude": ["%GUESTY GIFT CARD%"]}
+MORTGAGE = "DIRECT DEBIT EXAMPLE HOME LOANS ACH (Cash)"
 
 
 class Ledger:
@@ -58,8 +60,8 @@ def test_matching_rules_and_monthly_totals(led):
     led.txn(CHK, date(2026, 9, 20), -150, "Zelle payment from Owner to PAT  TENANT")  # deposit refund
     led.txn(CHK, date(2026, 9, 10), -80, "Zelle payment from Owner to SAM  SWEEPER")
     led.txn(CARD, date(2026, 9, 12), -95.5, "EXAMPLE POWER COOP")
-    led.txn(CARD, date(2026, 9, 14), -25, "Hostex", "Hostex")                    # built-in default
-    led.txn(CARD, date(2026, 9, 15), -50, "HOSTEX GIFT CARD")                    # personal exclude wins
+    led.txn(CARD, date(2026, 9, 14), -25, "Guesty", "Guesty")                    # built-in default
+    led.txn(CARD, date(2026, 9, 15), -50, "GUESTY GIFT CARD")                    # personal exclude wins
     led.txn(CARD, date(2026, 9, 16), -40, "HARDWARE BARN #12")
     led.txn(CARD, date(2026, 9, 17), 10, "HARDWARE BARN #12 RETURN")             # refund nets out
     led.txn(CHK, date(2026, 9, 18), -30, "HARDWARE BARN")                        # kinds: credit only
@@ -72,10 +74,10 @@ def test_matching_rules_and_monthly_totals(led):
     assert sep["expenses"] == {"cleaning": 80, "utilities": 95.5, "software": 25, "repairs": 30}
     assert (sep["income_total"], sep["expense_total"], sep["net"]) == (900, 230.5, 669.5)
     assert sep["principal"] is None and sep["principal_basis"] is None
-    assert month(s, "2026-07")["n"] == 0 and month(s, "2026-07")["from_day"] == 20
+    assert month(s, "2026-07")["n"] == 0 and month(s, "2026-07")["from_day"] == 15
     assert s["label"] == "Test house" and s["since"] == START
     assert [c["key"] for c in s["expense_categories"]] == ["cleaning", "software", "utilities", "repairs"]
-    assert s["rules"]["personal"] == 4 and s["rules"]["exclude"] == 1
+    assert s["rules"]["personal"] == 5 and s["rules"]["exclude"] == 1
     assert s["items"][0]["date"] == "2026-09-20"
 
 
@@ -116,6 +118,15 @@ def test_mortgage_principal_measured_then_estimated(led):
     assert t3["since"] == "2026-07-28" and t3["principal"] == 1800 and t3["principal_basis"] == "estimated"
     # loan-side credits are transfers on the loan account: the mortgage counts once, from checking
     assert t3["expenses"] == {"mortgage": 6000}
+
+
+def test_mortgage_is_matched_only_by_your_own_pattern(led):
+    _mortgage(led)
+    assert not any(r.category == "mortgage" for r in rental.rules({})[1])  # no lender is built in
+    assert month(led.summary(cfg={}), "2026-10")["expenses"] == {}
+    card = {"match": {"mortgage": [{"pattern": "%EXAMPLE HOME LOANS%", "direction": "out", "kinds": ["credit"]}]}}
+    assert month(led.summary(cfg=card), "2026-10")["expenses"] == {}        # paid from checking, not a card
+    assert month(led.summary(), "2026-10")["expenses"] == {"mortgage": 2000}
 
 
 def test_mortgage_without_snapshots_uses_labelled_principal_only(led):

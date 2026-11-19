@@ -161,3 +161,13 @@ spreadsheet, Gmail or wallets, and the dashboard hides the sections that need th
 - `"dashboard": {"web_connect": true}`: while nothing is connected, the page shows how to link banks in SimpleFIN
   and takes the setup token; it claims it and runs the first 90-day sync. An existing connection can't be replaced
   from the page.
+
+## License
+
+Copyright (C) 2026 Kieldro
+
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General
+Public License as published by the Free Software Foundation, version 3. It is distributed in the hope that it will be
+useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
+PURPOSE. See [LICENSE](LICENSE) for the full text. If you run a modified version as a network service, the AGPL
+requires you to offer its users the modified source.

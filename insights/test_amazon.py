@@ -192,7 +192,7 @@ def test_refund_matching(tmp_path, led):
 
 
 SHEET = [["Food", "groceries", 600], ["Home", "house repairs", 100], ["Home", "furniture", 50],
-         ["Clothing", "clothes", 60], ["Clothing", "shoes", 20], ["Garden", "bee keeping", 30],
+         ["Clothing", "clothes", 60], ["Clothing", "shoes", 20], ["Garden", "bird feeding", 30],
          ["Garden", "landscaping", 20], ["Health", "toiletries", 20], ["Tech", "repair devices", 30],
          ["Tech", "new laptop", 40], ["Misc", "air filters", 5], ["Misc", "misc", 100], ["", "Total", 1075]]
 LINES = budget.parse_sheet(SHEET)["lines"]
@@ -206,7 +206,7 @@ def where(dept, name, rules=None):
 def test_item_category_rules():
     assert where("Grocery", "Example Brand Oat Cereal 12oz") == "groceries"
     assert where(None, "Ground Coffee, Medium Roast") == "groceries"
-    assert where("Lawn & Patio", "Beehive Frame Feeder, 2 pack") == "bee keeping"   # keyword beats department
+    assert where("Lawn & Patio", "Wild Bird Seed Blend, 20 lb") == "bird feeding"   # keyword beats department
     assert where("Lawn & Patio", "Garden Hose 50ft") == "landscaping"
     assert where("Tools & Home Improvement", "Cordless Drill Kit") == "house repairs"
     assert where("Apparel", "Men's Cotton T-Shirt") == "clothes"

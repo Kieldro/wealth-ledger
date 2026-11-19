@@ -757,7 +757,7 @@ document.querySelector('meta[name="theme-color"]').content = getComputedStyle(do
     Sheet-only items (home, self-custody crypto, metals, vehicles, cash…) come from the balance sheet via
     <code>networth.py</code>, cached for 10 minutes (<span id="fetched">loading…</span>). Nothing on this page leaves this machine.
   </footer>
-  <p class="by">Built by Keolabs</p>
+  {{credit}}
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" integrity="sha512-CQBWl4fJHWbryGE+Pc7UAxWMUMNMWzWxF4SQo9CgkJIN1kx6djDQZjh3Y8SZ1d+6I+1zze6Z7kHXO7q3UyZAWw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
@@ -1898,7 +1898,7 @@ function renderHoldings(hd) {
   $("moreholds").onclick = () => { holdLimit = holdLimit < hd.holdings.length ? 999 : 15; renderHoldings(hd); };
 }
 
-// coin amounts: more decimals the smaller the amount (0.75001309 BTC, 307.94 USDT, 4,213 DOGE)
+// coin amounts: more decimals the smaller the amount (0.50001234 BTC, 250.75 USDT, 4,000 DOGE)
 const qtyFmt = q => q == null ? "—" : privacy ? MASK : q.toLocaleString("en-US", {maximumFractionDigits: q < 1 ? 8 : q < 1000 ? 4 : 0});
 const priceFmt = p => p == null ? "no price" : p < 1 ? "$" + p.toLocaleString("en-US", {maximumSignificantDigits: 4}) : (p < 100 ? usd2 : usd0).format(p);
 const QTY_SRC = {onchain: ["on-chain", "b-live", "Amount read from the blockchain"],

@@ -8,15 +8,19 @@ Sources:
     (personal.json crypto.xpub_export_dir). Columns DATE, TYPE, FROM/TOPORTFOLIO, OUT/INAMOUNT, OUT/INCURRENCY,
     FEEAMOUNT, TOADDRESS, OUT/INTXID, ORDERID, PERSONALNOTE. Exodus has no API, so its memos ("PERSONALNOTE") only
     leave the app this way.
-  * The Claude spending wallet's send log (bitcoin-send skill: ~/.local/share/bitcoin-send/main/sends.jsonl), whose
-    "note" is the memo; fee-bump entries move a send to its replacement txid.
+  * An optional send log (personal.json crypto.send_log, booked to the wallet named by crypto.send_log_wallet): a
+    JSON-lines file that a script or hot wallet appends to, one send per line {"time": ISO time, "txid", "to",
+    "btc", "fee_btc", "note"}, whose "note" is the memo; {"type": "bump", "replaces", "txid", "fee_btc"} lines move
+    a send to its fee-bumped replacement txid.
 A send to an address of another of your own bitcoin wallets (an xpub in crypto_wallets.json) is labelled with that
 wallet as counterparty and also recorded as a receive in it. Re-importing is idempotent; a memo is never replaced
-by an empty one. USD values come from the daily prices table (v_crypto_transfers).
+by an empty one. USD values come from the daily prices table (v_crypto_transfers). Times are stored in the
+timezone named by $WEALTH_LEDGER_TZ or personal.json crypto.timezone (an IANA name such as Europe/Berlin); default:
+this machine's local time.
 
   python -m insights.crypto_transfers            import everything found
   python -m insights.crypto_transfers --dry-run  show what would be imported
-Never sends notifications (owner's rule).
+Never sends notifications.
 """
 from __future__ import annotations
 
@@ -25,7 +29,7 @@ import csv
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone, tzinfo
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -34,9 +38,6 @@ import ctdb  # noqa: E402
 from valuations import crypto  # noqa: E402
 
 DEFAULT_DB = Path(os.environ.get("WEALTH_LEDGER_DB") or "~/.local/share/wealth-ledger/txns.db").expanduser()
-SEND_LOG = Path("~/.local/share/bitcoin-send/main/sends.jsonl").expanduser()
-CLAUDE_WALLET = "Claude"
-TZ = ZoneInfo("America/Chicago")
 OWN_ADDRESS_SCAN = 100  # receive + change addresses checked per own xpub
 GAP = 20  # unused addresses in a row that end an xpub walk (as in valuations/crypto.py)
 UPSERT = """INSERT INTO crypto_transfers (wallet, coin, txid, direction, date, amount, fee, address, counterparty, memo,
@@ -47,8 +48,22 @@ UPSERT = """INSERT INTO crypto_transfers (wallet, coin, txid, direction, date, a
               memo = COALESCE(NULLIF(excluded.memo, ''), memo), source = excluded.source"""
 
 
+def tz() -> tzinfo | None:
+    """The timezone transfer times are stored in: $WEALTH_LEDGER_TZ, else personal.json crypto.timezone (IANA names),
+    else None, which is this machine's local time."""
+    name = os.environ.get("WEALTH_LEDGER_TZ") or crypto._crypto_cfg().get("timezone")
+    return ZoneInfo(name) if name else None
+
+
+def send_log() -> tuple[Path | None, str]:
+    """(file, wallet name) of the optional send log: personal.json crypto.send_log and crypto.send_log_wallet."""
+    cfg = crypto._crypto_cfg()
+    return (Path(cfg["send_log"]).expanduser() if cfg.get("send_log") else None,
+            cfg.get("send_log_wallet") or crypto.default_wallet())
+
+
 def _local(iso: str) -> str:
-    return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(TZ).isoformat(timespec="seconds")
+    return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(tz()).isoformat(timespec="seconds")
 
 
 def _num(v: str) -> float | None:
@@ -79,8 +94,8 @@ def exodus_rows(path: Path, base: str = "Exodus") -> list[dict]:
     return [x for x in out if x["txid"] and x["coin"]]
 
 
-def claude_rows(path: Path = SEND_LOG) -> list[dict]:
-    if not path.exists():
+def send_log_rows(path: Path | None, wallet: str) -> list[dict]:
+    if not path or not path.exists():
         return []
     sends, replaced = {}, {}
     for line in path.read_text().splitlines():
@@ -97,9 +112,9 @@ def claude_rows(path: Path = SEND_LOG) -> list[dict]:
         while txid in replaced:  # follow fee bumps to the transaction that actually confirms
             b = replaced.pop(txid)
             txid, fee = b["txid"], float(b.get("fee_btc") or 0) or fee
-        out.append({"wallet": CLAUDE_WALLET, "coin": "BTC", "txid": txid, "direction": "out",
+        out.append({"wallet": wallet, "coin": "BTC", "txid": txid, "direction": "out",
                     "date": e["time"], "amount": float(e["btc"]), "fee": fee, "address": e.get("to"),
-                    "memo": e.get("note") or "", "source": "bitcoin-send"})
+                    "memo": e.get("note") or "", "source": "send-log"})
     return out
 
 
@@ -162,8 +177,8 @@ def onchain_rows(wallet: str, addrs: set[str], txs: dict[str, dict]) -> list[dic
         spent = sum(v["prevout"]["value"] for v in t["vin"]
                     if (v.get("prevout") or {}).get("scriptpubkey_address") in addrs)
         got = sum(o["value"] for o in t["vout"] if o.get("scriptpubkey_address") in addrs)
-        when = (datetime.fromtimestamp(t["status"]["block_time"], TZ).isoformat(timespec="seconds")
-                if t["status"].get("block_time") else datetime.now(TZ).isoformat(timespec="seconds"))
+        when = (datetime.fromtimestamp(t["status"]["block_time"], timezone.utc) if t["status"].get("block_time")
+                else datetime.now(timezone.utc)).astimezone(tz()).isoformat(timespec="seconds")
         if spent:
             sent = spent - got - t["fee"]
             if sent <= 0:  # moved between its own addresses: only the fee left the wallet
@@ -212,14 +227,15 @@ def link_own(rows: list[dict], own: dict[str, str]) -> list[dict]:
     return rows + extra
 
 
-def gather(folder: Path | None, own: dict[str, str], log: Path = SEND_LOG,
+def gather(folder: Path | None, own: dict[str, str], log: Path | None = None,
            chain: list[dict] | None = None) -> list[dict]:
     rows = list(chain or [])  # on-chain first, so exports and logs (with memos and send times) win
     folder = folder or crypto.xpub_export_dir()
     if folder and folder.exists():
         for f in sorted(folder.glob("exodus*-txs-*.csv"), key=lambda p: p.stat().st_mtime):  # newest memo wins
             rows += exodus_rows(f, crypto._export_wallet(None))
-    rows += claude_rows(log)
+    cfg_log, wallet = send_log()
+    rows += send_log_rows(log or cfg_log, wallet)
     return link_own(rows, own)
 
 

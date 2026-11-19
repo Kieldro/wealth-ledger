@@ -1,6 +1,6 @@
 {
  "_help": "OPTIONAL FILE. With only a SimpleFIN connection the ledger needs no personal.json at all. Every key below is optional and independent: copy just the sections you want to ~/.config/wealth-ledger/personal.json (chmod 600), replace the values with your own, and leave the rest out. Keys starting with _ are comments. Each section's _help says what it is for and what else it needs.",
- "_simplefin_only": "Useful without a spreadsheet: account_kinds, credit_limits, rules, dashboard (default_username, theme, ledger_start, web_connect), subscriptions, overdraft, rental, inherited_ira, backup, simplefin_watch. Needs the gws CLI signed in to Google: sheet_id and everything that reads the sheet (networth, home, cars, crypto, budget, amazon, networth_history), zelle_memos (Gmail) and monthly_email (Gmail).",
+ "_simplefin_only": "Useful without a spreadsheet: account_kinds, credit_limits, rules, dashboard (default_username, theme, credit, ledger_start, web_connect), subscriptions, overdraft, rental, inherited_ira, backup, simplefin_watch. Needs the gws CLI signed in to Google: sheet_id and everything that reads the sheet (networth, home, cars, crypto, budget, amazon, networth_history), zelle_memos (Gmail) and monthly_email (Gmail).",
  "_sheet_id": "Optional. A Google Sheet with a hand-kept 'balance sheet' tab (assets the feeds can't see: cash, metals, home, cars) and an 'income sheet' budget tab. Remove this key for a ledger of synced accounts only.",
  "sheet_id": "YOUR-GOOGLE-SHEET-ID",
  "_auto_kind": "Optional key \"auto_kind\": true or false. true = each new account's type is guessed from its name at every sync. Default: true without sheet_id, false with it (you classify accounts yourself).",
@@ -43,7 +43,8 @@
   "cad_office": "Example",
   "cad_host": "example.prodigycad.com",
   "cad_pid": "000000",
-  "cad_note": "appraisal-district market value as of Jan 1"
+  "cad_note": "appraisal-district market value as of Jan 1",
+  "_apify_token_file": "Optional key \"apify_token_file\": the file holding an Apify token for the Zillow estimate (skipped without a token). Default: a file named apify_token next to this one, chmod 600. $APIFY_TOKEN overrides both."
  },
  "cars": {
   "_help": "Optional; needs sheet_id. valuations/cars.py: a monthly estimate of each car's value from comparable listings.",
@@ -72,7 +73,7 @@
   ]
  },
  "crypto": {
-  "_help": "Optional; needs sheet_id (the sheet's crypto tab). Wallet addresses and exchange keys go in crypto_wallets.json next to this file. exchange_rows: wallets that have their own balance-sheet row (only coins the crypto total counts are counted there). ignore_coins: coin symbols left out altogether, in every wallet (no row, no value, no warning), e.g. a reward token held as dust that has no price and would otherwise warn 'no price for <wallet> <coin>, not counted' at every sync.",
+  "_help": "Optional; needs sheet_id (the sheet's crypto tab). Wallet addresses and exchange keys go in crypto_wallets.json next to this file. exchange_rows: wallets that have their own balance-sheet row (only coins the crypto total counts are counted there). ignore_coins: coin symbols left out altogether, in every wallet (no row, no value, no warning), e.g. a reward token held as dust that has no price and would otherwise warn 'no price for <wallet> <coin>, not counted' at every sync. Not shown here: timezone, an IANA name such as Europe/Berlin for the times of crypto transfers (default: this machine's local time; $WEALTH_LEDGER_TZ overrides); send_log, a JSON-lines file of sends that a script or hot wallet appends to, and send_log_wallet, the wallet those sends are booked to (format in insights/crypto_transfers.py).",
   "exchange_rows": ["ExchangeA", "ExchangeB"],
   "ignore_coins": ["DUSTCOIN"],
   "default_wallet": "Wallet",
@@ -80,7 +81,7 @@
   "xpub_export_wallet": "Wallet"
  },
  "dashboard": {
-  "_help": "Optional. default_username: the name set-password uses when none is given (default admin). ledger_start: first day of complete transaction data; spending before it is not shown (default: everything). web_connect: true lets a signed-in viewer paste a SimpleFIN setup token on the page while nothing is connected yet (for a second person's ledger). exact: networth.py line label -> category; rules: [regex, category] fallbacks tried in order. Categories: cash retirement taxable crypto metals realestate vehicles other. theme: the colour theme (all dark) for browsers that haven't picked one in the page footer: graphite (default), rose, amethyst, plum or sage.",
+  "_help": "Optional. default_username: the name set-password uses when none is given (default admin). ledger_start: first day of complete transaction data; spending before it is not shown (default: everything). web_connect: true lets a signed-in viewer paste a SimpleFIN setup token on the page while nothing is connected yet (for a second person's ledger). exact: networth.py line label -> category; rules: [regex, category] fallbacks tried in order. Categories: cash retirement taxable crypto metals realestate vehicles other. theme: the colour theme (all dark) for browsers that haven't picked one in the page footer: graphite (default), rose, amethyst, plum or sage. credit (not shown here): one line of plain text under the sign-in page and the dashboard, e.g. who runs this ledger; nothing by default.",
   "default_username": "admin",
   "web_connect": false,
   "theme": "graphite",
@@ -104,7 +105,7 @@
   ]
  },
  "budget": {
-  "_help": "Optional; needs sheet_id. exclude_categories (not shown here): regex of budget categories that are saving, not spending. insights/budget.py: [transaction regex on 'payee | description', budget-line regex on 'category/item' of the 'income sheet' tab]; tried before the generic defaults in budget.py. Put your landlord, utilities and people you pay here.",
+  "_help": "Optional; needs sheet_id. exclude_categories (not shown here): regex of budget categories that are saving, not spending. insights/budget.py: [transaction regex on 'payee | description', budget-line regex on 'category/item' of the 'income sheet' tab]; tried before the generic defaults in budget.py, which only know national chains. Put your landlord, lender, insurer, utilities, regional shops, hobbies and people you pay here.",
   "rules": [
    ["EXAMPLE PROPERTY MGMT", "rent"],
    ["ZELLE TRANSFER TO EXAMPLE PERSON", "childcare"],
@@ -129,12 +130,13 @@
   "manual_distributions": [{"date": "2026-04-15", "amount": 5000}]
  },
  "rental": {
-  "_help": "Optional; the card is hidden without this section. insights/rental.py (dashboard 'Rental property'): income and expenses of a rental from your transactions. match: category -> description/payee LIKE patterns (bookings, rent, other_income, mortgage, cleaning, software, utilities, insurance, repairs, other); a pattern may be {\"pattern\": ..., \"direction\": \"in\"|\"out\", \"kinds\": [...]}. exclude: patterns that are never the rental. Also: start (first day counted), mortgage_account (LIKE on the loan's account name), defaults: false to drop the built-in booking-site rules.",
+  "_help": "Optional; the card is hidden without this section. insights/rental.py (dashboard 'Rental property'): income and expenses of a rental from your transactions. match: category -> description/payee LIKE patterns (bookings, rent, other_income, mortgage, cleaning, software, utilities, insurance, repairs, other); a pattern may be {\"pattern\": ..., \"direction\": \"in\"|\"out\", \"kinds\": [...]}. exclude: patterns that are never the rental. Also: start (first day counted), mortgage_account (LIKE on the loan's account name), defaults: false to drop the built-in rules (booking-site payouts and short-term-rental software; no lender is built in, so the mortgage payment needs your own pattern).",
   "label": "Rental property",
   "match": {
    "rent": [{"pattern": "%ZELLE%EXAMPLE TENANT%", "direction": "in"}],
    "cleaning": ["%EXAMPLE CLEANING CO%"],
-   "utilities": ["%EXAMPLE CITY UTILITIES%"]
+   "utilities": ["%EXAMPLE CITY UTILITIES%"],
+   "mortgage": [{"pattern": "%EXAMPLE HOME LOANS%", "direction": "out", "kinds": ["checking", "savings"]}]
   },
   "exclude": ["%EXAMPLE PERSONAL TRIP%"]
  },
@@ -142,7 +144,7 @@
   "_help": "Optional. insights/subscriptions.py: regexes for recurring charges that are bills (kept apart from cancellable subscriptions) beyond the built-in list.",
   "bill_patterns": ["EXAMPLE PROPERTY MGMT", "EXAMPLE CITY UTILITIES"]
  },
- "monthly_email": {"_help": "Optional; needs the gws CLI signed in to Gmail. insights/monthly_email.py: last month's summary from the ledger database (no spreadsheet), emailed once a month by the daily sync on or after 'day'. Off unless enabled is true. Sent with gws from the signed-in Gmail to itself; 'to' names another address. categories: [transaction regex on 'payee | description', category], tried before the generic defaults.", "enabled": false, "day": 3, "categories": [["EXAMPLE PROPERTY MGMT", "Housing"]]},
+ "monthly_email": {"_help": "Optional; needs the gws CLI signed in to Gmail. insights/monthly_email.py: last month's summary from the ledger database (no spreadsheet), emailed once a month by the daily sync on or after 'day'. Off unless enabled is true. Sent with gws from the signed-in Gmail to itself; 'to' names another address. categories: [transaction regex on 'payee | description', category], tried before the generic defaults (national chains only: add your regional shops, landlord and utilities).", "enabled": false, "day": 3, "categories": [["EXAMPLE PROPERTY MGMT", "Housing"]]},
  "plaid": {"_help": "Optional; only read when plaid.json exists (plaid/plaid_sync.py setup). The user id sent to Plaid Link.", "client_user_id": "wealth-ledger-user"},
  "networth_history": {"_help": "Optional; needs sheet_id. insights/nw_history.py (dashboard trend before the daily snapshots): Drive name of your yearly balance-sheet spreadsheets, each named '<name_query> YYYY' with a 'balance sheet' tab (dated columns, a 'Total Equity' row).", "name_query": "Financial Statements"},
  "zelle_memos": {"_help": "Optional; needs sheet_id and the gws CLI signed in to Gmail. insights/zelle_memos.py: Gmail search for your bank's Zelle emails (default: zelle)", "query": "zelle"},

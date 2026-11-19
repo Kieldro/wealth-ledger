@@ -253,7 +253,7 @@ LATE_DUP_WINDOW_DAYS = 4  # ...within this many days of an identical earlier cha
 def flag_late_duplicates(db: sqlite3.Connection) -> list[tuple[str, str]]:
     """Mark feed duplicates so v_ledger drops them: a posted charge that arrives LATE_DUP_LAG_DAYS+ after its
     date and repeats an identical posted charge (same account, amount and description) from 0-4 days earlier
-    that the feed delivered first. Seen on the Coinbase One Card through Plaid (2026-10: the copy never moved
+    that the feed delivered first. Seen on a credit card through Plaid (the copy never moved
     the card balance), so only Plaid rows are ever flagged; no other feed has shown it and a late import of real
     history (fidelity_web) must not lose repeat purchases. Rows from an account's first import are never flagged: legitimate repeat purchases
     (the same coffee every morning) all arrive together then. Reversible: DELETE FROM late_duplicates."""

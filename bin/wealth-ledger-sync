@@ -112,7 +112,7 @@ if (cd "$ROOT" && "$PY" -c 'import personal, sys; sys.exit(not personal.has_shee
   eout=$(cd "$ROOT" && "$PY" sheet_estimates.py 2>&1) || problem "$(grep -m1 '^error' <<<"$eout" || tail -1 <<<"$eout")"
   echo "$eout" | tail -1
 
-  # crypto sends/receives with memos: on-chain history of your bitcoin xpubs + Exodus CSV exports + Claude's send log
+  # crypto sends/receives with memos: on-chain history of your bitcoin xpubs + Exodus CSV exports + an optional send log
   cout=$(cd "$ROOT" && "$PY" -m insights.crypto_transfers --db "$DB" 2>&1) || problem "$(grep -m1 '^error' <<<"$cout" || tail -1 <<<"$cout")"
   echo "$cout" | tail -1
 

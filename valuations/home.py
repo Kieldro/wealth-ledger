@@ -10,7 +10,8 @@ Sources (free, no account, verified 2026-10-21):
      <county>.prodigycad.com sites use). Valued as of Jan 1 of the tax year; a protested value is better
      read as a conservative floor-ish anchor than a sale price.
   3. Zillow's Zestimate (and rent Zestimate) through Apify's maxcopell/zillow-detail-scraper actor, because
-     zillow.com bot-walls a home connection. Needs an Apify token in ~/.config/apify/token (or $APIFY_TOKEN);
+     zillow.com bot-walls a home connection. Needs an Apify token: $APIFY_TOKEN, else the file named by
+     personal.json home.apify_token_file (default: "apify_token" next to personal.json, chmod 600).
      ~$0.0036 per lookup on Apify's free plan, so a monthly run costs well under a cent. Skipped without a token.
 Redfin, Realtor.com, Trulia, Homes.com and Movoto return 403/429 (bot walls) from a home connection, so they
 are not used.
@@ -132,11 +133,18 @@ def cad() -> dict:
 APIFY_ACTOR = "maxcopell~zillow-detail-scraper"
 
 
-def zillow() -> dict:
-    tok = os.environ.get("APIFY_TOKEN") or ""
+def apify_token() -> str:
+    """$APIFY_TOKEN, else the contents of personal.json home.apify_token_file (default: "apify_token" in the folder
+    that holds personal.json); "" when there is neither."""
+    tok = (os.environ.get("APIFY_TOKEN") or "").strip()
     if not tok:
-        f = Path.home() / ".config/apify/token"
+        f = Path(_CFG.get("apify_token_file") or personal.path().parent / "apify_token").expanduser()
         tok = f.read_text().strip() if f.exists() else ""
+    return tok
+
+
+def zillow() -> dict:
+    tok = apify_token()
     if not tok:
         raise RuntimeError("no Apify token")
     r = requests.post(f"https://api.apify.com/v2/acts/{APIFY_ACTOR}/run-sync-get-dataset-items",

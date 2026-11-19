@@ -38,13 +38,13 @@ class Ledger:
 def led(tmp_path):
     led = Ledger(tmp_path / "t.db")
     led.txn(date(2026, 10, 2), 3000, "DIRECT DEPOSIT EXAMPLE PAYROLL", aid="chk")
-    led.txn(date(2026, 10, 5), -450, "H-E-B #123")
-    led.txn(date(2026, 10, 9), -300, "H-E-B #123")
+    led.txn(date(2026, 10, 5), -450, "SAFEWAY #123")
+    led.txn(date(2026, 10, 9), -300, "SAFEWAY #123")
     led.txn(date(2026, 10, 12), -40, "SHELL OIL 5551")
     led.txn(date(2026, 10, 20), -75, "CORNER BOOKSHOP")
-    led.txn(date(2026, 10, 21), -99, "H-E-B #123", pending=1)   # pending: not counted
-    led.txn(date(2026, 11, 1), -500, "H-E-B #123")              # next month
-    led.txn(date(2026, 9, 8), -200, "H-E-B #123")               # the month before
+    led.txn(date(2026, 10, 21), -99, "SAFEWAY #123", pending=1)   # pending: not counted
+    led.txn(date(2026, 11, 1), -500, "SAFEWAY #123")              # next month
+    led.txn(date(2026, 9, 8), -200, "SAFEWAY #123")               # the month before
     led.txn(date(2026, 9, 9), -60, "CITY ELECTRIC CO")
     return led
 
@@ -59,13 +59,13 @@ def test_report_totals_categories_and_rankings(led):
     assert cats(rep) == {"Groceries": (750, 200), "Other": (75, 0), "Utilities & phone": (0, 60),
                          "Car & transport": (40, 0)}
     assert [c["category"] for c in rep["categories"]][0] == "Groceries" and rep["prev_label"] == "September"
-    assert rep["top_merchants"][0] == {"merchant": "H-E-B", "spent": 750, "n": 2}
+    assert rep["top_merchants"][0] == {"merchant": "Safeway", "spent": 750, "n": 2}
     assert [c["amount"] for c in rep["largest"]] == [450, 300, 75, 40]
     assert rep["rental"] is None and rep["balances"] is None and rep["label"] == "October 2026"
 
 
 def test_own_category_rules_win_and_an_incomplete_month_before_is_not_compared(led):
-    rep = led.report(categories=[["BOOKSHOP", "Books"], ["H-E-B", "Food"]], since="2026-09-15")
+    rep = led.report(categories=[["BOOKSHOP", "Books"], ["SAFEWAY", "Food"]], since="2026-09-15")
     assert cats(rep) == {"Food": (750, None), "Books": (75, None), "Car & transport": (40, None)}
     assert rep["prev_spent"] is None and rep["prev_label"] is None and not rep["partial"]
     assert "September" not in me.render_text(rep)

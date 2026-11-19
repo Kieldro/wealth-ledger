@@ -53,3 +53,18 @@ def test_home_is_due_once_a_month_from_the_first(tmp_path, monkeypatch):
     assert run.due(db, home)              # the 1st failed: keep trying
     db.execute("INSERT INTO valuations VALUES ('2026-12-03', ?)", (home.ASSET,))
     assert not run.due(db, home)
+
+
+def test_apify_token_from_env_else_the_configured_file(monkeypatch, tmp_path):
+    f = tmp_path / "token"
+    f.write_text("from-file\n")
+    monkeypatch.delenv("APIFY_TOKEN", raising=False)
+    monkeypatch.setitem(home._CFG, "apify_token_file", str(f))
+    assert home.apify_token() == "from-file"
+    monkeypatch.setenv("APIFY_TOKEN", "from-env")
+    assert home.apify_token() == "from-env"
+    monkeypatch.delenv("APIFY_TOKEN")
+    monkeypatch.setitem(home._CFG, "apify_token_file", str(tmp_path / "missing"))
+    assert home.apify_token() == ""
+    with pytest.raises(RuntimeError, match="no Apify token"):
+        home.zillow()

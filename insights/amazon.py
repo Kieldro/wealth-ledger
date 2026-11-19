@@ -74,14 +74,13 @@ def charge_kind(description: str | None, payee: str | None) -> str | None:
 
 # ---------- item categories ----------
 # [regex over "department | product name", budget-line regex over "category/item" of the sheet].
-# Product keywords first, then departments. Generic only: owner-specific rules go in personal.json amazon.rules.
+# Product keywords first, then departments. Generic only: rules for your own hobbies, properties or brands go in
+# personal.json amazon.rules.
 # a laptop itself, not an accessory "for MacBook": the keyword comes early in the name, before any comma
 LAPTOP = (r"\| (?:(?!for\b|compatible\b|with\b)[^|,]){0,30}?\b(macbook|chromebook|laptop)\b"
           r"(?!\s*(stand|sleeve|case|bag|mat|cover|charger|skin|hub|dock|cooling|backpack|riser|lock|screen))")
 ITEM_RULES: list[tuple[str, str]] = [
     # product-name keywords (more specific than Amazon's department)
-    (r"\bbees?\b|beekeep|bee ?hive|\bhives?\b|apiar|queen (bee|cage)|honey (extractor|frame)", r"bee ?keep|\bbees?\b|apiar"),
-    (r"aquari|fish ?tank|aquapon|aquacult|\bkoi\b|fish food", r"aquacult|aquarium|\bfish"),
     (r"bird ?(seed|feeder|food|bath)|\bsuet\b", r"\bbird"),
     (r"\bdogs?\b|\bcats?\b|\bpets?\b|kitty|cat litter|puppy", r"\bpets?\b|\bdogs?\b|\bcats?\b"),
     (r"air filter|furnace filter|hvac filter|\bmerv\b", r"air filter"),

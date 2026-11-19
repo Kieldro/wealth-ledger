@@ -1180,7 +1180,15 @@ def test_login_page_shows_the_error_and_keeps_the_username_escaped(monkeypatch):
     assert 'value="x&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;{{error}}{{markets}}"' in page  # typed text is never expanded
     assert page.count("<script") == 2 and "{{username}}" not in page
     assert plain.count('<p class="mkt">closes</p>') == page.count('<p class="mkt">closes</p>') == 1
-    assert "Wealth Ledger" in plain and "Built by Keolabs" in plain
+    assert "Wealth Ledger" in plain and "{{credit}}" not in plain and 'class="by"' not in plain  # no credit by default
+
+
+def test_credit_line_is_off_unless_configured(monkeypatch):
+    assert server.credit_line() == ""
+    monkeypatch.setattr(server.personal, "section", lambda name: {"credit": " Built by <Example> "})
+    assert server.credit_line() == '<p class="by">Built by &lt;Example&gt;</p>'
+    monkeypatch.setattr(server.personal, "section", lambda name: {"credit": ["not text"]})
+    assert server.credit_line() == ""
 
 
 def test_theme_default_comes_from_personal_json_and_every_theme_is_on_both_pages(monkeypatch):

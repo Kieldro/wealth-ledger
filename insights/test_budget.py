@@ -80,9 +80,9 @@ def test_parse_sheet_reads_item_first_columns_when_the_header_says_so():
 
 
 def test_store_vs_its_gas_station_and_unmapped(led):
-    led.txn(date(2026, 10, 2), -80.00, "H-E-B #123 000000000SPRINGFIELD", payee="H-E-B")
-    led.txn(date(2026, 10, 3), -45.00, "H-E-B GAS CARWASH #6SPRINGFIELD", payee="H-E-B")
-    led.txn(date(2026, 10, 4), -20.00, "HCTRA EZ TAG REBILL")
+    led.txn(date(2026, 10, 2), -80.00, "COSTCO WHSE #123 000000000SPRINGFIELD", payee="Costco")
+    led.txn(date(2026, 10, 3), -45.00, "COSTCO GAS #123 SPRINGFIELD", payee="Costco")
+    led.txn(date(2026, 10, 4), -20.00, "E-ZPASS REBILL")
     led.txn(date(2026, 10, 5), -300.00, "AMAZON MKTPL*AB12CD34", payee="Amazon")
     res = led.run()
     assert line(res, "Food", "groceries")["actual"] == 80
@@ -122,7 +122,7 @@ def test_personal_rules_first_and_category_qualified_line(led):
 
 def test_totals_pace_saving_excluded_and_zero_lines_hidden(led):
     led.txn(date(2026, 10, 2), -400.00, "COSTCO WHSE #0001")
-    res = led.run(since="2026-07-20")
+    res = led.run(since="2026-07-15")
     assert res["budget"] == 2750  # sheet lines minus the 500 saving line
     assert [e["item"] for e in res["excluded"]] == ["retirement contribution"]
     assert not any(c["category"] == "Saving" for c in res["categories"])
@@ -131,7 +131,7 @@ def test_totals_pace_saving_excluded_and_zero_lines_hidden(led):
     food = cat(res, "Food")
     assert food["expected"] == pytest.approx(600 * 15 / 31, abs=0.01) and food["pct"] == pytest.approx(66.7)
     assert "Fun" not in [c["category"] for c in res["categories"]]
-    assert not res["partial_data"] and led.run("2026-07", since="2026-07-20")["partial_data"]
+    assert not res["partial_data"] and led.run("2026-07", since="2026-07-15")["partial_data"]
     last = led.run("2026-09")
     assert last["elapsed_days"] == 30 and not last["current"] and last["expected"] == last["budget"]
     assert line(res, "Car", "gasoline")["has_rule"] and not line(res, "Home", "rent")["has_rule"]
@@ -149,8 +149,8 @@ def test_categorizer_gives_each_transaction_its_budget_line():
     lines = [{"category": "food", "item": "groceries", "budget": 400.0},
              {"category": "car", "item": "gasoline", "budget": 80.0},
              {"category": "saving", "item": "groceries fund", "budget": 50.0}]
-    cat = budget.categorizer(lines, rule_list=[(r"H-E-B\s*GAS", "gasoline"), (r"H-E-B", "groceries"), (r"NETFLIX", "streaming")])
-    assert cat("H-E-B #639 AUSTIN TX", None)["item"] == "groceries"
-    assert cat("H-E-B GAS #12", None)["category"] == "car"  # first matching rule wins
+    cat = budget.categorizer(lines, rule_list=[(r"CORNER MART\s*GAS", "gasoline"), (r"CORNER MART", "groceries"), (r"NETFLIX", "streaming")])
+    assert cat("CORNER MART #12 SPRINGFIELD ST", None)["item"] == "groceries"
+    assert cat("CORNER MART GAS #12", None)["category"] == "car"  # first matching rule wins
     assert cat("NETFLIX.COM", None) is None  # the rule's line is not in the sheet
     assert cat("SOMEWHERE ELSE", "Nobody") is None

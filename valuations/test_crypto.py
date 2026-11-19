@@ -343,11 +343,11 @@ def test_exchange_read_by_api_counts_all_coins_and_its_cash_is_its_own_row():
 
 
 def test_gemini_advanced_deposit_counts_as_cash(monkeypatch):
-    rows = [{"currency": "USD", "amount": "-330.56", "available": "1669.44"},
+    rows = [{"currency": "USD", "amount": "-250.00", "available": "1750.00"},
             {"currency": "BTC", "amount": "0.5", "available": "0.5"}]
     monkeypatch.setattr(c, "_req", lambda *a, **k: rows)
     qty, _ = c.gemini_balances("account-x", "secret")
-    assert qty == {"USD": 1669.44, "BTC": 0.5}
+    assert qty == {"USD": 1750.0, "BTC": 0.5}
 
 
 def test_coinbase_jwt_signs_with_ed25519_and_ecdsa_keys():

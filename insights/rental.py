@@ -5,7 +5,7 @@ Which transactions belong to the rental is decided by LIKE patterns (case-insens
 description or the payee), first match wins:
   1. personal.json "rental.exclude"            never rental
   2. personal.json "rental.match"              {category: [pattern, ...]}, the owner's cleaners, utilities, ...
-  3. DEFAULT_RULES below                       generic: booking-site payouts, host software, mortgage ACH
+  3. DEFAULT_RULES below                       generic: booking-site payouts, host software
 A pattern is a string, or {"pattern": "...", "direction": "in"|"out", "kinds": ["checking", ...]} to narrow it.
 Other optional keys: "label" (section title), "start" (first day to count; default: dashboard.ledger_start),
 "mortgage_account" (LIKE on account_name of the loan; default: the one loan account, preferring *MORTGAGE*),
@@ -42,19 +42,16 @@ EXPENSES = [("mortgage", "Mortgage"), ("cleaning", "Cleaning"), ("software", "So
             ("insurance", "Insurance"), ("repairs", "Repairs & supplies"), ("other", "Other")]
 INCOME_KEYS = {k for k, _ in INCOME}
 CATEGORIES = {k for k, _ in INCOME + EXPENSES}
-CASH_KINDS = ("checking", "savings")
 COUNTED = ("spend", "income", "refund")  # transfers, card payments and investments never count
 
-# (category, LIKE pattern, direction, kinds). Generic only; anything naming the owner's people or providers
-# belongs in personal.json.
+# (category, LIKE pattern, direction, kinds). Generic only; anything naming the owner's people or providers belongs
+# in personal.json "rental.match": tenants, cleaners, utilities, and the mortgage payment as your bank words it, e.g.
+# "mortgage": [{"pattern": "%EXAMPLE HOME LOANS%", "direction": "out", "kinds": ["checking", "savings"]}].
+HOST_SOFTWARE = ("GUESTY", "HOSPITABLE", "HOSTAWAY", "HOSTEX", "LODGIFY", "OWNERREZ", "PRICELABS")
 DEFAULT_RULES = [
-    ("bookings", "%AIRBNB%", "in", None),       # Airbnb charges (out) are the owner's own stays, not the rental
+    ("bookings", "%AIRBNB%", "in", None),       # booking-site charges (out) are the owner's own stays, not the rental
     ("bookings", "%VRBO%", "in", None),
-    ("software", "%HOSTEX%", None, None),
-    ("software", "%GUESTY%", None, None),
-    ("software", "%HOSTAWAY%", None, None),
-    ("software", "%PRICELABS%", None, None),
-    ("mortgage", "%JPMORGAN CHASE%ACH%", "out", CASH_KINDS),
+    *(("software", f"%{name}%", None, None) for name in HOST_SOFTWARE),
 ]
 MATCH_WINDOW = 7      # days between the checking-side mortgage debit and the loan-side credit
 SNAPSHOT_WINDOW = 10  # days after a loan payment to look for the balance that reflects it

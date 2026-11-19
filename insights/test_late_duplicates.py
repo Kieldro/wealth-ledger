@@ -13,8 +13,8 @@ def test_late_copy_hidden_but_first_import_repeats_kept(tmp_path):
     add(db, "c1", "2026-01-05", -3.56, "Coffee", "2026-02-01T00:00:00")
     add(db, "c2", "2026-01-06", -3.56, "Coffee", "2026-02-01T00:00:00")
     # later: a charge, then the same charge re-delivered two weeks after its date
-    add(db, "h1", "2026-03-16", -1256, "Insurer", "2026-03-18T00:00:00")
-    add(db, "h2", "2026-03-18", -1256, "Insurer", "2026-04-01T00:00:00")
+    add(db, "h1", "2026-03-16", -412.30, "Insurer", "2026-03-18T00:00:00")
+    add(db, "h2", "2026-03-18", -412.30, "Insurer", "2026-04-01T00:00:00")
     # a real repeat that arrives promptly is kept
     add(db, "s1", "2026-03-20", -22.49, "Credits", "2026-03-21T00:00:00")
     add(db, "s2", "2026-03-22", -22.49, "Credits", "2026-03-23T00:00:00")
@@ -28,8 +28,8 @@ def test_late_copy_hidden_but_first_import_repeats_kept(tmp_path):
 def test_only_plaid_rows_are_flagged(tmp_path):
     """The re-delivery is a Plaid quirk; a late import of real history from another feed keeps its repeats."""
     db = ctdb.connect(tmp_path / "t.db")
-    add(db, "h1", "2026-03-16", -1256, "Insurer", "2026-03-18T00:00:00")
-    add(db, "h2", "2026-03-18", -1256, "Insurer", "2026-04-01T00:00:00")
+    add(db, "h1", "2026-03-16", -412.30, "Insurer", "2026-03-18T00:00:00")
+    add(db, "h2", "2026-03-18", -412.30, "Insurer", "2026-04-01T00:00:00")
     db.execute("UPDATE txns SET source = 'simplefin'")
     db.commit()
     assert ctdb.flag_late_duplicates(db) == []
