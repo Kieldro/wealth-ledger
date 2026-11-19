@@ -20,6 +20,7 @@ sheet's own price. Kraken is also used to cross-check CoinGecko.
 Counted in the total: every coin in a self-custody / synced wallet, plus at the exchanges listed in
 personal.json crypto.exchange_rows only the coins the sheet's total counts (the balance sheet has separate rows
 for those exchanges that hold the rest of their balances, so counting them here would double count).
+Coins named in personal.json crypto.ignore_coins are left out everywhere: no row, no price lookup, no warning.
 
 Never writes the sheet, never prints keys; an xpub is only sent to the BTC balance API.
 """
@@ -55,6 +56,8 @@ UA = {"User-Agent": "Mozilla/5.0 (wealth-ledger valuations)"}
 
 # wallets with their own balance-sheet row: only the coins the sheet's crypto total counts are counted here
 EXCHANGE_ROWS: set[str] | None = None
+# coins left out of the valuation altogether (a reward token held as dust, with no price anywhere)
+IGNORE_COINS: set[str] | None = None
 SOURCE_RANK = ("onchain", "exchange-api", "simplefin")  # best first; "sheet" is the fallback
 
 # coin -> (CoinGecko id, Kraken ticker pair, result key)
@@ -613,6 +616,14 @@ def exchange_rows() -> set[str]:
     return EXCHANGE_ROWS if EXCHANGE_ROWS is not None else set(_crypto_cfg().get("exchange_rows") or [])
 
 
+def ignore_coins() -> set[str]:
+    """Coins that get no row, no warning and no value, in any wallet and whether or not the crypto tab lists them
+    (personal.json crypto.ignore_coins). Any case; exchange codes are read like the feeds' (XBT = BTC)."""
+    if IGNORE_COINS is not None:
+        return IGNORE_COINS
+    return {norm_coin(str(c).strip()) for c in _crypto_cfg().get("ignore_coins") or [] if str(c).strip()}
+
+
 def default_wallet() -> str:
     """Wallet name for config entries that don't name one (personal.json crypto.default_wallet)."""
     return _crypto_cfg().get("default_wallet") or "Wallet"
@@ -866,6 +877,7 @@ def prices(coins: set[str], sheet_prices: dict[str, float]) -> tuple[dict[str, t
 
 def combine(sheet: dict, live: list[dict], px: dict[str, tuple[float, str]]) -> dict:
     """Pick the best quantity per (wallet, coin) and value it. Pure (no I/O)."""
+    ignored = ignore_coins()
     pairs: dict[tuple[str, str], float] = {}
     for c, d in sheet["coins"].items():
         for w, q in d["wallets"].items():
@@ -875,6 +887,7 @@ def combine(sheet: dict, live: list[dict], px: dict[str, tuple[float, str]]) -> 
         live_by_wallet.setdefault(wallet_name(e["wallet"]), []).append(e)
         for c in e["qty"]:
             pairs.setdefault((wallet_name(e["wallet"]), c), 0.0)
+    pairs = {(w, c): q for (w, c), q in pairs.items() if c not in ignored}
     counted_coins = set(sheet["counted"])
     exchanges = exchange_rows()
     rows, missing = [], []
@@ -912,8 +925,8 @@ def combine(sheet: dict, live: list[dict], px: dict[str, tuple[float, str]]) -> 
             b["value"] = round(b["value"] + r["value"], 2)
     total = round(sum(r["value"] for r in rows if r["counted"]), 2)
     sheet_wallets = {w for d in sheet["coins"].values() for w in d["wallets"]}
-    unmatched = sorted({wallet_name(e["wallet"]) for e in live if any(abs(q) > 1e-12 for q in e["qty"].values())}
-                       - sheet_wallets)
+    unmatched = sorted({wallet_name(e["wallet"]) for e in live
+                        if any(abs(q) > 1e-12 for c, q in e["qty"].items() if c not in ignored)} - sheet_wallets)
     cash = {r["wallet"]: r["value"] for r in rows
             if r["wallet"] in exchanges and r["qty_source"] == "exchange-api" and r["coin"] == "USD"}
     cash.update({wallet_name(e["wallet"]): cash.get(wallet_name(e["wallet"]), 0.0) for e in live
@@ -942,13 +955,15 @@ def fetch() -> list[dict]:
     except sqlite3.Error as e:
         sf, w3 = [], [f"simplefin: {e}"]
     live = on + ex + sf
-    coins = {c for c in sheet["coins"]} | {c for e in live for c in e["qty"]}
+    held = {c for c in sheet["coins"]} | {c for e in live for c in e["qty"]}
+    ignored = ignore_coins() & held
+    coins = held - ignored
     sheet_px = {c: d["price"] for c, d in sheet["coins"].items() if d["price"]}
     px, w4 = prices(coins, sheet_px)
     res = combine(sheet, live, px)
 
     at_sheet_qty_live_px = sum(sum(d["wallets"].values()) * px[c][0] for c, d in sheet["coins"].items()
-                               if c in sheet["counted"])
+                               if c in sheet["counted"] and c not in ignored)
     wallets = {}
     for r in res["rows"]:
         wallets.setdefault(r["wallet"], set()).add(r["qty_source"])
@@ -969,6 +984,7 @@ def fetch() -> list[dict]:
             "at_sheet_qty_live_prices_sheet_coins": round(at_sheet_qty_live_px, 2),
             "prices": {c: {"usd": p, "source": s} for c, (p, s) in sorted(px.items())},
             "sheet_prices": sheet_px,
+            "ignored_coins": sorted(ignored),  # held somewhere but left out on purpose (crypto.ignore_coins)
             "warnings": w1 + w2 + w3 + w4 + res["warnings"] + [
                 f"live wallet {w!r} has no row on the crypto tab (typo in crypto_wallets.json?)" for w in res["unmatched"]],
         },

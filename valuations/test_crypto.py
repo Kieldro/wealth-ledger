@@ -20,6 +20,7 @@ EXCHANGES = {"Alphax", "Betax"}
 def _no_personal_data(monkeypatch, tmp_path):
     """Never read the owner's personal.json or wallet exports from tests."""
     monkeypatch.setattr(c, "EXCHANGE_ROWS", EXCHANGES)
+    monkeypatch.setattr(c, "IGNORE_COINS", set())
     monkeypatch.setattr(c, "XPUB_EXPORT_DIR", tmp_path / "no-exports")
 
 
@@ -238,6 +239,75 @@ def test_exchange_rows_counted_per_wallet_coin_and_unpriced_not_fatal():
     r = {(x["wallet"], x["coin"]): x for x in res["rows"]}
     assert r[("Betax", "XMR")]["counted"] and r[("Betax", "BTC")]["counted"]  # read by API: every priced coin
     assert not r[("Betax", "XXLM")]["counted"] and res["warnings"] == ["no price for Betax XXLM, not counted"]
+
+
+def test_ignored_coin_has_no_row_no_warning_and_is_not_counted(monkeypatch):
+    s = c.parse_sheet(VALUES, FORMULAS)
+    px = {k: (d["price"], "sheet") for k, d in s["coins"].items()}
+    live = [{"wallet": "Betax", "source": "exchange-api", "coins": None,
+             "qty": {"XMR": 1.0, "BTC": 0.1, "XXLM": 50.0}}]
+    before = c.combine(s, live, px)
+    assert before["warnings"] == ["no price for Betax XXLM, not counted"]
+    monkeypatch.setattr(c, "IGNORE_COINS", {"XXLM"})
+    after = c.combine(s, live, px)
+    assert after["warnings"] == [] and not [r for r in after["rows"] if r["coin"] == "XXLM"]
+    assert after["total"] == before["total"] and after["by_coin"] == before["by_coin"]
+    assert [r for r in after["rows"] if r["coin"] != "XXLM"] == [r for r in before["rows"] if r["coin"] != "XXLM"]
+
+
+def test_ignored_coin_is_left_out_even_when_priced_and_on_the_sheet(monkeypatch):
+    s = c.parse_sheet(VALUES, FORMULAS)
+    px = {k: (d["price"], "sheet") for k, d in s["coins"].items()}
+    before = c.combine(s, [], px)
+    ltc = sum(r["value"] for r in before["rows"] if r["coin"] == "LTC" and r["counted"])
+    assert ltc > 0
+    monkeypatch.setattr(c, "IGNORE_COINS", {"LTC"})
+    after = c.combine(s, [], px)
+    assert not [r for r in after["rows"] if r["coin"] == "LTC"] and "LTC" not in after["by_coin"]
+    assert abs(after["total"] - (before["total"] - ltc)) < 0.01
+
+
+def test_wallet_holding_only_ignored_coins_is_not_reported_unmatched(monkeypatch):
+    s = c.parse_sheet(VALUES, FORMULAS)
+    px = {k: (d["price"], "sheet") for k, d in s["coins"].items()}
+    live = [{"wallet": "Gammax", "source": "simplefin", "coins": None, "qty": {"XXLM": 3.0}}]
+    assert c.combine(s, live, px)["unmatched"] == ["Gammax"]
+    monkeypatch.setattr(c, "IGNORE_COINS", {"XXLM"})
+    res = c.combine(s, live, px)
+    assert res["unmatched"] == [] and res["rows"] == c.combine(s, [], px)["rows"] and res["warnings"] == []
+
+
+def test_ignore_coins_read_from_personal_json_any_case_or_exchange_code(monkeypatch):
+    monkeypatch.setattr(c, "IGNORE_COINS", None)
+    monkeypatch.setattr(c, "_crypto_cfg", lambda: {"ignore_coins": ["xxlm", " Dustcoin ", "XBT"]})
+    assert c.ignore_coins() == {"XXLM", "DUSTCOIN", "BTC"}
+    monkeypatch.setattr(c, "_crypto_cfg", lambda: {})
+    assert c.ignore_coins() == set()
+
+
+def test_fetch_asks_no_price_for_an_ignored_coin_and_names_it_in_the_detail(monkeypatch):
+    monkeypatch.setattr(c, "_sheet", lambda rng, render="UNFORMATTED_VALUE": FORMULAS if render == "FORMULA" else VALUES)
+    monkeypatch.setattr(c, "load_config", lambda: {})
+    monkeypatch.setattr(c, "onchain_sources", lambda cfg: ([], []))
+    monkeypatch.setattr(c, "exchange_sources", lambda cfg: (
+        [{"wallet": "Betax", "source": "exchange-api", "coins": None, "qty": {"XMR": 1.0, "XXLM": 50.0}}], []))
+    monkeypatch.setattr(c, "simplefin_sources", lambda: [])
+    asked = []
+
+    def fake_prices(coins, sheet_px):
+        asked.append(set(coins))
+        return {k: (v, "sheet") for k, v in sheet_px.items() if k in coins} | {"USD": (1.0, "par")}, []
+
+    monkeypatch.setattr(c, "prices", fake_prices)
+    before = c.fetch()[0]
+    assert "XXLM" in asked[0] and before["detail"]["warnings"] == ["no price for Betax XXLM, not counted"]
+    assert before["detail"]["ignored_coins"] == []
+    monkeypatch.setattr(c, "IGNORE_COINS", {"XXLM", "NOTHELD"})
+    after = c.fetch()[0]
+    assert "XXLM" not in asked[1] and after["detail"]["warnings"] == []
+    assert after["detail"]["ignored_coins"] == ["XXLM"]  # only the ignored coins that were actually there
+    assert after["value"] == before["value"]
+    assert not [r for r in after["detail"]["holdings"] if r["coin"] == "XXLM"]
 
 
 def test_xpub_with_no_used_addresses_is_a_failure(monkeypatch, tmp_path):

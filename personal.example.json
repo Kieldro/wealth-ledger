@@ -72,8 +72,9 @@
   ]
  },
  "crypto": {
-  "_help": "Optional; needs sheet_id (the sheet's crypto tab). Wallet addresses and exchange keys go in crypto_wallets.json next to this file. exchange_rows: wallets that have their own balance-sheet row (only coins the crypto total counts are counted there).",
+  "_help": "Optional; needs sheet_id (the sheet's crypto tab). Wallet addresses and exchange keys go in crypto_wallets.json next to this file. exchange_rows: wallets that have their own balance-sheet row (only coins the crypto total counts are counted there). ignore_coins: coin symbols left out altogether, in every wallet (no row, no value, no warning), e.g. a reward token held as dust that has no price and would otherwise warn 'no price for <wallet> <coin>, not counted' at every sync.",
   "exchange_rows": ["ExchangeA", "ExchangeB"],
+  "ignore_coins": ["DUSTCOIN"],
   "default_wallet": "Wallet",
   "xpub_export_dir": "",
   "xpub_export_wallet": "Wallet"
