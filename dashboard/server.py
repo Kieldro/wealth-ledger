@@ -821,6 +821,7 @@ ROUTES = {"/api/summary": api_summary, "/api/trend": api_trend, "/api/accounts":
 # is claimed here and the first 90-day sync runs in the background. Off by default.
 WEB_CONNECT = bool(_DASH.get("web_connect"))
 SYNC = os.path.join(ROOT, "bin", "wealth-ledger-sync")
+FIRST_SYNC_MAX_S = 1800  # a first sync still going after this long is stopped and reported
 _conn_lock = threading.Lock()
 _conn = {"running": False, "error": None}
 
@@ -828,17 +829,24 @@ _conn = {"running": False, "error": None}
 def connect_state() -> dict | None:
     if not WEB_CONNECT:
         return None
-    return {"needed": not os.path.exists(ACCESS_FILE), "running": _conn["running"], "error": _conn["error"]}
+    needed = not os.path.exists(ACCESS_FILE)
+    # connected, nothing has finished yet and a sync holds the lock: the first sync, started before this dashboard was
+    # restarted (it runs as a unit of its own where it can, so it carries on)
+    running = _conn["running"] or (not needed and not os.path.exists(STATUS) and sync_lock_held())
+    return {"needed": needed, "running": running, "error": _conn["error"]}
 
 
 def _first_sync():
     try:
-        r = subprocess.run([SYNC, "--days", "90"], capture_output=True, text=True, timeout=1800)
-        if os.environ.get("WEALTH_LEDGER_SYNC_LOG"):  # same file the daily cron run appends to
-            with open(os.path.expanduser(os.environ["WEALTH_LEDGER_SYNC_LOG"]), "a") as f:
-                f.write(r.stdout + r.stderr)
-        _conn["error"] = None if r.returncode == 0 else "The first sync had problems; see the warnings above."
-        log(f"connect: first sync rc={r.returncode}")
+        # started like Sync now: a unit of its own where systemd allows, output appended to the sync log
+        proc = _spawn_sync([SYNC, "--days", "90"], max_s=FIRST_SYNC_MAX_S)
+        try:
+            rc = proc.wait(timeout=FIRST_SYNC_MAX_S + 30)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            raise
+        _conn["error"] = None if rc == 0 else "The first sync had problems; see the warnings above."
+        log(f"connect: first sync rc={rc}")
     except Exception as e:
         _conn["error"] = "The first sync did not finish; it will be tried again at the next daily sync."
         log(f"connect: first sync failed: {e!r}")
@@ -1071,20 +1079,21 @@ _UNIT_ENV = re.compile(r"INVOCATION_ID|JOURNAL_STREAM|SYSTEMD_EXEC_PID|MANAGERPI
                        r"(RUNTIME|STATE|CACHE|LOGS|CONFIGURATION|CREDENTIALS)_DIRECTORY")
 
 
-def _unit_args(unit: str, cmd: list[str]) -> list[str]:
+def _unit_args(unit: str, cmd: list[str], max_s: int | None = None) -> list[str]:
     """systemd-run command line that runs cmd as a user unit of its own and waits for it (exit code = cmd's): same
     environment as the dashboard (passed by name, so no value shows in a process list), output appended to the
-    sync log, started in the home folder like a cron job."""
+    sync log, started in the home folder like a cron job. max_s: systemd stops the unit if it runs longer."""
     names = [k for k, v in os.environ.items() if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", k)
              and not _UNIT_ENV.fullmatch(k) and not re.search(r"[\x00-\x08\x0b-\x1f\x7f]", v)]
     return ["systemd-run", "--user", "--collect", "--wait", "--quiet", f"--unit={unit}",
             "--description=wealth-ledger sync started from the dashboard",
             f"--property=WorkingDirectory={os.path.expanduser('~')}",
             f"--property=StandardOutput=append:{SYNC_LOG}", f"--property=StandardError=append:{SYNC_LOG}",
+            *([f"--property=RuntimeMaxSec={max_s}"] if max_s else []),
             *(f"--setenv={k}" for k in sorted(names)), "--", *cmd]
 
 
-def _spawn_in_own_unit() -> subprocess.Popen | None:
+def _spawn_in_own_unit(cmd: list[str], max_s: int | None = None) -> subprocess.Popen | None:
     """The sync as a systemd user unit, outside the dashboard service: restarting the dashboard leaves it running.
     None where that can't be done (no systemd-run, no user manager to talk to, an older systemd): found out with a
     unit that does nothing, since a sync that fails and a sync that never started exit systemd-run the same way."""
@@ -1092,32 +1101,34 @@ def _spawn_in_own_unit() -> subprocess.Popen | None:
         return None
     unit = f"wealth-ledger-sync-btn-{int(time.time())}-{os.getpid()}"
     try:
-        r = subprocess.run(_unit_args(unit + "-check", ["true"]), stdin=subprocess.DEVNULL, capture_output=True,
+        r = subprocess.run(_unit_args(unit + "-check", ["true"], max_s), stdin=subprocess.DEVNULL, capture_output=True,
                            text=True, timeout=10)
         if r.returncode != 0:
             log(f"sync: systemd-run can't be used here ({(r.stderr.strip().splitlines() or ['?'])[-1][:200]}); "
                 "starting the sync as a child of the dashboard")
             return None
-        return subprocess.Popen(_unit_args(unit, SYNC_CMD), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+        return subprocess.Popen(_unit_args(unit, cmd, max_s), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL, start_new_session=True)
     except (OSError, subprocess.TimeoutExpired) as e:
         log(f"sync: systemd-run can't be used here ({e!r}); starting the sync as a child of the dashboard")
         return None
 
 
-def _spawn_detached() -> subprocess.Popen:
+def _spawn_detached(cmd: list[str]) -> subprocess.Popen:
     """The sync as a child of the dashboard in a session of its own (no terminal). A restart of the dashboard
     service stops it with the rest of the service, which is why _spawn_in_own_unit is tried first."""
     with open(SYNC_LOG, "a") as out:
-        return subprocess.Popen(SYNC_CMD, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
+        return subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
                                 cwd=os.path.expanduser("~"), start_new_session=True)
 
 
-def _spawn_sync() -> subprocess.Popen:
-    """Start the sync in the background, appending to the sync log like the cron line does. Waiting on what comes
-    back gives the sync's exit code either way."""
+def _spawn_sync(cmd: list[str] | None = None, max_s: int | None = None) -> subprocess.Popen:
+    """Start a sync (Sync now's command unless another is given) in the background, appending to the sync log like
+    the cron line does. Waiting on what comes back gives the sync's exit code either way. max_s is enforced by
+    systemd for a unit; for a detached child it is the caller's to enforce."""
     os.makedirs(os.path.dirname(SYNC_LOG), exist_ok=True)
-    return _spawn_in_own_unit() or _spawn_detached()
+    cmd = cmd or SYNC_CMD
+    return _spawn_in_own_unit(cmd, max_s) or _spawn_detached(cmd)
 
 
 def _watch_sync(proc: subprocess.Popen, started: float):

@@ -800,6 +800,8 @@ def connect(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "WEB_CONNECT", True)
     monkeypatch.setattr(server, "ACCESS_FILE", str(tmp_path / "simplefin_access_url"))
     monkeypatch.setattr(server, "_conn", {"running": False, "error": None})
+    monkeypatch.setattr(server, "STATUS", str(tmp_path / "status"))
+    monkeypatch.setattr(server, "SYNC_LOCK", str(tmp_path / "lock"))
     monkeypatch.setattr(simplefin_sync, "claim", lambda token, path: (claimed.append(token), path.write_text("x"))[0])
     monkeypatch.setattr(threading.Thread, "start", lambda self: started.append(self))
     return claimed, started
@@ -836,7 +838,7 @@ class _FakeSync:
     def __init__(self, rc=0):
         self.rc = rc
 
-    def wait(self):
+    def wait(self, timeout=None):
         return self.rc
 
 
@@ -975,13 +977,16 @@ def test_sync_now_without_systemd_is_a_detached_child_that_appends_to_the_sync_l
     monkeypatch.setattr(server, "SYNC_LOG", str(log))
     monkeypatch.setattr(server, "SYNC_CMD", ["sh", "-c", "echo out; echo err >&2; ps -o sid= -p $$"])
     monkeypatch.setattr(server.shutil, "which", lambda name: None)  # no systemd-run on this machine
-    assert server._spawn_in_own_unit() is None
+    assert server._spawn_in_own_unit(server.SYNC_CMD) is None
     log.parent.mkdir()
     log.write_text("earlier run\n")
     proc = server._spawn_sync()
     assert proc.wait(timeout=10) == 0
     lines = log.read_text().split()
     assert lines[:4] == ["earlier", "run", "out", "err"] and int(lines[4]) == proc.pid != server.os.getsid(0)
+    # the first sync after connecting gives its own command (the same script with --days 90)
+    assert server._spawn_sync(["sh", "-c", "echo first $0 $1", "--days", "90"], max_s=1800).wait(timeout=10) == 0
+    assert log.read_text().splitlines()[-1] == "first --days 90"
 
 
 class _Ran:
@@ -1001,7 +1006,7 @@ def test_sync_now_runs_as_a_unit_of_its_own_so_a_dashboard_restart_does_not_stop
                                                "BASH_FUNC_x%%": "() { :; }", "ODD": "a\x1bb"})
     monkeypatch.setattr(server.subprocess, "run", lambda args, **kw: checks.append((args, kw)) or _Ran(0))
     monkeypatch.setattr(server.subprocess, "Popen", lambda args, **kw: started.append((args, kw)) or _FakeSync())
-    monkeypatch.setattr(server, "_spawn_detached", lambda: fallback.append(1) or _FakeSync())
+    monkeypatch.setattr(server, "_spawn_detached", lambda cmd: fallback.append(cmd) or _FakeSync())
     assert isinstance(server._spawn_sync(), _FakeSync) and not fallback
     (check, ckw), (args, kw) = checks[0], started[0]
     assert len(checks) == len(started) == 1 and ckw["timeout"] == 10
@@ -1016,6 +1021,11 @@ def test_sync_now_runs_as_a_unit_of_its_own_so_a_dashboard_restart_does_not_stop
     assert not any("secret" in a for a in args)
     # the check before it: the same unit settings around a command that does nothing
     assert check[check.index("--") + 1:] == ["true"] and check[:check.index("--")] == [a + "-check" if a == unit else a for a in args[:args.index("--")]]
+    assert not any("RuntimeMaxSec" in a for a in args)  # Sync now has no time limit, like the cron run
+    # the first sync after connecting: its own command, and systemd stops it at the limit (the check unit agrees)
+    server._spawn_sync(["/opt/wl/sync", "--days", "90"], max_s=1800)
+    assert len(started) == 2 and not fallback and started[1][0][started[1][0].index("--") + 1:] == ["/opt/wl/sync", "--days", "90"]
+    assert "--property=RuntimeMaxSec=1800" in started[1][0] and "--property=RuntimeMaxSec=1800" in checks[1][0]
 
 
 def test_sync_now_falls_back_to_a_detached_child_when_systemd_run_cannot_start_a_unit(sync, tmp_path, monkeypatch):
@@ -1026,7 +1036,7 @@ def test_sync_now_falls_back_to_a_detached_child_when_systemd_run_cannot_start_a
     monkeypatch.setattr(server, "log", logged.append)
     monkeypatch.setattr(server.shutil, "which", lambda name: "/usr/bin/" + name)
     monkeypatch.setattr(server.subprocess, "Popen", lambda args, **kw: started.append(args) or _FakeSync())
-    monkeypatch.setattr(server, "_spawn_detached", lambda: fallback.append(1) or _FakeSync())
+    monkeypatch.setattr(server, "_spawn_detached", lambda cmd: fallback.append(1) or _FakeSync())
     # no user manager to talk to (a container, a plain cron or ssh environment)
     monkeypatch.setattr(server.subprocess, "run", lambda args, **kw: _Ran(1, "Failed to connect to bus: No medium found\n"))
     assert isinstance(server._spawn_sync(), _FakeSync)
@@ -1078,6 +1088,59 @@ def test_page_has_sync_now_that_follows_the_sync_and_reloads():
                    "#status .pill, #syncnow) { display: none; }"):
         assert needle in html, needle
     assert ">Refresh</button>" not in html
+
+
+def test_first_sync_after_connecting_starts_like_sync_now_and_reports_how_it_ended(connect, monkeypatch):
+    """The launcher is replaced: no sync runs. 90 days of history, stopped if it runs past the limit."""
+    calls = []
+
+    class Sync:
+        def __init__(self, rc=0, hangs=False):
+            self.rc, self.hangs, self.killed = rc, hangs, False
+
+        def wait(self, timeout=None):
+            if self.hangs:
+                raise server.subprocess.TimeoutExpired("sync", timeout)
+            return self.rc
+
+        def kill(self):
+            self.killed = True
+    procs = [Sync(0), Sync(1), Sync(hangs=True)]
+    monkeypatch.setattr(server, "_spawn_sync", lambda cmd=None, max_s=None: calls.append((cmd, max_s)) or procs[len(calls) - 1])
+    monkeypatch.setattr(server, "_nw", {"data": {"x": 1}, "fetched": 123.0, "error": None})
+    server._conn.update(running=True, error=None)
+    server._first_sync()
+    assert calls == [([server.SYNC, "--days", "90"], server.FIRST_SYNC_MAX_S)] and server.FIRST_SYNC_MAX_S == 1800
+    assert server._conn == {"running": False, "error": None} and server._nw["fetched"] == 0.0
+    server._conn.update(running=True)
+    server._first_sync()
+    assert server._conn == {"running": False, "error": "The first sync had problems; see the warnings above."}
+    server._conn.update(running=True)
+    server._first_sync()  # still going after the limit: the waiting stops and says so
+    assert procs[2].killed and server._conn["running"] is False and server._conn["error"].startswith("The first sync did not finish")
+
+    def boom(cmd=None, max_s=None):
+        raise FileNotFoundError(2, "No such file or directory")
+    monkeypatch.setattr(server, "_spawn_sync", boom)
+    server._conn.update(running=True, error=None)
+    server._first_sync()
+    assert server._conn["running"] is False and server._conn["error"].startswith("The first sync did not finish")
+
+
+def test_first_sync_still_shows_as_running_after_the_dashboard_restarts(connect, tmp_path):
+    """A restarted dashboard has forgotten the first sync it started, but that sync carries on in its own unit:
+    connected, no sync finished yet, and the sync's lock held."""
+    import fcntl
+    assert server.connect_state() == {"needed": True, "running": False, "error": None}
+    (tmp_path / "simplefin_access_url").write_text("x")
+    assert server.connect_state()["running"] is False  # no lock file: nothing is running
+    with open(tmp_path / "lock", "w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        assert server.connect_state() == {"needed": False, "running": True, "error": None}
+        (tmp_path / "status").write_text("last run 2026-11-11T08:15:02-06:00 rc=0\n")
+        assert server.connect_state()["running"] is False  # a sync has finished before: this is an ordinary one
+        (tmp_path / "status").unlink()
+    assert server.connect_state()["running"] is False
 
 
 def test_sections_without_data_are_hidden_for_a_sheetless_ledger(monkeypatch):
