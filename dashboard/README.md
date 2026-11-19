@@ -25,7 +25,7 @@ The button starts the same sync cron runs, in the background (`POST /api/sync`),
 - **Which sync:** `bin/wealth-ledger-sync`, run with the dashboard's own environment, so an instance started with its own `WEALTH_LEDGER_*` variables syncs its own ledger. Set `WEALTH_LEDGER_SYNC_CMD` (a command line) to run a wrapper of your own instead.
 - **Log:** output is appended to `WEALTH_LEDGER_SYNC_LOG` (default `~/.cache/wealth-ledger-sync.log`, the file the README's cron line writes).
 - **Limits** (SimpleFIN allows about 24 requests a day across cron and the button): no sync within 15 minutes of the last one, and at most 8 from the button in any 24 hours (`SYNC_MIN_GAP_S`, `SYNC_MAX_PER_DAY` in `server.py`; the count is kept in `dashboard_sync.json` in the config dir). A sync that is already running (it holds `WEALTH_LEDGER_LOCK`) is followed, not started twice.
-- The sync is a child of the dashboard service, so restarting the service while one runs stops that sync; the next one picks up where the feed is.
+- **Restarts:** with systemd, the sync runs as a user unit of its own (`systemd-run --user`, named `wealth-ledger-sync-btn-…`), so restarting the dashboard service doesn't stop a sync under way and the page keeps following it. Without systemd (or without a user manager to talk to) it is a detached child of the dashboard, and stopping the dashboard service stops it too.
 
 ## API
 `/api/summary`, `POST /api/refresh`, `POST /api/sync` + `GET /api/sync`, `/api/trend`, `/api/accounts`, `/api/holdings`, `/api/cards`, `/api/spending`, `/healthz`.

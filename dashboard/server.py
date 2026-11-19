@@ -27,6 +27,7 @@ import os
 import re
 import secrets
 import shlex
+import shutil
 import sqlite3
 import string
 import subprocess
@@ -980,7 +981,8 @@ def icon_bytes(slug: str) -> bytes | None:
 # your own) or else bin/wealth-ledger-sync. It gets the dashboard's own environment, so an instance started with its
 # own WEALTH_LEDGER_* variables syncs its own ledger. Output goes to the sync log the cron line appends to; nothing is
 # ever notified. SimpleFIN allows about 24 requests a day across cron and the button (a sync is 1, at most 3), hence
-# the limits.
+# the limits. Where systemd is there, the sync runs as a unit of its own (systemd-run --user), so restarting the
+# dashboard service doesn't stop a sync under way; elsewhere it is a detached child of the dashboard.
 def sync_command(env=os.environ) -> list[str]:
     return shlex.split(env.get("WEALTH_LEDGER_SYNC_CMD") or "") or [SYNC]
 
@@ -1055,16 +1057,67 @@ def sync_state(now: float | None = None) -> dict:
     with _sync_lock:
         mine = _sync["proc"] is not None
         wait, why = _sync_wait(now, st, _sync_starts(now))
+        try:  # by this clock, not the browser's
+            finished_ago = round(now - datetime.fromisoformat(st["last_run"]).timestamp(), 1)
+        except (TypeError, ValueError):
+            finished_ago = None
         return {"running": mine or sync_lock_held(), "elapsed_s": round(now - _sync["started"], 1) if mine else None,
-                "last": _sync["last"], "status": st, "wait_s": wait, "message": why}
+                "last": _sync["last"], "status": st, "finished_ago_s": finished_ago, "wait_s": wait, "message": why}
 
 
-def _spawn_sync() -> subprocess.Popen:
-    """Start the sync on its own (own session, no terminal), appending to the sync log like the cron line does."""
-    os.makedirs(os.path.dirname(SYNC_LOG), exist_ok=True)
+# variables systemd sets for each service itself: the dashboard's own values must not be handed on to the sync's unit
+_UNIT_ENV = re.compile(r"INVOCATION_ID|JOURNAL_STREAM|SYSTEMD_EXEC_PID|MANAGERPID|MAINPID|NOTIFY_SOCKET|PIDFILE|"
+                       r"(MEMORY_PRESSURE|LISTEN|WATCHDOG|MONITOR|TRIGGER)_\w+|"
+                       r"(RUNTIME|STATE|CACHE|LOGS|CONFIGURATION|CREDENTIALS)_DIRECTORY")
+
+
+def _unit_args(unit: str, cmd: list[str]) -> list[str]:
+    """systemd-run command line that runs cmd as a user unit of its own and waits for it (exit code = cmd's): same
+    environment as the dashboard (passed by name, so no value shows in a process list), output appended to the
+    sync log, started in the home folder like a cron job."""
+    names = [k for k, v in os.environ.items() if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", k)
+             and not _UNIT_ENV.fullmatch(k) and not re.search(r"[\x00-\x08\x0b-\x1f\x7f]", v)]
+    return ["systemd-run", "--user", "--collect", "--wait", "--quiet", f"--unit={unit}",
+            "--description=wealth-ledger sync started from the dashboard",
+            f"--property=WorkingDirectory={os.path.expanduser('~')}",
+            f"--property=StandardOutput=append:{SYNC_LOG}", f"--property=StandardError=append:{SYNC_LOG}",
+            *(f"--setenv={k}" for k in sorted(names)), "--", *cmd]
+
+
+def _spawn_in_own_unit() -> subprocess.Popen | None:
+    """The sync as a systemd user unit, outside the dashboard service: restarting the dashboard leaves it running.
+    None where that can't be done (no systemd-run, no user manager to talk to, an older systemd): found out with a
+    unit that does nothing, since a sync that fails and a sync that never started exit systemd-run the same way."""
+    if not shutil.which("systemd-run"):
+        return None
+    unit = f"wealth-ledger-sync-btn-{int(time.time())}-{os.getpid()}"
+    try:
+        r = subprocess.run(_unit_args(unit + "-check", ["true"]), stdin=subprocess.DEVNULL, capture_output=True,
+                           text=True, timeout=10)
+        if r.returncode != 0:
+            log(f"sync: systemd-run can't be used here ({(r.stderr.strip().splitlines() or ['?'])[-1][:200]}); "
+                "starting the sync as a child of the dashboard")
+            return None
+        return subprocess.Popen(_unit_args(unit, SYNC_CMD), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, start_new_session=True)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log(f"sync: systemd-run can't be used here ({e!r}); starting the sync as a child of the dashboard")
+        return None
+
+
+def _spawn_detached() -> subprocess.Popen:
+    """The sync as a child of the dashboard in a session of its own (no terminal). A restart of the dashboard
+    service stops it with the rest of the service, which is why _spawn_in_own_unit is tried first."""
     with open(SYNC_LOG, "a") as out:
         return subprocess.Popen(SYNC_CMD, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
                                 cwd=os.path.expanduser("~"), start_new_session=True)
+
+
+def _spawn_sync() -> subprocess.Popen:
+    """Start the sync in the background, appending to the sync log like the cron line does. Waiting on what comes
+    back gives the sync's exit code either way."""
+    os.makedirs(os.path.dirname(SYNC_LOG), exist_ok=True)
+    return _spawn_in_own_unit() or _spawn_detached()
 
 
 def _watch_sync(proc: subprocess.Popen, started: float):

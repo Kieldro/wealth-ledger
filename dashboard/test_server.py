@@ -967,18 +967,80 @@ def test_sync_now_says_when_the_sync_cannot_start_or_nothing_is_connected(sync, 
     assert code == 409 and body["message"].startswith("No bank connection yet") and not spawned
 
 
-def test_sync_now_process_is_detached_and_appends_to_the_sync_log(sync, tmp_path, monkeypatch):
-    """The real start, with a stand-in command (never the sync script): own session, output appended to the log."""
+def test_sync_now_without_systemd_is_a_detached_child_that_appends_to_the_sync_log(sync, tmp_path, monkeypatch):
+    """The fallback start for real, with a stand-in command (never the sync script): own session, output appended
+    to the log (its folder made on the way)."""
     monkeypatch.undo()
     log = tmp_path / "logs" / "sync.log"
-    log.parent.mkdir()
-    log.write_text("earlier run\n")
     monkeypatch.setattr(server, "SYNC_LOG", str(log))
     monkeypatch.setattr(server, "SYNC_CMD", ["sh", "-c", "echo out; echo err >&2; ps -o sid= -p $$"])
+    monkeypatch.setattr(server.shutil, "which", lambda name: None)  # no systemd-run on this machine
+    assert server._spawn_in_own_unit() is None
+    log.parent.mkdir()
+    log.write_text("earlier run\n")
     proc = server._spawn_sync()
     assert proc.wait(timeout=10) == 0
     lines = log.read_text().split()
     assert lines[:4] == ["earlier", "run", "out", "err"] and int(lines[4]) == proc.pid != server.os.getsid(0)
+
+
+class _Ran:
+    def __init__(self, returncode, stderr=""):
+        self.returncode, self.stderr = returncode, stderr
+
+
+def test_sync_now_runs_as_a_unit_of_its_own_so_a_dashboard_restart_does_not_stop_it(sync, tmp_path, monkeypatch):
+    """systemd-run is never really called here: the command lines it would get are checked."""
+    monkeypatch.undo()
+    checks, started, fallback = [], [], []
+    monkeypatch.setattr(server, "SYNC_LOG", str(tmp_path / "logs" / "sync.log"))
+    monkeypatch.setattr(server, "SYNC_CMD", ["/opt/wl/sync", "--days", "3"])
+    monkeypatch.setattr(server.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(server.os, "environ", {"WEALTH_LEDGER_DB": "/secret/place/t.db", "PATH": "/usr/bin", "HOME": "/home/u",
+                                               "INVOCATION_ID": "abc", "JOURNAL_STREAM": "8:1", "LISTEN_FDS": "1",
+                                               "BASH_FUNC_x%%": "() { :; }", "ODD": "a\x1bb"})
+    monkeypatch.setattr(server.subprocess, "run", lambda args, **kw: checks.append((args, kw)) or _Ran(0))
+    monkeypatch.setattr(server.subprocess, "Popen", lambda args, **kw: started.append((args, kw)) or _FakeSync())
+    monkeypatch.setattr(server, "_spawn_detached", lambda: fallback.append(1) or _FakeSync())
+    assert isinstance(server._spawn_sync(), _FakeSync) and not fallback
+    (check, ckw), (args, kw) = checks[0], started[0]
+    assert len(checks) == len(started) == 1 and ckw["timeout"] == 10
+    unit = next(a for a in args if a.startswith("--unit="))
+    assert args[:5] == ["systemd-run", "--user", "--collect", "--wait", "--quiet"] and unit.startswith("--unit=wealth-ledger-sync-btn-")
+    assert args[args.index("--") + 1:] == ["/opt/wl/sync", "--days", "3"] and kw["start_new_session"] is True
+    log = str(tmp_path / "logs" / "sync.log")
+    assert f"--property=StandardOutput=append:{log}" in args and f"--property=StandardError=append:{log}" in args
+    # the dashboard's environment goes along by name only (no value on a command line); systemd's own per-unit
+    # variables and names or values systemd would refuse are left out
+    assert [a for a in args if a.startswith("--setenv=")] == ["--setenv=HOME", "--setenv=PATH", "--setenv=WEALTH_LEDGER_DB"]
+    assert not any("secret" in a for a in args)
+    # the check before it: the same unit settings around a command that does nothing
+    assert check[check.index("--") + 1:] == ["true"] and check[:check.index("--")] == [a + "-check" if a == unit else a for a in args[:args.index("--")]]
+
+
+def test_sync_now_falls_back_to_a_detached_child_when_systemd_run_cannot_start_a_unit(sync, tmp_path, monkeypatch):
+    monkeypatch.undo()
+    started, fallback, logged = [], [], []
+    monkeypatch.setattr(server, "SYNC_LOG", str(tmp_path / "logs" / "sync.log"))
+    monkeypatch.setattr(server, "SYNC_CMD", ["/opt/wl/sync"])
+    monkeypatch.setattr(server, "log", logged.append)
+    monkeypatch.setattr(server.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(server.subprocess, "Popen", lambda args, **kw: started.append(args) or _FakeSync())
+    monkeypatch.setattr(server, "_spawn_detached", lambda: fallback.append(1) or _FakeSync())
+    # no user manager to talk to (a container, a plain cron or ssh environment)
+    monkeypatch.setattr(server.subprocess, "run", lambda args, **kw: _Ran(1, "Failed to connect to bus: No medium found\n"))
+    assert isinstance(server._spawn_sync(), _FakeSync)
+    assert fallback == [1] and not started and "Failed to connect to bus: No medium found" in logged[0]
+
+    def hangs(args, **kw):
+        raise server.subprocess.TimeoutExpired(args, kw["timeout"])
+    monkeypatch.setattr(server.subprocess, "run", hangs)
+    assert isinstance(server._spawn_sync(), _FakeSync) and fallback == [1, 1] and not started
+
+    def gone(args, **kw):
+        raise FileNotFoundError(2, "No such file or directory")
+    monkeypatch.setattr(server.subprocess, "run", gone)
+    assert isinstance(server._spawn_sync(), _FakeSync) and fallback == [1, 1, 1] and not started
 
 
 def test_sync_endpoint_needs_a_session_is_post_only_and_refuses_cross_site(sync):
@@ -1012,7 +1074,7 @@ def test_page_has_sync_now_that_follows_the_sync_and_reloads():
     for needle in ('<button id="syncnow"', '>Sync now</button>', 'fetch("/api/sync", {method: "POST"', 'await get("/api/sync")',
                    'key: "syncrun"', 'noteTime("syncrun", took)', "`Syncing…<span class=\"hide-sm\"> ${Math.floor((now - syncRun.t0) / 1000)}s</span>`",
                    "`<span class=\"hint\">(usually ${secsText(u)})</span>`", "await load(true);", 'id="syncnote" role="status"',
-                   "limited = r.status === 429", "SHEETLESS ? \"Reload\" : 'Re-read<span class=\"hide-sm\"> sheet</span>'", "\ncheckSync();\n",
+                   "limited = r.status === 429", "st.finished_ago_s * 1000 <= took + 5000", "SHEETLESS ? \"Reload\" : 'Re-read<span class=\"hide-sm\"> sheet</span>'", "\ncheckSync();\n",
                    "#status .pill, #syncnow) { display: none; }"):
         assert needle in html, needle
     assert ">Refresh</button>" not in html

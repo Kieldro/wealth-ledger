@@ -972,10 +972,11 @@ async function syncDone(run, st) {
   flightEnd(run.id); syncRun = null; paintSync();
   const probs = (s.problems || []).filter(p => !OD_LINE.test(p));
   const failed = !!s.rc || (last && last.rc !== 0), rc = s.rc || last?.rc;
-  if (run.timed && st.last && !failed) noteTime("syncrun", took);
+  // Started by the dashboard, which no longer knows of it: the dashboard restarted meanwhile. Where the sync runs as
+  // a unit of its own it carried on and has written its result since; where it is the dashboard's child it was stopped.
+  const forgotten = run.timed && !st.last, lost = forgotten && !(st.finished_ago_s != null && st.finished_ago_s * 1000 <= took + 5000);
+  if (run.timed && !lost && !failed) noteTime("syncrun", took);
   const done = "Sync finished" + (run.timed ? ` in ${Math.round(took / 1000)}s` : "");
-  // started by the dashboard, which no longer knows of it: the dashboard restarted meanwhile, and that stops its sync
-  const lost = run.timed && !st.last;
   if (lost) setSyncNote("The dashboard restarted while the sync was running, so the sync may have been cut short. Check the sync time above and try again later.", {bad: true});
   else if (failed) setSyncNote(probs.length ? "The sync ended with an error:" : `The sync ended with an error (exit code ${rc}), so some accounts may not have updated.`, {bad: true, lines: probs.slice(0, 4)});
   else setSyncNote(done + " · updating the numbers…");
