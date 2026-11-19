@@ -310,6 +310,20 @@ def test_coinbase_balances_sum_available_and_hold(monkeypatch):
     assert qty == {"BTC": pytest.approx(0.12), "USD": 5.5}
 
 
+def test_coinbase_balances_follow_has_next_past_the_first_page(monkeypatch):
+    pages = {"": {"accounts": [{"currency": "BTC", "available_balance": {"value": "0.1"}}],
+                  "has_next": True, "cursor": "p2"},
+             "p2": {"accounts": [{"currency": "SOL", "available_balance": {"value": "3"}},
+                                 {"currency": "BTC", "available_balance": {"value": "0.2"}}],
+                    "has_next": False, "cursor": ""}}
+    urls = []
+    monkeypatch.setattr(c, "coinbase_jwt", lambda *a: "t")
+    monkeypatch.setattr(c, "_req", lambda url, **k: (urls.append(url), pages[url.partition("&cursor=")[2]])[1])
+    qty, raw = c.coinbase_balances("n", "k")
+    assert qty == {"BTC": pytest.approx(0.3), "SOL": 3.0} and raw["BTC"] == pytest.approx(0.3)
+    assert len(urls) == 2 and urls[1].endswith("limit=250&cursor=p2")
+
+
 def test_empty_key_next_to_key_with_history_is_a_note(monkeypatch, tmp_path):
     # wallets export several accounts; an unused one must not fail the wallet that has a used one
     monkeypatch.setattr(c, "XPUB_EXPORT_DIR", tmp_path)

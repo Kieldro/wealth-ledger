@@ -139,12 +139,19 @@ def xpub_used_addresses(xpub: str, lookup) -> list[str]:
 
 
 def address_txs(addr: str, get) -> list[dict]:
-    """Every transaction of an address (Esplora: mempool + first 25 confirmed, then 25 per page)."""
-    txs = get(f"/address/{addr}/txs")
+    """Every transaction of an address. The first call gives the mempool plus the newest confirmed ones: 50 on
+    mempool.space, 25 on stock Esplora; /txs/chain/<last txid> then gives 25 older ones per call. Keep asking
+    until a page comes back short or brings nothing new, whatever the first page's size was."""
+    txs = list(get(f"/address/{addr}/txs"))
+    seen = {t["txid"] for t in txs}
     page = [t for t in txs if t["status"].get("confirmed")]
-    while len(page) == 25:
+    while len(page) >= 25:
         page = get(f"/address/{addr}/txs/chain/{page[-1]['txid']}")
-        txs += page
+        new = [t for t in page if t["txid"] not in seen]
+        if not new:
+            break
+        seen.update(t["txid"] for t in new)
+        txs += new
     return txs
 
 

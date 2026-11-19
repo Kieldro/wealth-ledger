@@ -57,13 +57,30 @@ def due(db, mod) -> bool:
     return not getattr(mod, "ASSETS", ())
 
 
+def stored_warnings(db, mod) -> list[str]:
+    """The warnings a provider wrote into the detail of its newest stored result (a coin with no price, a wallet
+    lookup that fell back to the sheet). Read from the table, not the run, so they are repeated on every sync of
+    the day, including the ones where the provider is fresh and skipped."""
+    out = []
+    for asset in getattr(mod, "ASSETS", ()):
+        row = db.execute("SELECT detail FROM valuations WHERE asset = ? ORDER BY snapshot_date DESC LIMIT 1",
+                         (asset,)).fetchone()
+        try:
+            warns = (json.loads(row[0]) or {}).get("warnings") or []
+        except (TypeError, ValueError, AttributeError):
+            continue
+        out += [w for w in warns if w not in out]
+    return out
+
+
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     only = [a for a in argv if not a.startswith("-")]
     force = "--force" in argv
     db = ctdb.connect(DB)
     failed = 0
-    for mod in providers():
+    mods = list(providers())
+    for mod in mods:
         name = getattr(mod, "NAME", mod.__name__)
         if only and name not in only:
             continue
@@ -82,6 +99,12 @@ def main(argv=None) -> int:
                            [(today, r["asset"], float(r["value"]), r["source"], json.dumps(r.get("detail") or {}), now)
                             for r in rows])
         print(f"{name}: " + ", ".join(f"{r['asset']}={r['value']:,.0f}" for r in rows))
+    for mod in mods:  # after the results: the sync script lifts WARNING lines into the status file
+        name = getattr(mod, "NAME", mod.__name__)
+        if only and name not in only:
+            continue
+        for w in stored_warnings(db, mod):
+            print(f"WARNING: {name}: {w}")
     db.close()
     return 1 if failed else 0
 

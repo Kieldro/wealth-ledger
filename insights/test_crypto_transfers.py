@@ -88,3 +88,23 @@ def test_usd_value_from_daily_prices(con):
     ct.store(con, [{"wallet": "W", "coin": "BTC", "txid": "t", "direction": "in", "date": "2026-03-02T09:00:00-06:00",
                     "amount": 0.5, "fee": None, "source": "x"}])
     assert con.execute("SELECT price_usd, usd_value FROM v_crypto_transfers").fetchone() == (80000, 40000.0)
+
+
+def _chain(n):
+    return [{"txid": f"t{i}", "status": {"confirmed": True}} for i in range(n)]
+
+
+@pytest.mark.parametrize("first, total", [(50, 130), (25, 130), (50, 50), (25, 75), (50, 12)])
+def test_address_history_is_read_to_the_end_whatever_the_first_page_size(first, total):
+    """mempool.space sends 50 confirmed transactions first (stock Esplora 25), then 25 per /txs/chain call."""
+    chain, calls = _chain(total), []
+
+    def get(path):
+        calls.append(path)
+        if path.endswith("/txs"):
+            return [{"txid": "pending", "status": {"confirmed": False}}] + chain[:first]
+        at = [t["txid"] for t in chain].index(path.rsplit("/", 1)[1]) + 1
+        return chain[at:at + 25]
+
+    got = [t["txid"] for t in ct.address_txs("addr", get)]
+    assert got == ["pending"] + [t["txid"] for t in chain] and len(calls) <= 2 + total // 25

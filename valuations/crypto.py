@@ -546,20 +546,25 @@ def coinbase_jwt(name: str, private_key: str, method: str, path: str) -> str:
 def coinbase_balances(name: str, private_key: str) -> tuple[dict[str, float], dict]:
     """Advanced Trade GET /accounts (a view-only CDP key is enough): available + held per currency."""
     path = "/api/v3/brokerage/accounts"
-    try:
-        d = _req(f"https://api.coinbase.com{path}?limit=250",
-                 headers={"Authorization": "Bearer " + coinbase_jwt(name, private_key, "GET", path)})
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"coinbase: HTTP {e.code}") from None
     out: dict[str, float] = {}
-    raw = {}
-    for a in d.get("accounts") or []:
-        q = float(a["available_balance"]["value"]) + float((a.get("hold") or {}).get("value") or 0)
-        if q:
-            c = norm_coin(a["currency"])
-            out[c] = out.get(c, 0.0) + q
-            raw[a["currency"]] = q
-    return out, raw
+    raw: dict[str, float] = {}
+    cursor = ""
+    for _ in range(20):  # 250 accounts a page; follow has_next so wallets past the first page still count
+        try:
+            d = _req(f"https://api.coinbase.com{path}?limit=250" + (f"&cursor={cursor}" if cursor else ""),
+                     headers={"Authorization": "Bearer " + coinbase_jwt(name, private_key, "GET", path)})
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"coinbase: HTTP {e.code}") from None
+        for a in d.get("accounts") or []:
+            q = float(a["available_balance"]["value"]) + float((a.get("hold") or {}).get("value") or 0)
+            if q:
+                c = norm_coin(a["currency"])
+                out[c] = out.get(c, 0.0) + q
+                raw[a["currency"]] = raw.get(a["currency"], 0.0) + q
+        cursor = d.get("cursor") or ""
+        if not d.get("has_next") or not cursor:
+            return out, raw
+    raise RuntimeError("coinbase: more than 20 pages of accounts")
 
 
 # ---------------------------------------------------------------- config
