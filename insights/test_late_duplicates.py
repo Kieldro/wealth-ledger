@@ -23,3 +23,13 @@ def test_late_copy_hidden_but_first_import_repeats_kept(tmp_path):
     assert ctdb.flag_late_duplicates(db) == []  # idempotent
     kept = {r[0] for r in db.execute("SELECT txn_id FROM v_ledger")}
     assert kept == {"c1", "c2", "h1", "s1", "s2"}
+
+
+def test_only_plaid_rows_are_flagged(tmp_path):
+    """The re-delivery is a Plaid quirk; a late import of real history from another feed keeps its repeats."""
+    db = ctdb.connect(tmp_path / "t.db")
+    add(db, "h1", "2026-03-16", -1256, "Insurer", "2026-03-18T00:00:00")
+    add(db, "h2", "2026-03-18", -1256, "Insurer", "2026-04-01T00:00:00")
+    db.execute("UPDATE txns SET source = 'simplefin'")
+    db.commit()
+    assert ctdb.flag_late_duplicates(db) == []

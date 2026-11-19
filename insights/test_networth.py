@@ -32,8 +32,16 @@ def nw(tmp_path, monkeypatch):
     con.execute("INSERT INTO valuations VALUES (?,?,?,?,?,?)", (DAY, "Home", 320000.0, "avm", None, DAY))
     con.commit()
     monkeypatch.setattr(networth, "DB", str(path))
-    monkeypatch.setattr(networth, "sheet_rows", lambda: dict(SHEET))
+    monkeypatch.setattr(networth, "sheet_rows", lambda: rows(SHEET))
     return con
+
+
+def rows(numbers, **other):
+    """The sheet as sheet_rows reads it; every configured row not given a number is there with a blank cell."""
+    r = networth.Rows(numbers)
+    r.other = {k.rstrip("*"): "" for k in networth.ASSET_ROWS | networth.LIAB_ROWS if k.rstrip("*") not in numbers}
+    r.other.update(other)
+    return r
 
 
 def used(result):
@@ -53,7 +61,7 @@ def test_valuation_is_live_only_when_read_today_with_nothing_typed_in():
 
 def test_exchange_cash_read_today_is_a_live_line_but_not_a_synced_account(nw, monkeypatch):
     monkeypatch.setattr(networth, "ASSET_ROWS", networth.ASSET_ROWS | {"Exchange A", "Exchange B"})
-    monkeypatch.setattr(networth, "sheet_rows", lambda: dict(SHEET, **{"Exchange A": 10.0, "Exchange B": 20.0}))
+    monkeypatch.setattr(networth, "sheet_rows", lambda: rows(dict(SHEET, **{"Exchange A": 10.0, "Exchange B": 20.0})))
     nw.execute("INSERT INTO valuations VALUES (?,?,?,?,?,?)", (DAY, "Exchange A", 55.0, "exchange-api USD balance", None, DAY))
     nw.execute("INSERT INTO valuations VALUES (?,?,?,?,?,?)",
                ("2026-10-20", "Exchange B", 66.0, "exchange-api USD balance", None, "2026-10-20"))
@@ -67,7 +75,7 @@ def test_exchange_cash_read_today_is_a_live_line_but_not_a_synced_account(nw, mo
 
 
 def test_live_balances_replace_sheet_rows_and_the_rest_keeps_its_source(nw):
-    r = networth.compute()
+    r = networth.compute(today=DAY)
     assert used(r) == {
         "Checking": ("asset", 1000.0, "live"), "Savings": ("asset", 5000.0, "live"),
         "Brokerage": ("asset", 12000.0, "live"), "Roth IRA": ("asset", 8000.0, "live"),
@@ -83,7 +91,7 @@ def test_live_balances_replace_sheet_rows_and_the_rest_keeps_its_source(nw):
 def test_renamed_account_is_reported_instead_of_silently_counted_twice(nw):
     nw.execute("UPDATE balances SET account_name='Example Checking (0000)' WHERE account_id='chk'")
     nw.commit()
-    r = networth.compute()
+    r = networth.compute(today=DAY)
     lines = used(r)
     assert lines["Checking"] == ("asset", 900.0, "sheet") and lines["Example Checking (0000)"][1] == 1000.0
     (w,) = r["warnings"]
@@ -94,7 +102,7 @@ def test_balance_that_stopped_updating_is_counted_but_named(nw):
     nw.execute("UPDATE balances SET snapshot_date='2026-09-30' WHERE account_id IN ('sav', 'kid')")
     nw.execute("UPDATE balances SET snapshot_date='2026-10-21' WHERE account_id='ira'")  # 6 days behind: fine
     nw.commit()
-    r = networth.compute()
+    r = networth.compute(today=DAY)
     assert used(r)["Savings"] == ("asset", 5000.0, "live")
     (w,) = r["warnings"]  # the custodial account isn't counted, so it isn't named
     assert w.startswith("Net worth: Example Bank Savings (1111) was last updated 2026-09-30 and is still counted")
@@ -113,6 +121,45 @@ def test_each_line_says_what_day_its_number_is_from(nw):
 def test_account_without_a_balance_does_not_break_the_total(nw):
     nw.execute("UPDATE balances SET balance=NULL WHERE account_id IN ('chk', 'cc2')")
     nw.commit()
-    r = networth.compute()
+    r = networth.compute(today=DAY)
     assert used(r)["Checking"] == ("asset", 0.0, "live") and "Other Card (6666)" not in used(r)
     assert r["warnings"] == ["Net worth: Example Bank Checking (0000) has no balance from its feed and is counted as 0."]
+
+
+def test_stale_balance_is_measured_against_today_and_the_banks_own_date(nw):
+    """Every feed stopping together leaves no fresher account to compare with; the bank's date beats the sync's."""
+    nw.execute("UPDATE balances SET as_of='2026-10-01T07:00:00' WHERE account_id='brk'")  # sync saw it on DAY
+    nw.commit()
+    (w,) = networth.compute(today=DAY)["warnings"]
+    assert w.startswith("Net worth: Individual Brokerage (2222) was last updated 2026-10-01")
+    late = networth.compute(today="2026-11-20")["warnings"]
+    assert len(late) == 7 and all("was last updated" in w for w in late)  # all counted accounts, 24+ days old
+
+
+def test_configured_row_gone_from_the_sheet_or_holding_text_is_named(nw, monkeypatch):
+    sheet = {k: v for k, v in SHEET.items() if k not in ("Cash", "Total metals value")}
+    read = rows(sheet, **{"Total metals value": "see notes"})
+    del read.other["Cash"]  # the row is gone, not blank
+    monkeypatch.setattr(networth, "sheet_rows", lambda: read)
+    r = networth.compute(today=DAY)
+    assert "Cash" not in used(r) and "Total metals value" not in used(r)
+    gone, text = sorted(r["warnings"])
+    assert gone.startswith('Net worth: the balance sheet has no "Cash" row any more')
+    assert text.startswith('Net worth: the balance sheet\'s "Total metals value" row holds text (\'see notes\')')
+
+
+def test_sheet_rows_reads_the_whole_tab_and_keeps_what_is_not_a_number(monkeypatch):
+    import json
+    import types
+    seen = {}
+
+    def run(cmd, **kw):
+        seen.update(json.loads(cmd[-1]))
+        return types.SimpleNamespace(stdout=json.dumps({"values": [
+            ["Cash", 200], ["Cash", 1], ["Car"], ["Home", "n/a"], [], ["", 5], ["Flag", True]]}))
+
+    monkeypatch.setattr(networth, "SHEET", "sheet-id")
+    monkeypatch.setattr(networth.subprocess, "run", run)
+    got = networth.sheet_rows()
+    assert seen["range"] == "balance sheet!A:B"
+    assert got == {"Cash": 200.0} and got.other == {"Car": "", "Home": "n/a", "Flag": "True"}

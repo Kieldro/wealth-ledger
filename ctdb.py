@@ -26,7 +26,8 @@ amazon_items / amazon_refunds  items and refunds from an Amazon "Your Orders" da
               rest, for method 'points'); insights/budget.py splits it by item.
 superseded    accounts whose feed was replaced by another source (e.g. a SimpleFIN account later fed by Plaid);
               hidden from every view and no longer written by that feed. History rows are kept.
-Views: v_ledger (txns + real date/amount + kind + class), v_balances_latest, v_holdings_latest,
+Views: v_ledger (txns + real date/amount + kind + class), v_balances_latest, v_holdings_latest (each account's
+newest positions with their snapshot_date and lag_days behind the feed's newest snapshot),
 v_accounts (latest balance per account + credit_limit, from the feed or else personal.json, and credit_limit_source).
 
 class: spend | income | refund | transfer (between the owner's own accounts) | card_payment | investment.
@@ -113,7 +114,10 @@ CREATE VIEW v_valuations_latest AS
   WHERE v.snapshot_date = (SELECT MAX(snapshot_date) FROM valuations v2 WHERE v2.asset = v.asset);
 DROP VIEW IF EXISTS v_ledger;
 CREATE VIEW v_ledger AS
-  SELECT t.*, COALESCE(t.posted, date(t.transacted_at)) AS date, CAST(t.amount AS REAL) AS amt, k.kind,
+  -- date: posted, else when it was made, else (a pending row whose feed gave neither) the day the sync first saw it,
+  -- so a date filter never drops a pending charge
+  SELECT t.*, COALESCE(t.posted, date(t.transacted_at), date(t.first_seen, 'localtime')) AS date,
+    CAST(t.amount AS REAL) AS amt, k.kind,
     COALESCE(
       (SELECT r.class FROM txn_rules r
        WHERE t.description LIKE r.pattern AND (r.kind IS NULL OR r.kind = k.kind)
@@ -132,11 +136,22 @@ CREATE VIEW v_balances_latest AS
   WHERE b.snapshot_date = (SELECT MAX(snapshot_date) FROM balances b2
                            WHERE b2.account_id = b.account_id AND b2.source = b.source)
     AND b.account_id NOT IN (SELECT account_id FROM superseded);
+CREATE INDEX IF NOT EXISTS idx_holdings_account ON holdings(source, account_id, snapshot_date);
 DROP VIEW IF EXISTS v_holdings_latest;
+-- Each account's newest positions (not the feed's newest day: an account the feed skipped that day, e.g. its
+-- connection failed, must not vanish). lag_days = how far that snapshot is behind the feed's newest one. An account
+-- that is behind AND whose latest balance is zero was emptied (rolled over, closed): its old positions are left out.
 CREATE VIEW v_holdings_latest AS
-  SELECT h.*, CAST(h.market_value AS REAL) AS value FROM holdings h
-  WHERE h.snapshot_date = (SELECT MAX(snapshot_date) FROM holdings h2 WHERE h2.source = h.source)
-    AND h.account_id NOT IN (SELECT account_id FROM superseded);
+  SELECT h.*, CAST(h.market_value AS REAL) AS value,
+         CAST(julianday(s.newest) - julianday(h.snapshot_date) AS INTEGER) AS lag_days
+  FROM holdings h
+  JOIN (SELECT source, MAX(snapshot_date) AS newest FROM holdings GROUP BY source) s ON s.source = h.source
+  WHERE h.snapshot_date = (SELECT MAX(h2.snapshot_date) FROM holdings h2
+                           WHERE h2.source = h.source AND h2.account_id = h.account_id)
+    AND h.account_id NOT IN (SELECT account_id FROM superseded)
+    AND (h.snapshot_date = s.newest
+         OR NOT EXISTS (SELECT 1 FROM v_balances_latest b
+                        WHERE b.account_id = h.account_id AND ABS(COALESCE(b.bal, 0)) < 0.01));
 DROP VIEW IF EXISTS v_accounts;
 CREATE VIEW v_accounts AS
   SELECT account_id, account_name, institution, source, balance, as_of, snapshot_date, kind,
@@ -239,12 +254,14 @@ def flag_late_duplicates(db: sqlite3.Connection) -> list[tuple[str, str]]:
     """Mark feed duplicates so v_ledger drops them: a posted charge that arrives LATE_DUP_LAG_DAYS+ after its
     date and repeats an identical posted charge (same account, amount and description) from 0-4 days earlier
     that the feed delivered first. Seen on the Coinbase One Card through Plaid (2026-10: the copy never moved
-    the card balance). Rows from an account's first import are never flagged: legitimate repeat purchases
+    the card balance), so only Plaid rows are ever flagged; no other feed has shown it and a late import of real
+    history (fidelity_web) must not lose repeat purchases. Rows from an account's first import are never flagged: legitimate repeat purchases
     (the same coffee every morning) all arrive together then. Reversible: DELETE FROM late_duplicates."""
     rows = db.execute("""
         SELECT b.txn_id, a.txn_id FROM txns a JOIN txns b
           ON a.account_id = b.account_id AND a.amount = b.amount AND a.description = b.description
          AND a.txn_id <> b.txn_id AND a.pending = 0 AND b.pending = 0
+         AND a.source = 'plaid' AND b.source = 'plaid'
          AND b.posted BETWEEN a.posted AND date(a.posted, ?)
          AND a.first_seen < b.first_seen
         WHERE julianday(substr(b.first_seen, 1, 10)) - julianday(b.posted) >= ?
@@ -264,6 +281,18 @@ def flag_late_duplicates(db: sqlite3.Connection) -> list[tuple[str, str]]:
                    [(d, o, "identical charge re-delivered late by the feed", now) for d, o in out])
     db.commit()
     return out
+
+
+HOLDINGS_LAG_DAYS = 3  # positions this many days behind the feed's newest snapshot are named by the sync
+
+
+def lagging_holdings(db: sqlite3.Connection, source: str, min_days: int = HOLDINGS_LAG_DAYS) -> list[tuple]:
+    """[(account name, snapshot_date, lag_days)] for accounts of `source` whose positions in v_holdings_latest are
+    min_days+ older than the feed's newest snapshot: the account still has a balance but the feed stopped sending
+    its positions, so holdings answers show it as of that older day."""
+    return db.execute("SELECT account_name, snapshot_date, MAX(lag_days) FROM v_holdings_latest "
+                      "WHERE source = ? AND lag_days >= ? GROUP BY account_id ORDER BY 2, 1",
+                      (source, min_days)).fetchall()
 
 
 def personal_rules() -> list[tuple]:

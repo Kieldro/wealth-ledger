@@ -23,7 +23,7 @@ import sys
 import threading
 import time
 import webbrowser
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -168,13 +168,54 @@ def link(cfg: dict, update_item: dict | None = None, products=("transactions",),
 
 
 # ---------- sync ----------
+STALE_DAYS = 4  # Plaid refreshes an item about daily; one it last reached this long ago is stuck (weekends included)
+
+
+def last_update(cfg: dict, item: dict) -> str | None:
+    """When Plaid last got this item's data from the bank (free /item/get: status.<product>.last_successful_update),
+    as ISO UTC. /accounts/get balances are Plaid's cached copy from about then, so this is their real date. None
+    when Plaid gives no time."""
+    try:
+        status = call(cfg, "/item/get", {"access_token": item["access_token"]}).get("status") or {}
+    except PlaidError:
+        return None
+    times = []
+    for product in ("transactions", "investments"):
+        t = (status.get(product) or {}).get("last_successful_update")
+        try:
+            times.append(datetime.fromisoformat(t.replace("Z", "+00:00")).astimezone(timezone.utc))
+        except (AttributeError, ValueError):
+            continue
+    return max(times).isoformat(timespec="seconds") if times else None
+
+
+def stale_warning(label: str, updated: str | None, now: datetime | None = None) -> str | None:
+    """A line for the status file when Plaid last reached the bank more than STALE_DAYS ago: it keeps answering
+    from its cache with no error, so nothing else shows that the balances stopped moving."""
+    if not updated:
+        return None
+    age = ((now or datetime.now(timezone.utc)) - datetime.fromisoformat(updated)) / timedelta(days=1)
+    if age <= STALE_DAYS:
+        return None
+    return (f"{label}: Plaid last got data from the bank on {updated[:10]} ({int(age)} days ago); balances and "
+            f"transactions are from then. If it stays stuck: plaid_sync.py relink")
+
+
 def account_names(cfg: dict, item: dict, db: sqlite3.Connection | None = None) -> dict[str, str]:
     """Account display names; for primary items also snapshot balances and card credit limits (free /accounts/get,
-    cached data). Compare items are skipped: SimpleFIN already owns those balances."""
+    cached data). as_of is the bank's own balance time when Plaid has one, else when Plaid last reached the bank
+    (last_update); a stale one is printed as a WARNING. Compare items are skipped: SimpleFIN already owns those
+    balances."""
     accts = call(cfg, "/accounts/get", {"access_token": item["access_token"]})["accounts"]
     names = {a["account_id"]: f"{a.get('official_name') or a['name']} ({a.get('mask') or '?'})" for a in accts}
     if db is not None and item.get("mode", "primary") == "primary":
         today = datetime.now().date().isoformat()
+        updated = last_update(cfg, item)
+        if updated is None:
+            print(f"note: {item.get('institution') or item.get('item_id')}: Plaid gave no last-update time; "
+                  f"balance dates unknown", file=sys.stderr)
+        elif warn := stale_warning(item.get("institution") or item.get("item_id") or "?", updated):
+            print(f"WARNING: {warn}", file=sys.stderr)
         rows = []
         for a in accts:
             b = a["balances"]
@@ -183,7 +224,8 @@ def account_names(cfg: dict, item: dict, db: sqlite3.Connection | None = None) -
             rows.append((today, "plaid", a["account_id"], names[a["account_id"]], item.get("institution") or "",
                          None if cur is None else f"{cur:.2f}",
                          None if b.get("available") is None else f"{b['available']:.2f}",
-                         b.get("iso_currency_code") or "USD", b.get("last_updated_datetime"), limit_str(b)))
+                         b.get("iso_currency_code") or "USD", b.get("last_updated_datetime") or updated,
+                         limit_str(b)))
         db.executemany(ctdb.UPSERT_BALANCE_LIMIT, rows)
     return names
 
@@ -195,8 +237,10 @@ def limit_str(b: dict) -> str | None:
 
 def to_row(t: dict, names: dict, institution: str, now: str) -> tuple:  # matches ctdb.upsert_sql
     amount = -t["amount"]  # Plaid: positive = money out
+    # transacted_at: most banks send no datetime, so fall back to the day (v_ledger dates a pending row by it)
+    made = t.get("datetime") or t.get("authorized_datetime") or t.get("authorized_date") or t.get("date")
     return (t["transaction_id"], t["account_id"], names.get(t["account_id"], t["account_id"]), institution,
-            None if t["pending"] else t["date"], t.get("datetime") or t.get("authorized_datetime"),
+            None if t["pending"] else t["date"], made,
             f"{amount:.2f}", t["name"], t.get("merchant_name") or "", t.get("pending_transaction_id") or "",
             int(t["pending"]), t.get("iso_currency_code") or "USD", now, now, "plaid")
 
@@ -246,6 +290,7 @@ def sync_holdings(cfg: dict, item: dict, db: sqlite3.Connection) -> int:
                      str(h["quantity"]), str(h.get("institution_price")), str(h.get("institution_value")),
                      None if h.get("cost_basis") is None else str(h["cost_basis"]),
                      h.get("iso_currency_code") or "USD"))
+    updated = last_update(cfg, item)
     hold_sql = ctdb.UPSERT_HOLDING
     if item.get("mode") == "compare":  # another feed owns these positions; keep Plaid's copy out of the views
         hold_sql = hold_sql.replace("INTO holdings ", "INTO holdings_compare ")
@@ -255,8 +300,8 @@ def sync_holdings(cfg: dict, item: dict, db: sqlite3.Connection) -> int:
             (today, "plaid", a["account_id"], names[a["account_id"]], item.get("institution") or "",
              None if a["balances"].get("current") is None else f"{a['balances']['current']:.2f}",
              None if a["balances"].get("available") is None else f"{a['balances']['available']:.2f}",
-             a["balances"].get("iso_currency_code") or "USD", a["balances"].get("last_updated_datetime"),
-             limit_str(a["balances"]))
+             a["balances"].get("iso_currency_code") or "USD",
+             a["balances"].get("last_updated_datetime") or updated, limit_str(a["balances"]))
             for a in r["accounts"]])
     db.commit()
     return len(rows)
@@ -286,7 +331,14 @@ def sync(cfg: dict, db_path: Path) -> None:
                 failed += 1
                 print(f"error: {label}: {e}", file=sys.stderr)
         for dup, orig in ctdb.flag_late_duplicates(db):
-            print(f"late duplicate hidden: {dup} (copy of {orig})")
+            name, day, amount, desc = db.execute("SELECT account_name, posted, amount, description FROM txns "
+                                                 "WHERE txn_id = ?", (dup,)).fetchone()
+            first = db.execute("SELECT posted FROM txns WHERE txn_id = ?", (orig,)).fetchone()[0]
+            print(f"late duplicate hidden: {name} {day} {amount} {desc!r} = the {first} charge re-delivered by the "
+                  f"feed ({dup} copy of {orig}; undo: DELETE FROM late_duplicates WHERE txn_id = '{dup}')")
+        for name, day, lag in ctdb.lagging_holdings(db, "plaid"):
+            print(f"WARNING: holdings: {name} positions were last reported {day} ({lag} days behind the feed); "
+                  f"shown as of that day", file=sys.stderr)
     finally:
         db.close()
     save_config(cfg)

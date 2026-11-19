@@ -124,3 +124,42 @@ def test_healthy_items_all_store_todays_balances(tmp_path, monkeypatch):
     plaid_sync.sync(cfg, path)
     con = sqlite3.connect(path)
     assert con.execute("SELECT COUNT(DISTINCT account_id) FROM balances WHERE snapshot_date > '2026-01-02'").fetchone()[0] == 6
+
+
+def test_cached_balance_is_dated_by_plaids_last_bank_update_and_a_stale_one_warns(tmp_path, monkeypatch, capsys):
+    """/accounts/get answers from Plaid's cache with no date; /item/get says when Plaid last reached the bank."""
+    def call(cfg, path, body):
+        if path == "/item/get":
+            return {"status": {"transactions": {"last_successful_update": "2026-01-03T08:00:00Z",
+                                                "last_failed_update": "2026-02-01T08:00:00Z"},
+                               "investments": {"last_successful_update": "2026-01-05T09:30:00.123Z"}}}
+        return {"accounts": ACCOUNTS}
+
+    monkeypatch.setattr(plaid_sync, "call", call)
+    con = ctdb.connect(tmp_path / "t.db")
+    plaid_sync.account_names({}, {"access_token": "x", "institution": "Bank"}, con)
+    assert {r[0] for r in con.execute("SELECT as_of FROM balances")} == {"2026-01-05T09:30:00+00:00"}
+    (warn,) = [l for l in capsys.readouterr().err.splitlines() if l.startswith("WARNING")]
+    assert warn.startswith("WARNING: Bank: Plaid last got data from the bank on 2026-01-05 (")
+
+
+def test_fresh_item_does_not_warn_and_no_update_time_leaves_as_of_empty(db, capsys):
+    from datetime import datetime, timedelta, timezone
+    now = datetime(2026, 11, 18, 12, tzinfo=timezone.utc)
+    assert plaid_sync.stale_warning("Bank", (now - timedelta(days=3)).isoformat(), now) is None
+    assert "5 days ago" in plaid_sync.stale_warning("Bank", (now - timedelta(days=5, hours=1)).isoformat(), now)
+    plaid_sync.account_names({}, {"access_token": "x", "institution": "Bank"}, db)  # stub has no "status"
+    assert {r[0] for r in db.execute("SELECT as_of FROM balances")} == {None}
+    assert "WARNING" not in capsys.readouterr().err
+
+
+def test_pending_charge_gets_a_date(db):
+    t = {"transaction_id": "p1", "account_id": "card1", "amount": 12.5, "pending": True, "date": "2026-11-17",
+         "authorized_date": "2026-11-16", "name": "Auth : Toll"}
+    row = plaid_sync.to_row(t, {}, "Bank", "2026-11-17T14:00:00+00:00")
+    assert row[4] is None and row[5] == "2026-11-16"
+    db.execute(ctdb.upsert_sql("txns"), row)
+    # a row stored before this fix has neither date: the day the sync first saw it stands in
+    old = list(row); old[0], old[5] = "p0", None
+    db.execute(ctdb.upsert_sql("txns"), old)
+    assert dict(db.execute("SELECT txn_id, date FROM v_ledger")) == {"p1": "2026-11-16", "p0": "2026-11-17"}
