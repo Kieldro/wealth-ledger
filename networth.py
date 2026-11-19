@@ -44,19 +44,31 @@ READ_QTY = {"onchain", "exchange-api", "simplefin"}
 STALE_DAYS = 7  # a counted account this far behind the freshest one is named in "warnings" (closed? feed broken?)
 
 
+class Rows(dict):
+    """label -> number from the balance sheet, plus `other`: label -> what column B holds for each labelled row
+    that has no number there ("" when blank, else the text)."""
+    other: dict[str, str]
+
+
 def sheet_rows() -> dict[str, float]:
+    rows = Rows()
+    rows.other = {}
     if not SHEET:
-        return {}
+        return rows
     out = subprocess.run(
         ["gws", "sheets", "spreadsheets", "values", "get", "--params",
-         json.dumps({"spreadsheetId": SHEET, "range": "balance sheet!A1:B140",
+         json.dumps({"spreadsheetId": SHEET, "range": "balance sheet!A:B",  # whole tab: it grows
                      "valueRenderOption": "UNFORMATTED_VALUE"})],
         capture_output=True, text=True, check=True).stdout
-    rows = {}
     for r in json.loads(out).get("values", []):
-        if len(r) >= 2 and isinstance(r[1], (int, float)) and str(r[0]).strip():
-            label = str(r[0]).strip()
-            rows.setdefault(label, float(r[1]))  # first occurrence wins
+        label = str(r[0]).strip() if r else ""
+        if not label:
+            continue
+        value = r[1] if len(r) >= 2 else ""
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            rows.setdefault(label, float(value))  # first occurrence wins
+        elif label not in rows:
+            rows.other.setdefault(label, str(value).strip())
     return rows
 
 
@@ -78,9 +90,12 @@ def valuation_from(source: str, snapshot_date: str, today: str) -> str:
 
 def compute(today: str | None = None) -> dict:
     """{assets, liabilities, net_worth, sheet_net_worth, lines, warnings}; each line says where its number came
-    from and, as "as_of", the day it is from (the oldest of its accounts; None for a typed-in sheet value). warnings name what may make the total wrong without failing: a synced row that no longer matches any
-    account, a counted balance that stopped updating, an account whose feed sent no balance."""
+    from and, as "as_of", the day it is from (the oldest of its accounts; None for a typed-in sheet value). warnings
+    name what may make the total wrong without failing: a synced row that no longer matches any account, a counted
+    balance that stopped updating, an account whose feed sent no balance, a configured row the sheet no longer has
+    (or has text in), which counts as nothing."""
     sheet = sheet_rows()
+    other = getattr(sheet, "other", {})
     today = today or date.today().isoformat()
     db = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
     accts = db.execute("SELECT account_id, account_name, balance, kind, snapshot_date, as_of FROM v_accounts").fetchall()
@@ -103,6 +118,14 @@ def compute(today: str | None = None) -> dict:
     for label in list(ASSET_ROWS) + list(LIAB_ROWS):
         key = label.rstrip("*")
         if key not in sheet and key not in SYNCED:
+            if key in vals or key in SHEET_EXCLUDED or other.get(key) == "":
+                continue  # a blank cell is zero
+            if key in other:
+                warnings.append(f"Net worth: the balance sheet's \"{key}\" row holds text ({other[key][:30]!r}), "
+                                f"not a number, so it is not counted.")
+            else:
+                warnings.append(f"Net worth: the balance sheet has no \"{key}\" row any more, so it is not counted. "
+                                f"Renamed in the sheet? Fix the label there or in personal.json \"networth\".")
             continue
         is_liab = label in LIAB_ROWS
         sval = sheet.get(key)
@@ -133,14 +156,15 @@ def compute(today: str | None = None) -> dict:
                       "live": -bal if liab else bal, "used": -bal if liab else bal, "from": "live (no sheet row)",
                       "synced": True, "as_of": seen[aid], "kind": kind})
 
-    newest = max((a[4] for a in accts if a[4]), default=None)
     for aid, name, bal, kind, snap, _ in accts:
         if aid not in used_ids:
             continue
+        # against today, not the freshest account: when every feed stops together they all still get named
+        last = seen[aid]
         if bal is None:
             warnings.append(f"Net worth: {name} has no balance from its feed and is counted as 0.")
-        elif snap and abs(bal) >= 0.01 and (date.fromisoformat(newest) - date.fromisoformat(snap)).days > STALE_DAYS:
-            warnings.append(f"Net worth: {name} was last updated {snap} and is still counted at that balance "
+        elif last and abs(bal) >= 0.01 and (date.fromisoformat(today) - date.fromisoformat(last)).days > STALE_DAYS:
+            warnings.append(f"Net worth: {name} was last updated {last} and is still counted at that balance "
                             f"(closed, re-linked under a new name, or its feed stopped?).")
 
     assets = sum(l["used"] for l in lines if l["type"] == "asset")
