@@ -1562,8 +1562,10 @@ function pearson(xs, ys) {
 }
 // Correlation of net worth's moves with a benchmark's: Pearson r of the paired % changes between the range's daily
 // points, weekly (last point of each week) once they span over 120 days, else per benchmark close. Sheet snapshots are
-// left out: months apart, anything that rose over the same years would look correlated. A daily point is synced in the
-// morning, so it is paired with the close before its date. n = changes used, shown in the chip's title.
+// left out: months apart, anything that rose over the same years would look correlated. A daily point is that date's
+// value, its investments at the market close on or before it (/api/trend "close"; a weekend carries Friday's), so it
+// is paired with the benchmark's close on or before that same day ("lag": how many days before each grid date its close
+// is). Points with no new close since the last one (a weekend) are skipped. n = changes used, shown in the chip's title.
 function benchCorr(t, u, inR, k) {
   const b = t.benchmarks;
   if (!b?.dates?.length) return null;
@@ -1572,9 +1574,11 @@ function benchCorr(t, u, inR, k) {
   let j = 0;
   for (const p of inR) {
     if (p.kind !== "daily") continue;
-    while (j + 1 < b.dates.length && b.dates[j + 1] < p.date) j++;
-    const d = b.dates[j], v = b.prices[k]?.[j], px = UP ? UP[j] : 1;
-    if (!(d < p.date) || (dayMs(p.date) - dayMs(d)) / DAY_MS > 8 || !(v > 0 && px > 0)) continue;
+    const day = p.close || p.date;
+    while (j + 1 < b.dates.length && b.dates[j + 1] <= day) j++;
+    const lag = b.lag?.[k]?.[j], d = Math.round(dayMs(b.dates[j]) / DAY_MS) - lag;  // day number of that close
+    const v = b.prices[k]?.[j], px = UP ? UP[j] : 1;
+    if (!(b.dates[j] <= day) || lag == null || Math.round(p.x / DAY_MS) - d > 8 || !(v > 0 && px > 0)) continue;
     pairs.push({x: p.x, date: p.date, nw: p.y, bd: d, bv: v / px});
   }
   const weekly = pairs.length > 1 && (pairs.at(-1).x - pairs[0].x) / DAY_MS > 120;
@@ -1594,7 +1598,7 @@ function benchCorr(t, u, inR, k) {
 }
 // The same figure for a range that reaches back before the daily snapshots: an estimate. Net worth is read off a
 // straight line between the points it is given (never before the first or after the last: no slope is invented) at
-// the benchmark's own dates, a day on (the morning rule above), weekly once the points span over 120 days.
+// the benchmark's own dates (the same day, as above), weekly once the points span over 120 days.
 function benchCorrEst(t, u, pts, k) {
   const b = t.benchmarks;
   pts = pts.filter((p, i) => p.x !== pts[i + 1]?.x);  // one point per day
@@ -1603,7 +1607,7 @@ function benchCorrEst(t, u, pts, k) {
   const first = pts[0], last = pts.at(-1), weekly = (last.x - first.x) / DAY_MS > 120, kept = [];
   let j = 0;
   for (let i = 0; i < b.dates.length; i++) {
-    const x = dayMs(b.dates[i]) + DAY_MS, v = b.prices[k]?.[i], px = UP ? UP[i] : 1;
+    const x = dayMs(b.dates[i]), v = b.prices[k]?.[i], px = UP ? UP[i] : 1;
     if (x < first.x || x > last.x || !(v > 0 && px > 0)) continue;
     while (j + 2 < pts.length && pts[j + 1].x <= x) j++;
     const p = pts[j], q = pts[j + 1], row = {x, nw: p.y + (q.y - p.y) * (x - p.x) / (q.x - p.x), bv: v / px};
@@ -1662,14 +1666,17 @@ function renderTrend(t) {
   $("trendunitnote").textContent = !P ? "" : spotOnly ? `Every date converted at today's rate (${priceAt(t.spot[u].usd, u)}).`
     : `Priced at each day's ${UNITS[u].close} (nearest previous trading day).`;
   $("trend")?.setAttribute("aria-label", "Net worth trend" + (P ? " in " + UNITS[u].long : ""));
-  $("trendnote").textContent = SHEETLESS ? "One point per daily sync, from your linked accounts."
+  const missed = Object.keys(t.valued?.fallback || {}), valued = !t.valued?.accounts ? ""
+    : " Accounts with holdings are valued at each day's market close (a weekend carries Friday's)" +
+      (missed.length ? `, except ${missed.join(", ")}: no close, so at the feed's own price.` : ".");
+  $("trendnote").textContent = (SHEETLESS ? "One point per daily sync, from your linked accounts."
     : t.sheet_only_total != null
     ? `Sheet-only items (${f0(t.sheet_only_total)}: home, self-custody crypto, metals, vehicles, cash…) are added to the daily points as a constant at today's sheet values, so daily moves are synced accounts only.` +
       (!sheet.length && s.length < 14 ? " History is short; it grows by one point per daily sync." : "")
-    : "Sheet total unavailable; showing synced accounts only.";
+    : "Sheet total unavailable; showing synced accounts only.") + valued;
   const pts = [
     ...sheet.map(p => ({x: dayMs(p.date), y: p.net_worth, date: p.date, kind: "sheet", source: p.source})),
-    ...s.map(p => ({x: dayMs(p.date), y: p.total ?? p.synced, date: p.date, kind: "daily", synced: p.synced, total: p.total})),
+    ...s.map(p => ({x: dayMs(p.date), y: p.total ?? p.synced, date: p.date, kind: "daily", synced: p.synced, total: p.total, close: p.close})),
   ].filter(p => p.y != null && isFinite(p.x)).sort((a, b) => a.x - b.x);
   if (P) {  // y = USD / that date's close; dates without a price are skipped in this unit
     for (let i = pts.length - 1; i >= 0; i--) {
@@ -1769,6 +1776,7 @@ function renderTrend(t) {
           if (p.est) out.push(`  estimate: straight line between the ${fmtDay(p.between[0])} and ${fmtDay(p.between[1])} snapshots`);
           else if (p.kind === "sheet") out.push(`  sheet snapshot${p.source ? " · " + p.source : ""}`);
           else if (p.total != null) out.push(`  synced ${usdF0(p.synced)} + sheet ${usdF0(t.sheet_only_total)}`);
+          if (p.close) out.push(`  investments at the ${fmtDay(p.close)} close`);
           return out; }}}}}
   });
   if (u !== "USD" && !spotOnly) $("trendunitnote").textContent += " Everything else on the page uses the latest price.";

@@ -109,7 +109,52 @@ def test_synced_series_carries_per_account_balances_and_the_trend_does_not_send_
     assert series[0] == {"date": "2026-01-05", "synced": -200.0, "accounts": {"c1": -200.0}}
     assert series[1] == {"date": "2026-01-06", "synced": 700.0, "accounts": {"c1": -200.0, "s1": 900.0}}
     monkeypatch.setattr(server, "networth", lambda refresh=False: {"data": None, "error": "x"})
-    assert all(set(p) <= {"date", "synced", "total"} for p in server.api_trend({})["series"])
+    assert all(set(p) <= {"date", "synced", "total", "close"} for p in server.api_trend({})["series"])
+
+
+def test_synced_series_values_holdings_at_each_days_close(dbfile, monkeypatch):
+    """The feed's balance lags the market: a snapshot's holdings are revalued at each later day's close (a weekend
+    carries Friday's), money market at $1, the snapshot's non-holdings remainder kept, no-close symbols at the feed's
+    price (and named); an account without holdings keeps its balance."""
+    con = ctdb.connect(dbfile)
+    con.execute("DELETE FROM balances")
+    con.execute("INSERT INTO account_kind VALUES ('ira','retirement',NULL), ('s1','savings',NULL)")
+    for d in ("2026-11-06", "2026-11-07", "2026-11-08", "2026-11-09"):  # Fri..Mon
+        con.execute(ctdb.UPSERT_BALANCE, (d, "simplefin", "s1", "Savings (9)", "Bank", "500.00", None, "USD", None))
+    # one IRA snapshot on Friday, at Thursday's prices (the feed is late): 100 AAA @10, 200 money market, 7 ZZZ @10,
+    # 30 of cash outside any position; then nothing new from the feed until Monday
+    con.execute(ctdb.UPSERT_BALANCE, ("2026-11-06", "simplefin", "ira", "IRA (1)", "Broker", "1300.00", None, "USD", None))
+    for sym, sh, px in (("AAA", 100, 10.0), ("SPAXX", 200, 1.0), ("ZZZ", 7, 10.0)):
+        con.execute(ctdb.UPSERT_HOLDING, ("2026-11-06", "simplefin", "ira", "IRA (1)", "Broker", sym, sym, sym,
+                                          str(sh), str(px), str(sh * px), "0", "USD"))
+    con.executemany("INSERT INTO security_prices VALUES (?,?,?,?)", [
+        ("2026-11-05", "AAA", 10.0, "y"), ("2026-11-06", "AAA", 11.0, "y"), ("2026-11-09", "AAA", 12.0, "y")])
+    con.commit()
+    con.close()
+    series = server.synced_series()
+    ira = {p["date"]: p["accounts"]["ira"] for p in series}
+    assert ira == {"2026-11-06": pytest.approx(1100 + 200 + 70 + 30), "2026-11-07": pytest.approx(1400.0),
+                   "2026-11-08": pytest.approx(1400.0), "2026-11-09": pytest.approx(1200 + 200 + 70 + 30)}
+    assert [p["accounts"]["s1"] for p in series] == [500.0] * 4
+    assert [p.get("close") for p in series] == ["2026-11-06", "2026-11-06", "2026-11-06", "2026-11-09"]
+    assert series.fallback == {"ZZZ": 4} and series.repriced == 1
+    monkeypatch.setattr(server, "networth", lambda refresh=False: {"data": None, "error": "x"})
+    out = server.api_trend({})
+    assert out["series"][1] == {"date": "2026-11-07", "synced": 1900.0, "close": "2026-11-06", "total": None}
+    assert out["valued"] == {"accounts": 1, "fallback": {"ZZZ": 4}}
+
+
+def test_benchmark_lag_says_which_days_close_each_date_carries(dbfile, monkeypatch):
+    monkeypatch.setattr(server, "networth", lambda refresh=False: {"data": None, "error": "x"})
+    con = ctdb.connect(dbfile)
+    con.executemany("INSERT INTO prices VALUES (?,?,?,?)", [
+        ("2026-11-06", "SPX", 6000.0, "y"), ("2026-11-09", "SPX", 6100.0, "y")])  # Fri, Mon
+    con.commit()
+    con.close()
+    b = server.trend_prices(["2026-11-06"], today="2026-11-09")["benchmarks"]
+    assert b["dates"] == ["2026-11-06", "2026-11-07", "2026-11-08", "2026-11-09"]
+    assert b["prices"]["SPX"] == [6000.0, 6000.0, 6000.0, 6100.0] and b["lag"]["SPX"] == [0, 1, 2, 0]
+    assert b["lag"]["IXIC"] == [None] * 4
 
 
 def test_period_changes_short_history():

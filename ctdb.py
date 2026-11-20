@@ -20,6 +20,8 @@ networth_history  past whole-net-worth points (Total Equity per dated balance-sh
               spreadsheets), from insights/nw_history.py; the dashboard trend shows them before the daily series.
 prices        daily USD closes of BTC (per coin) and XAU (per troy oz of gold), from insights/prices.py; the
               dashboard trend uses them to price net worth in bitcoin and in gold.
+security_prices  daily USD closes of the stocks, ETFs and funds held in counted accounts (symbol as the feed spells
+              it), from insights/holding_prices.py; the dashboard trend values each day's holdings at them.
 amazon_items / amazon_refunds  items and refunds from an Amazon "Your Orders" data export (insights/amazon.py;
               no addresses, gift details or tracking). amazon_matches links an Amazon card charge (txn_id) to the
               order items it paid for (items = JSON [[asin, line], ...]; discount = rewards points that paid the
@@ -83,6 +85,9 @@ CREATE TABLE IF NOT EXISTS networth_history (
   date TEXT PRIMARY KEY, net_worth REAL, assets REAL, liabilities REAL, source TEXT, fetched_at TEXT
 );
 CREATE TABLE IF NOT EXISTS prices (
+  date TEXT NOT NULL, symbol TEXT NOT NULL, usd REAL NOT NULL, source TEXT, PRIMARY KEY (date, symbol)
+);
+CREATE TABLE IF NOT EXISTS security_prices (
   date TEXT NOT NULL, symbol TEXT NOT NULL, usd REAL NOT NULL, source TEXT, PRIMARY KEY (date, symbol)
 );
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);  -- prices_updated: when the closes were last fetched (UTC)

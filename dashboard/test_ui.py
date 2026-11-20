@@ -914,6 +914,28 @@ def test_trend_range_buttons(desk):
     assert pressed(desk, "trendrng") == ["1W"] and points(desk) == count["1W"]
 
 
+def test_correlation_pairs_each_point_with_the_same_days_close(desk):
+    """A daily point is its date's value (investments at that day's close, a weekend carrying Friday's): net worth that
+    moves exactly with the S&P 500 on the same day correlates at 1, weekend points add no change, and the same moves
+    one day late (the old feed's lag) do not."""
+    r = desk.evaluate("""() => {
+      const dates = [], spx = [], lag = [];
+      for (let i = 0; i < 14; i++) {  // Mon 2026-11-02 .. Sun 11-15: weekday closes, weekends carry Friday's
+        const d = new Date(2026, 10, 2 + i, 12), wd = d.getDay(), iso = `2026-11-${String(2 + i).padStart(2, "0")}`;
+        const l = wd === 6 ? 1 : wd === 0 ? 2 : 0;
+        dates.push(iso); lag.push(l);
+        spx.push(l ? spx.at(-1) : 6000 * (1 + 0.01 * Math.sin(1.7 * i)));
+      }
+      const t = {benchmarks: {dates, prices: {SPX: spx}, lag: {SPX: lag}}};
+      const pts = (shift) => dates.map((date, i) => ({x: dayMs(date), y: 1e6 * spx[Math.max(0, i - shift)] / spx[0],
+        date, kind: "daily", close: dates[i - lag[i]]}));
+      return [benchCorr(t, "USD", pts(0), "SPX"), benchCorr(t, "USD", pts(1), "SPX")];
+    }""")
+    same, late = r
+    assert same["r"] == pytest.approx(1.0) and same["n"] == 9  # 10 weekdays -> 9 changes; the weekend adds none
+    assert late["r"] < 0.9
+
+
 def test_correlation_chips_measured_and_estimated(desk):
     chips, note = desk.locator("#trendbench button .corr"), desk.locator("#trendcorrnote")
     measured, estimate = re.compile(r"^[−-]?[01]\.\d\d$"), re.compile(r"^≈[−-]?[01]\.\d\dest$", re.I)

@@ -47,6 +47,7 @@ sys.path.insert(0, ROOT)
 import personal  # noqa: E402
 from insights import budget, inherited_ira, monthly_email, overdraft, rental, subscriptions  # noqa: E402
 from insights import prices as price_hist  # noqa: E402
+from insights import holding_prices  # noqa: E402
 
 _DASH = personal.section("dashboard")
 DB = os.path.expanduser(os.environ.get("WEALTH_LEDGER_DB") or "~/.local/share/wealth-ledger/txns.db")
@@ -165,23 +166,68 @@ def read_status(now: datetime | None = None) -> dict:
     return out
 
 
-def synced_series() -> list[dict]:
+class Series(list):
+    """synced_series() points, plus `fallback`: {symbol: days} of holdings valued at the feed's own price for want of
+    a usable market close, and `repriced`: how many accounts were valued from their holdings on some day."""
+    fallback: dict[str, int]
+    repriced: int
+
+
+def synced_series() -> Series:
     """Daily sum of synced balances networth.py counts (non-custodial/crypto, non-superseded), carried forward.
-    Each day also has "accounts" (account_id -> balance that day) so period_changes can compare like with like."""
+    Each day also has "accounts" (account_id -> value that day) so period_changes can compare like with like.
+
+    An account whose latest snapshot on or before the day has holdings is valued at that day's market close instead
+    of its feed balance (the feed's balances and prices arrive a day or two late, and irregularly): shares from that
+    snapshot x the last close on or before the day (a weekend or holiday carries the trading day before), plus the
+    snapshot's balance minus its holdings' market values (cash and anything unpriced); see holding_prices.revalue.
+    Such a day also has "close": the newest market close used, the date its investments are valued as of."""
     rows = q(f"""SELECT b.snapshot_date d, b.account_id a, CAST(b.balance AS REAL) bal FROM balances b
                  JOIN account_kind k USING (account_id)
                  WHERE k.kind IN ({','.join('?' * len(NW_KINDS))})
                    AND b.account_id NOT IN (SELECT account_id FROM superseded)
                  ORDER BY b.snapshot_date""", NW_KINDS)
+    snaps: dict[tuple, list] = {}  # (date, account) -> [(symbol, shares, price, market value)] of that snapshot
+    try:
+        held_rows = q(f"""SELECT h.snapshot_date d, h.account_id a, h.symbol sym,
+                                 CAST(NULLIF(TRIM(h.shares), '') AS REAL) shares,
+                                 CAST(NULLIF(TRIM(h.price), '') AS REAL) price,
+                                 CAST(NULLIF(TRIM(h.market_value), '') AS REAL) mv
+                          FROM holdings h JOIN balances b USING (snapshot_date, source, account_id)
+                          JOIN account_kind k USING (account_id)
+                          WHERE k.kind IN ({','.join('?' * len(NW_KINDS))})
+                            AND h.account_id NOT IN (SELECT account_id FROM superseded)""", NW_KINDS)
+    except sqlite3.OperationalError:  # older DB without holdings: balances only
+        held_rows = []
+    for h in held_rows:
+        snaps.setdefault((h["d"], h["a"]), []).append((h["sym"], h["shares"], h["price"], h["mv"]))
+    con = db()
+    try:
+        closes = holding_prices.load(con, {(p[0] or "").strip() for ps in snaps.values() for p in ps})
+    finally:
+        con.close()
     dates = sorted({r["d"] for r in rows})
-    last, out = {}, []
+    last, held, out = {}, {}, Series()
+    out.fallback, repriced = {}, set()
     by_date: dict[str, list] = {}
     for r in rows:
         by_date.setdefault(r["d"], []).append(r)
     for d in dates:
         for r in by_date[d]:
             last[r["a"]] = r["bal"] or 0.0
-        out.append({"date": d, "synced": round(sum(last.values()), 2), "accounts": dict(last)})
+            held[r["a"]] = snaps.get((d, r["a"]))  # none: that snapshot has no holdings, its balance stands
+        vals, newest, missed = dict(last), None, set()
+        for a, positions in held.items():
+            if positions:
+                vals[a], c, fb = holding_prices.revalue(last[a], positions, closes, d)
+                newest = max(newest or c, c) if c else newest
+                missed |= fb
+                repriced.add(a)
+        for sym in missed:
+            out.fallback[sym] = out.fallback.get(sym, 0) + 1
+        out.append({"date": d, "synced": round(sum(vals.values()), 2), "accounts": vals,
+                    **({"close": newest} if newest else {})})
+    out.repriced = len(repriced)
     return out
 
 
@@ -315,7 +361,8 @@ def api_summary(params) -> dict:
 
 def api_trend(params) -> dict:
     nw = networth()
-    series = [{"date": s["date"], "synced": s["synced"]} for s in synced_series()]
+    full = synced_series()
+    series = [{k: s[k] for k in ("date", "synced", "close") if k in s} for s in full]
     sheet_const = None
     if nw["data"]:
         sheet_const = round(sum((l["used"] if l["type"] == "asset" else -l["used"])
@@ -324,11 +371,17 @@ def api_trend(params) -> dict:
         s["total"] = round(s["synced"] + sheet_const, 2) if sheet_const is not None else None
     first_daily = series[0]["date"] if series else None
     points = sheet_points(first_daily)
+    fallback = getattr(full, "fallback", {})
     return {"series": series, "sheet_only_total": sheet_const,
             "note": "Synced accounts from daily snapshots (custodial accounts, crypto exchange wallets and "
-                    "superseded feeds excluded, as in networth.py) plus today's sheet-only total held constant.",
+                    "superseded feeds excluded, as in networth.py) plus today's sheet-only total held constant. "
+                    "Each point is that date's value: accounts with holdings are valued at the market close on or "
+                    "before the date (\"close\": the newest close used; a weekend carries Friday's), the rest at "
+                    "their synced balance.",
+            "valued": {"accounts": getattr(full, "repriced", 0), "fallback": fallback},
             "first_daily": first_daily, "sheet_points": points,
-            **trend_prices([s["date"] for s in series] + [p["date"] for p in points])}
+            **trend_prices([s["date"] for s in series] + [s["close"] for s in series if "close" in s]
+                           + [p["date"] for p in points])}
 
 
 # where the valuations providers keep today's spot (valuations/crypto.py, valuations/metals.py detail JSON)
@@ -360,12 +413,14 @@ def trend_prices(dates, today: str | None = None) -> dict:
     prices: {sym: {date: usd}} for every trend date (series + sheet_points; that day's close or the nearest earlier
     one; a date before the first stored price is left out). spot: {sym: {usd, date, source}} = the latest price,
     from the prices table or, when newer, the valuations providers' live spot; None when neither has one.
-    benchmarks: {dates: [...bench_dates], prices: {sym: [usd or None per date]}} for the trend's overlays (S&P 500,
-    Nasdaq, gold, bitcoin) and every unit with a price history, so the page can price an overlay in the shown unit."""
+    benchmarks: {dates: [...bench_dates], prices: {sym: [usd or None per date]}, lag: {sym: [days from that close to
+    the date, or None, per date]}} for the trend's overlays (S&P 500, Nasdaq, gold, bitcoin) and every unit with a
+    price history, so the page can price an overlay in the shown unit and pair a net-worth point with the same day's
+    close (lag 2 on a Sunday: Friday's)."""
     today = today or date.today().isoformat()
     dates = sorted(set(dates))
     grid = bench_dates(dates, today)
-    out = {"prices": {}, "spot": {}, "benchmarks": {"dates": grid, "prices": {}}}
+    out = {"prices": {}, "spot": {}, "benchmarks": {"dates": grid, "prices": {}, "lag": {}}}
     for sym in price_hist.SYMBOLS + price_hist.BENCHMARKS:
         try:
             rows = q("SELECT date, usd, source FROM prices WHERE symbol = ? ORDER BY date", (sym,))
@@ -375,6 +430,9 @@ def trend_prices(dates, today: str | None = None) -> dict:
         if sym not in price_hist.LATEST_ONLY:
             at = price_hist.asof(series, grid)
             out["benchmarks"]["prices"][sym] = [at.get(d) for d in grid]
+            day = price_hist.asof([(d, d) for d, _ in series], grid)
+            out["benchmarks"]["lag"][sym] = [(date.fromisoformat(d) - date.fromisoformat(day[d])).days if d in day
+                                             else None for d in grid]
         if sym in price_hist.BENCHMARKS:
             continue
         out["prices"][sym] = price_hist.asof(series, dates)

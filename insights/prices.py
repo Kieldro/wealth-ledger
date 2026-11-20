@@ -20,6 +20,8 @@ Free, keyless sources only:
                 the latest rate is kept (LATEST_ONLY): the dashboard converts every date at today's rate, since
                 Yahoo's rial history is the official 42,000 until Jan 2026 and the market rate after it.
   SPX, IXIC     Yahoo index closes (^GSPC, ^IXIC); weekdays only, like gold.
+Also the daily closes of every security held in a counted account, into `security_prices` (insights/holding_prices.py,
+same Yahoo source), so the trend can value holdings at each day's close.
 Also one number that is not a price: the Cleveland Fed's daily nowcast of year-over-year consumer-price inflation,
 kept as JSON in `meta['inflation']` for the dashboard's sign-in page (see cleveland_nowcast).
 
@@ -303,6 +305,7 @@ def main(argv=None) -> int:
     ap.add_argument("--db", type=Path, default=DEFAULT_DB)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
+    from insights import holding_prices  # here: it imports this module
     try:
         db = ctdb.connect(args.db)
         try:  # before the prices, so a failed symbol doesn't cost the day's inflation figure; never fatal itself
@@ -310,11 +313,20 @@ def main(argv=None) -> int:
             infl = f"inflation {infl['pct']}% a year for {infl['month']} as of {infl['asof']} ({infl['source']})"
         except Exception as e:  # noqa: BLE001 - shows only on the sign-in page; not worth a dashboard warning
             infl = f"inflation not updated ({e})"
+        try:  # closes of the securities held (the trend values holdings at them); its failure is reported after
+            held, held_err = holding_prices.update(db, dry_run=args.dry_run), None
+        except Exception as e:  # noqa: BLE001
+            held, held_err = None, e
         report = update(db, dry_run=args.dry_run)
+        if held_err:
+            raise RuntimeError(f"holding closes: {held_err}")
     except Exception as e:  # noqa: BLE001 - one line for the sync log
         print(f"error: prices: {e}", file=sys.stderr)
         return 1
     parts = [infl]
+    if held["symbols"]:
+        parts.append(f"holdings {held['rows']} closes of {held['symbols']} symbols fetched"
+                     + (f" (no close for {', '.join(held['failed'])})" if held["failed"] else ""))
     for sym, r in report.items():
         lo, hi, n = db.execute("SELECT MIN(date), MAX(date), COUNT(*) FROM prices WHERE symbol = ?", (sym,)).fetchone()
         fetched = ", ".join(f"{s}..{e}" for s, e in r["ranges"])
