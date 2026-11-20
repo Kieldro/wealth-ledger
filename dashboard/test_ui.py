@@ -917,16 +917,17 @@ def test_trend_range_buttons(desk):
 def test_correlation_chips_measured_and_estimated(desk):
     chips, note = desk.locator("#trendbench button .corr"), desk.locator("#trendcorrnote")
     measured, estimate = re.compile(r"^[−-]?[01]\.\d\d$"), re.compile(r"^≈[−-]?[01]\.\d\dest$", re.I)
-    desk.locator('#trendrng button[data-r="1M"]').click()  # all daily snapshots: measured
-    expect(chips).to_have_text([measured] * 3)
-    expect(desk.locator("#trendbench .corr.est")).to_have_count(0)
-    expect(note).to_be_hidden()
-    for r in ("1W", "All"):  # too few days / a stretch drawn as a straight line between sheet points: estimates
+    for r in ("1M", "1W"):  # all daily snapshots: measured, however few changes a week has
         desk.locator(f'#trendrng button[data-r="{r}"]').click()
-        expect(chips).to_have_text([estimate] * 3)
-        expect(desk.locator("#trendbench .corr.est")).to_have_count(3)
-        expect(note).to_be_visible()
-        expect(note).to_contain_text("≈ = estimate")
+        expect(chips).to_have_text([measured] * 3)
+        expect(desk.locator("#trendbench .corr.est")).to_have_count(0)
+        expect(note).to_be_hidden()
+    expect(desk.locator('#trendbench button[data-b="SPX"]')).to_have_attribute("title", re.compile(r"correlation [−-]?[01]\.\d\d .*\(\d+ changes, daily snapshots only\)"))
+    desk.locator('#trendrng button[data-r="All"]').click()  # a stretch drawn as a straight line between sheet points: estimates
+    expect(chips).to_have_text([estimate] * 3)
+    expect(desk.locator("#trendbench .corr.est")).to_have_count(3)
+    expect(note).to_be_visible()
+    expect(note).to_contain_text("≈ = estimate")
     spx = desk.locator('#trendbench button[data-b="SPX"]')
     lines = desk.evaluate("Chart.getChart('trend').data.datasets.length")
     spx.click()  # a chip draws its benchmark over the trend

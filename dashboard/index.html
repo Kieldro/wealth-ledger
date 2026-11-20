@@ -1551,10 +1551,10 @@ function benchPaths(t, u, inR) {
     return {key: k, data, at: new Map(data.map(p => [p.date, p])), pct: data.length ? 100 * (data.at(-1).y / first.y - 1) : null};
   });
 }
-// Pearson r of two equal-length lists; null under 3 pairs or when either never moves
+// Pearson r of two equal-length lists; null under 2 pairs or when either never moves (2 pairs give ±1)
 function pearson(xs, ys) {
   const n = xs.length;
-  if (n < 3) return null;
+  if (n < 2) return null;
   const mx = xs.reduce((a, v) => a + v, 0) / n, my = ys.reduce((a, v) => a + v, 0) / n;
   let sxy = 0, sxx = 0, syy = 0;
   for (let i = 0; i < n; i++) { const dx = xs[i] - mx, dy = ys[i] - my; sxy += dx * dy; sxx += dx * dx; syy += dy * dy; }
@@ -1563,7 +1563,7 @@ function pearson(xs, ys) {
 // Correlation of net worth's moves with a benchmark's: Pearson r of the paired % changes between the range's daily
 // points, weekly (last point of each week) once they span over 120 days, else per benchmark close. Sheet snapshots are
 // left out: months apart, anything that rose over the same years would look correlated. A daily point is synced in the
-// morning, so it is paired with the close before its date. n = changes used; under 8 the caller shows r as an estimate.
+// morning, so it is paired with the close before its date. n = changes used, shown in the chip's title.
 function benchCorr(t, u, inR, k) {
   const b = t.benchmarks;
   if (!b?.dates?.length) return null;
@@ -1617,11 +1617,11 @@ function benchCorrEst(t, u, pts, k) {
   }
   return {r: pearson(xs, ys), n: xs.length, weekly, since: first.date};
 }
-// Each chip's figure for the range. Measured: 8+ daily changes and a range that starts no earlier than the daily
-// snapshots do (their first date comes from the data). Otherwise an estimate, shown so it can't pass for a measured
-// one: "few" = under 8 daily changes; "line" = straight lines between snapshots, starting where the range does: on
-// the line from the snapshot before it to the first one inside it (the dashed line the chart draws), so the figure
-// follows the range.
+// Each chip's figure for the range. Measured: a range that starts no earlier than the daily snapshots do (their first
+// date comes from the data), from however many daily changes it has (2+), so a week reads like a month. Otherwise an
+// estimate, shown so it can't pass for a measured one: straight lines between snapshots, starting where the range
+// does: on the line from the snapshot before it to the first one inside it (the dashed line the chart draws), so the
+// figure follows the range.
 function syncBenchCorr(t, u, inR, pts, start) {
   const real = inR.filter(p => !p.est), daily = pts.filter(p => p.kind === "daily"), d0 = daily[0];
   const early = !d0 || (pts[0].x < d0.x && start < d0.x);  // the range reaches back before the dailies, where there is data
@@ -1629,27 +1629,24 @@ function syncBenchCorr(t, u, inR, pts, start) {
   const lead = prev && next && next.x > start
     ? {x: start, y: prev.y + (next.y - prev.y) * (start - prev.x) / (next.x - prev.x), date: new Date(start).toISOString().slice(0, 10)} : null;
   const path = lead ? [lead, ...real] : real, onLine = lead ? ` between the ${fmtDay(prev.date)} and ${fmtDay(next.date)} snapshots` : "";
-  const kinds = new Set();
-  let few = 0;
+  let anyEst = false;
   for (const btn of document.querySelectorAll("#trendbench button")) {
     const k = btn.dataset.b, el = btn.querySelector(".corr");
     const c = !benchHas(t, k) ? null : early ? benchCorrEst(t, u, path, k) : benchCorr(t, u, inR, k);
     const num = c?.r != null ? (c.r < 0 ? "−" : "") + Math.abs(c.r).toFixed(2) : "";
-    const est = !num ? "" : early ? "line" : c.n < 8 ? "few" : "";
-    el.classList.toggle("est", !!est);
+    const est = !!num && early;
+    el.classList.toggle("est", est);
     el.textContent = !c ? "" : !num ? "—" : est ? "≈" + num : num;
-    if (est) { el.insertAdjacentHTML("beforeend", "<small>est</small>"); kinds.add(est); if (est === "few") few = c.n; }
+    if (est) { el.insertAdjacentHTML("beforeend", "<small>est</small>"); anyEst = true; }
     const key = " 1 = move together, 0 = unrelated, −1 = opposite. Net worth moves also include pay, spending and transfers.";
     const steps = c && `${c.weekly ? "weekly" : "daily"} moves`;
-    btn.title = BENCH[k].label + (!c ? "" : !num ? `: too few points in this range for a correlation (${c.n} changes, needs 3).`
-      : est === "few" ? `: estimate only, ≈${num}, from just ${c.n} daily changes in this range (a measured correlation needs 8), so it can swing a lot.` + key
-      : est === "line" ? `: estimate only, ≈${num}. ${d0 ? `This range reaches back before the daily snapshots began (${fmtDay(d0.date)})` : "There are no daily snapshots yet"}, so net worth between snapshots is taken as a straight line${lead ? `, starting on the one${onLine}` : ""} (${steps} since ${fmtDay(c.since)}, ${c.n} changes). It mostly shows the long-run trend, not real day-to-day co-movement.` + key
+    btn.title = BENCH[k].label + (!c ? "" : !num ? (c.n < 2 ? `: too few points in this range for a correlation (${c.n} change${c.n === 1 ? "" : "s"}, needs 2).` : ": no correlation in this range: one of the two never moves.")
+      : est ? `: estimate only, ≈${num}. ${d0 ? `This range reaches back before the daily snapshots began (${fmtDay(d0.date)})` : "There are no daily snapshots yet"}, so net worth between snapshots is taken as a straight line${lead ? `, starting on the one${onLine}` : ""} (${steps} since ${fmtDay(c.since)}, ${c.n} changes). It mostly shows the long-run trend, not real day-to-day co-movement.` + key
       : `: correlation ${num} between its ${steps} and net worth's since ${fmtDay(c.since)} (${c.n} changes, daily snapshots only).` + key);
   }
   const note = $("trendcorrnote"), since = d0 ? ` Measured correlations use the daily snapshots since ${fmtDay(d0.date)} (${daily.length - 1} changes).` : "";
-  note.hidden = !kinds.size;
-  note.textContent = kinds.has("line") ? `≈ = estimate: ${lead ? `this range starts on a straight line${onLine}, and ` : ""}net worth between snapshots is taken as a straight line, so these mostly reflect the long-run trend, not real day-to-day co-movement.` + since
-    : kinds.has("few") ? `≈ = estimate: only ${few} daily changes in this range; a measured correlation needs 8.` + since : "";
+  note.hidden = !anyEst;
+  note.textContent = anyEst ? `≈ = estimate: ${lead ? `this range starts on a straight line${onLine}, and ` : ""}net worth between snapshots is taken as a straight line, so these mostly reflect the long-run trend, not real day-to-day co-movement.` + since : "";
 }
 const pctStr = p => p == null || !isFinite(p) ? "n/a" : (p < 0 ? "−" : "+") + Math.abs(p).toFixed(1) + "%";
 

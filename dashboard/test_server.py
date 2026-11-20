@@ -670,12 +670,13 @@ def test_page_marks_an_estimated_correlation_so_it_cannot_pass_for_a_measured_on
     tag, its own style, a visible note and a title that says estimate. The first daily date comes from the data."""
     import re
     html = open(server.os.path.join(server.os.path.dirname(server.__file__), "index.html")).read()
-    for needle in ("function benchCorrEst(t, u, pts, k)", 'el.classList.toggle("est", !!est)', 'est ? "≈" + num : num',
+    for needle in ("function benchCorrEst(t, u, pts, k)", 'el.classList.toggle("est", est)', 'est ? "≈" + num : num',
                    'el.insertAdjacentHTML("beforeend", "<small>est</small>")', 'id="trendcorrnote" hidden',
                    "net worth between snapshots is taken as a straight line, so these mostly reflect", ": estimate only, ≈${num}",
                    "this range starts on a straight line${onLine}", "const path = lead ? [lead, ...real] : real",
-                   "daily = pts.filter(p => p.kind === \"daily\"), d0 = daily[0]", "c.n < 8 ? \"few\""):
+                   "daily = pts.filter(p => p.kind === \"daily\"), d0 = daily[0]", "const est = !!num && early;", "if (n < 2) return null;"):
         assert needle in html, needle
+    assert "needs 8" not in html and '"few"' not in html  # a short range of daily snapshots is measured, not an estimate
     est = re.search(r"\.bench button \.corr\.est \{([^}]*)\}", html).group(1)
     assert "font-style: italic" in est and "opacity" in est and "underline dashed" in est
     js = html[html.index("function benchCorr("):html.index("const pctStr")]
