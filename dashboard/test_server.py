@@ -533,20 +533,20 @@ def test_page_shows_loading_and_never_leaves_a_blank_after_a_failed_request():
 
 def test_page_shows_the_last_numbers_first_and_says_what_it_is_waiting_on():
     """Guard on the page source (behaviour is checked in a headless browser): the first load draws the server's last
-    good answers, dimmed until fresh ones land; each request in flight is named in plain words with its seconds so
+    good answers, at full strength (never dimmed) until fresh ones land; each request in flight is named in plain words with its seconds so
     far, its usual time and its time limit; a failed refresh keeps the numbers and says from when. Only how long
     requests take is kept in the browser, never an answer."""
     import re
     html = open(server.os.path.join(server.os.path.dirname(server.__file__), "index.html")).read()
     for needle in ('<div id="loadlist" hidden></div>', 'await get("/api/last", {timeout: 8e3})', "const last = everLoaded ? null : showLast();",
                    'setLoad(k, k in data ? "old" : "loading")', 'setLoad(k, failed.has(k) ? "stale" : pending[k] ? "old" : null, failed.get(k))',
-                   '.card[data-load="old"] > .secbody, #hero[data-load="old"] :is(.big, .mid, .chips) { opacity: .55;',
                    'const TIMES_KEY = "wl.loadtimes", TIMES_KEPT = 8;', "localStorage.setItem(TIMES_KEY, JSON.stringify(loadTimes))",
                    '"usually " + secsText(u) + " · "', "gives up at ${Math.round(f.timeout / 1000)}s", "slower than usual",
                    "ms > Math.max(2 * u, 2000)", 'Math.floor(ms / 1000) + "s"', 'title="${esc(f.method + " " + f.path)}"',
                    "showing the numbers from ${fmtFrom(from)} meanwhile", "`+${more} more`", "Couldn't refresh · showing numbers from ${esc(fmtFrom(shownAt.summary))}",
                    "Showing the numbers from ${esc(fmtFrom(Math.min(...parts.map(k => shownAt[k]))))}."):
         assert needle in html, needle
+    assert not re.search(r'\[data-load="old"\][^{]*\{[^}]*(opacity|filter)', html), "earlier numbers must not be dimmed while reloading"
     names = html[html.index("const REQ_NAME = {"):html.index("// How long each request usually takes")]
     named = set(re.findall(r"(\w+): \"", names))
     parts = html[html.index("const PARTS = {"):html.index("const SKEL =")]

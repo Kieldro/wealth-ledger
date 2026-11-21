@@ -564,6 +564,11 @@ def test_slow_answers_show_the_last_saved_numbers_meanwhile(full, open_page):
     expect(page.locator("#cardscard .loadbox")).to_have_count(0)
     expect(page.locator("#loadbar")).to_be_visible()
     expect(page.locator("#loadlist")).to_contain_text(re.compile(r"Showing the numbers from .* meanwhile"))
+    page.wait_for_timeout(800)  # past when the old fade would have started and finished
+    faded = page.evaluate("""() => ['#cardscard > .secbody', '#hero .big', '#hero .mid', '#hero .chips']
+        .flatMap(q => [...document.querySelectorAll(q)]).map(e => [getComputedStyle(e).opacity, getComputedStyle(e).filter])
+        .filter(([o, f]) => o !== '1' || f !== 'none')""")
+    assert faded == [], faded  # the earlier numbers stay at full strength while new ones load
     for hold in slow:
         hold.release()
     all_loaded(page)
