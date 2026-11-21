@@ -148,6 +148,30 @@ def test_configured_row_gone_from_the_sheet_or_holding_text_is_named(nw, monkeyp
     assert text.startswith('Net worth: the balance sheet\'s "Total metals value" row holds text (\'see notes\')')
 
 
+@pytest.mark.parametrize("cell", ["#N/A (Could not fetch url)", "see notes", ""])
+def test_row_with_no_number_in_the_sheet_is_still_counted_at_its_valuation(nw, monkeypatch, cell):
+    """A sheet formula that errors (or text, or a blank cell) must not drop an asset a valuation already prices."""
+    sheet = {k: v for k, v in SHEET.items() if k != "Total metals value"}
+    monkeypatch.setattr(networth, "sheet_rows", lambda: rows(sheet, **{"Total metals value": cell}))
+    nw.execute("INSERT INTO valuations VALUES (?,?,?,?,?,?)", (DAY, "Total metals value", 1700.0, "spot: test", None, DAY))
+    nw.commit()
+    r = networth.compute(today=DAY)
+    (metals,) = [l for l in r["lines"] if l["line"] == "Total metals value"]
+    assert (metals["used"], metals["sheet"], metals["as_of"]) == (1700.0, None, DAY)
+    assert metals["from"].startswith("estimate (spot: test")
+    assert r["net_worth"] == 147350.0 - 1500.0 + 1700.0 and r["warnings"] == []
+
+
+def test_excluded_row_stays_out_even_with_a_valuation(nw, monkeypatch):
+    sheet = {k: v for k, v in SHEET.items() if k != "Total metals value"}
+    monkeypatch.setattr(networth, "sheet_rows", lambda: rows(sheet, **{"Total metals value": "#N/A"}))
+    monkeypatch.setattr(networth, "SHEET_EXCLUDED", {"Total metals value"})
+    nw.execute("INSERT INTO valuations VALUES (?,?,?,?,?,?)", (DAY, "Total metals value", 1700.0, "spot: test", None, DAY))
+    nw.commit()
+    r = networth.compute(today=DAY)
+    assert "Total metals value" not in used(r) and r["warnings"] == []
+
+
 def test_sheet_rows_reads_the_whole_tab_and_keeps_what_is_not_a_number(monkeypatch):
     import json
     import types

@@ -117,8 +117,10 @@ def compute(today: str | None = None) -> dict:
 
     for label in list(ASSET_ROWS) + list(LIAB_ROWS):
         key = label.rstrip("*")
-        if key not in sheet and key not in SYNCED:
-            if key in vals or key in SHEET_EXCLUDED or other.get(key) == "":
+        # no number in the sheet (blank, text, an error such as #N/A, or no row): a valuation still counts, since it
+        # replaces the sheet's number anyway; without one a blank cell is zero and anything else is warned about
+        if key not in sheet and key not in SYNCED and (key not in vals or key in SHEET_EXCLUDED):
+            if key in SHEET_EXCLUDED or other.get(key) == "":
                 continue  # a blank cell is zero
             if key in other:
                 warnings.append(f"Net worth: the balance sheet's \"{key}\" row holds text ({other[key][:30]!r}), "
