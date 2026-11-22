@@ -344,6 +344,11 @@ td.neg { color: var(--neg); font-weight: 600; }
 .privbtn .slash { display: none; }
 .privbtn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
 .privbtn[aria-pressed="true"] .slash { display: inline; }
+/* report a bug: a mailto: link (only when personal.json names an address) */
+a.fbk { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 999px; padding: 4px 11px; text-decoration: none; transition: border-color .12s; }
+a.fbk:hover { border-color: var(--accent); }
+a.fbk svg { flex: none; }
 .unitpick select { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; max-width: 220px; }
 .big.long { font-size: 24px; overflow-wrap: anywhere; }
 .big .u { font-size: .5em; font-weight: 600; color: var(--text-2); letter-spacing: 0; margin-left: .25em; }
@@ -460,6 +465,7 @@ footer code { font-size: 11.5px; }
 }
 @media (pointer: coarse), (max-width: 640px) {  /* fingers: nothing tappable under 44px */
   button, .unitpick select, .filters input, .filters select { min-height: 44px; padding-left: 14px; padding-right: 14px; }
+  a.fbk { min-height: 44px; padding-left: 14px; padding-right: 14px; }
   .rng button, .bench button, .seg button { min-height: 44px; min-width: 44px; }
   .mv button { width: 44px; height: 44px; padding: 0; font-size: 11px; }
   body.reordering .sechd { padding-top: 0; padding-bottom: 0; margin-top: -8px; margin-bottom: -8px; }
@@ -485,12 +491,12 @@ footer code { font-size: 11.5px; }
   header.top { flex-wrap: wrap; gap: 0 8px; margin-bottom: 10px; }
   .hdr-r, #status { display: contents; }
   header.top h1 { order: 1; margin-right: auto; }
-  #themepick, #privbtn { order: 2; }
+  #themepick, #privbtn, #fbk { order: 2; }
   /* the swatches drop down across the header's full width, under the first row */
   header.top { position: relative; }
   .themepick { position: static; }
   .themes { left: 0; right: 0; top: 50px; justify-content: space-around; border-radius: 14px; }
-  #privbtn { width: 44px; padding: 0; justify-content: center; }
+  #privbtn, #fbk { width: 44px; padding: 0; justify-content: center; }
   #refresh, #status > button { order: 3; }
   header.top::after { content: ""; order: 4; flex-basis: 100%; }
   #status .pill { order: 5; margin-top: 8px; min-height: 30px; }
@@ -552,6 +558,7 @@ if ("serviceWorker" in navigator) addEventListener("load", function () { navigat
 <div id="loadbar" role="progressbar" aria-label="Loading"></div>
 <div id="loadlist" hidden></div>
 <div class="wrap">
+  {{demo}}
   <header class="top">
     <h1><svg viewBox="0 0 16 16" aria-hidden="true"><rect width="16" height="16" rx="4"/><path d="M3 11l3-3 2 2 5-5" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>Wealth Ledger</h1>
     <div class="hdr-r">
@@ -559,6 +566,7 @@ if ("serviceWorker" in navigator) addEventListener("load", function () { navigat
       <button type="button" id="privbtn" class="privbtn" aria-pressed="false" title="Hide amounts (privacy mode)"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/><path class="slash" d="M4 4l16 16"/></svg><span class="hide-sm" id="privlbl">Hide amounts</span></button>
       <label class="unitpick" id="unitpick" hidden><span class="hide-sm">Values in </span><select id="unitsel" aria-label="Show every value in"></select><span class="note num hide-sm" id="unitprice"></span></label>
       <div class="status" id="status"><span class="pill"><span class="spin" aria-hidden="true"></span>Loading…</span></div>
+      {{feedback}}
       <form method="post" action="/logout" class="logout hide-sm"><button type="submit" title="Sign out of this device">Log out</button></form>
     </div>
   </header>
@@ -585,6 +593,7 @@ if ("serviceWorker" in navigator) addEventListener("load", function () { navigat
     <div class="card golink tile tile-l" data-go="liability" tabindex="0" role="button" title="Show every debt"><div class="label"><svg class="ico ico-l" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="8"/><g fill="none" stroke="#fff" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.9" width="9" height="6.2" rx="1.2"/><path d="M3.5 7h9M5.3 9.4h2.2"/></g></svg>Liabilities</div><div class="mid num" id="liabs"><span class="skel" role="status" aria-label="Loading"></span></div>
       <div class="tline" id="mortline"></div><div class="tline" id="cardline"></div><div class="chips" id="liabchg"></div></div>
   </section>
+  {{demo_peers}}
 
   <div class="grid" style="margin-top:12px">
     <section class="card span-8" id="draftscard" data-nav="Drafts">
@@ -782,6 +791,10 @@ if ("serviceWorker" in navigator) addEventListener("load", function () { navigat
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
+// The public demo (/demo/) is this page on made-up data: its requests go to /demo/api/*, which the server answers
+// from the demo's own generated answers; it has no session, no sync and nothing to change.
+const DEMO = document.documentElement.dataset.demo === "1";
+const apiPath = p => DEMO ? p.replace(/^\/api\//, "/demo/api/") : p;
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const usd0 = new Intl.NumberFormat("en-US", {style: "currency", currency: "USD", maximumFractionDigits: 0});
 const usd2 = new Intl.NumberFormat("en-US", {style: "currency", currency: "USD"});
@@ -850,7 +863,7 @@ const fmtShort = iso => { if (!iso) return "—"; const d = new Date(iso); if (i
   return d.toDateString() === new Date().toDateString() ? d.toLocaleTimeString("en-US", {hour: "numeric", minute: "2-digit"}) : d.toLocaleDateString("en-US", {month: "short", day: "numeric"}); };
 const md = iso => `${+iso.slice(5, 7)}/${+iso.slice(8, 10)}`;
 // Institution logo from ~/.config/wealth-ledger/icons/<slug>.png; removed again if there is no such file.
-const ico = inst => { const s = String(inst || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""); return s ? `<img class="ico" alt="" src="/icons/${s}.png">` : ""; };
+const ico = inst => { if (DEMO) return ""; const s = String(inst || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""); return s ? `<img class="ico" alt="" src="/icons/${s}.png">` : ""; };
 document.addEventListener("error", e => { if (e.target.matches?.("img.ico")) e.target.remove(); }, true);
 const stripNum = s => String(s || "").replace(/\s*\([0-9a-f-]+\)$/, "");
 // Every request shows in the bar at the top and gives up after a time limit, so nothing waits forever. The longer
@@ -927,8 +940,8 @@ async function get(path, opts = {}) {
   const timer = setTimeout(() => ac.abort(), timeout);
   const id = flightStart(f);
   try {
-    const r = await fetch(path, {cache: "no-store", credentials: "same-origin", signal: ac.signal, ...init});
-    if (r.status === 401) { location.href = "/login"; throw new Error("signed out"); }
+    const r = await fetch(apiPath(path), {cache: "no-store", credentials: "same-origin", signal: ac.signal, ...init});
+    if (r.status === 401 && !DEMO) { location.href = "/login"; throw new Error("signed out"); }
     if (!r.ok) throw new Error("the server answered with an error (HTTP " + r.status + ")");
     const d = await r.json();
     noteTime(key, performance.now() - f.t0);
@@ -963,6 +976,7 @@ function setSyncNote(text, {bad = false, lines = [], hideAfter = 0} = {}) {
     `<button type="button" aria-label="Dismiss" title="Dismiss">×</button>`;
   if (text && hideAfter) syncNoteTimer = setTimeout(() => setSyncNote(""), hideAfter);
 }
+/*{{feedback_js}}*/
 $("syncnote").onclick = e => { if (e.target.closest("button")) setSyncNote(""); };
 // elapsedS: how long the sync has run when the server knows (it started it); null for one it only found running
 function followSync(elapsedS, note = "") {
@@ -1225,6 +1239,7 @@ $("totop").addEventListener("click", () => scrollTo({top: 0, behavior: "smooth"}
 addEventListener("scroll", () => { $("totop").hidden = scrollY < 700; }, {passive: true});
 
 function srcBadge(c) {
+  if (c.source) return `<span class="badge b-${esc(c.source)}">${esc(c.source)}</span>`;  // one source for the whole category
   const parts = ["live", "est", "sheet"].filter(k => c[k]);
   if (parts.length > 1) return `<span class="badge b-mixed" title="${esc(parts.map(k => f0(c[k]) + " " + k).join(", "))}">mixed</span>`;
   return `<span class="badge b-${parts[0] || "live"}">${parts[0] || "live"}</span>`;
@@ -1278,7 +1293,9 @@ function renderConnect(c, empty) {
 let SHEETLESS = false;  // this ledger has no spreadsheet behind it: synced accounts only
 // not "Refresh": it never calls the banks (Sync now does). HTML: a phone shows the first word only
 const refreshLabel = () => SHEETLESS ? "Reload" : 'Re-read<span class="hide-sm"> sheet</span>';
+let shownSummary = null;  // the summary the totals show (the demo's visitor's own numbers are not data.summary)
 function renderSummary(s) {
+  shownSummary = s;
   const st = s.status || {};
   const was = SHEETLESS;
   SHEETLESS = !!s.sheetless; document.body.classList.toggle("sheetless", SHEETLESS);
@@ -1295,7 +1312,10 @@ function renderSummary(s) {
   // a sync that ended with an error says so in words, and always has at least one line saying what went wrong
   if (st.rc && !sync.length) sync.push(`The last sync ended with an error (exit code ${st.rc}), so some accounts may not have updated.`);
   const bad = !!sync.length;
-  $("agebar").innerHTML = agePill(s);
+  $("agebar").innerHTML = DEMO ? "" : agePill(s);
+  if (DEMO) {  // nothing to sync or re-read: say what the numbers are instead
+    $("status").innerHTML = `<span class="pill" id="syncpill" title="Made-up numbers, generated fresh every day"><span class="dot"></span>Sample data</span>`;
+  } else {
   $("status").innerHTML =
     `<span class="pill${bad ? " syncbad" : ""}" id="syncpill" title="${esc(`Last finished sync: ${fmtTime(st.last_run)}` + (bad ? "\n" + sync.map(p => "• " + p).join("\n") : ""))}"><span class="dot ${bad ? "bad" : ""}"></span>` +
     (st.rc ? `Sync problem<span class="hide-sm"> · last ran ${esc(fmtShort(st.last_run))}</span>` : `<span class="hide-sm">Synced </span>${esc(fmtShort(st.last_run))}`) + `</span>` +
@@ -1303,6 +1323,7 @@ function renderSummary(s) {
     `<button id="refresh" title="${SHEETLESS ? "Recompute the totals from the last sync" : "Re-read the balance sheet (networth.py)"}; does not call the banks">${refreshLabel()}</button>`;
   $("refresh").onclick = () => load(true);
   $("syncnow").onclick = syncNow; paintSync();
+  }
   // a touch screen has no tooltip: tapping the pill opens the same list in the warnings banner
   if (bad) $("syncpill").onclick = () => { const d = $("problems").querySelector("details"); if (d) { d.open = true; d.scrollIntoView({behavior: "smooth", block: "center"}); } };
   const probs = [...sync];
@@ -1357,6 +1378,7 @@ function renderSummary(s) {
   // the mortgage is most of the debt: every other slice is drawn at least MIN_SLICE of the ring so it can be seen and
   // hovered; the tooltip and the table keep the real amounts
   drawDonut("liabdonut", slices.map(x => ({...x, color: css(x.color), shown: Math.max(x.value, MIN_SLICE * owedTotal)})), owedTotal);
+  if (DEMO) window.demoSummary?.(s);
 }
 
 // Assets and Liabilities tiles: one big number each, then what is behind it. Assets: the categories as one bar in the
@@ -1510,7 +1532,7 @@ $("unitsel").onchange = () => {
 };
 
 // headline net worth in the chosen unit, priced at the latest spot; USD amount + price as a sub-line
-function renderNW(s = data.summary) {
+function renderNW(s = shownSummary || data.summary) {
   if (data.trend) syncUnit();
   const el = $("nw"), sub = $("nwunit"), u = dispUnit();
   sub.textContent = ""; sub.removeAttribute("title");
@@ -2681,7 +2703,8 @@ syncTheme();
 document.addEventListener("click", e => { if (!$("themepick").contains(e.target)) $("themepick").open = false; });
 document.addEventListener("keydown", e => { if (e.key === "Escape" && $("themepick").open) { $("themepick").open = false; $("themepick").querySelector("summary").focus(); } });
 load();
-checkSync();
+if (!DEMO) checkSync();
 </script>
+{{demo_js}}
 </body>
 </html>

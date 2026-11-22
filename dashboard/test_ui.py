@@ -21,6 +21,7 @@ import shutil
 import tempfile
 import time
 from pathlib import Path
+from urllib.parse import unquote
 
 import pytest
 
@@ -1264,3 +1265,172 @@ def test_page_loads_nothing_else_from_outside_and_the_test_copy_of_chartjs_is_th
     tag = re.search(r"<script[^>]+" + re.escape(CHART_URL) + r"[^>]*>", html).group(0)
     digest = base64.b64encode(hashlib.sha512(CHART_JS.read_bytes()).digest()).decode()
     assert f'integrity="sha512-{digest}"' in tag, "testdata's Chart.js is not the file the page pins"
+
+
+# ---------- the public demo ----------
+DEMO_SAYS = {  # what each demo card can only say once the demo's own data is in
+    "draftscard": "DEMO EMPLOYER INC PAYROLL", "alloccard": "Cash & bank", "trendcard": "daily snapshots",
+    "liabcard": "Total owed", "cardscard": "Demo Rewards Visa", "acctscard": "Demo Bank Checking",
+    "holdscard": "VFFVX", "spendcard": "Income vs spending", "txcard": "Demo", "budget": "Groceries",
+    "subscard": re.compile("netflix", re.I), "cryptocard": "Hardware wallet",
+}
+OWN = {"age": "29", "income": "68,000", "cash": "10000", "retirement": "20000", "investments": "5000", "home": "200000",
+       "mortgage": "150000", "car": "10000", "carloan": "4000", "cards": "1000", "btc": "", "gold": ""}
+
+
+def open_demo(open_page, inst, phone=False):
+    """The demo as a visitor finds it: signed out, from the sign-in page's button."""
+    page = open_page(inst, phone=phone, signed_in=False, go=False)
+    page.goto(inst.url + "/login")
+    page.locator("#demo").click()
+    page.wait_for_selector(READY)
+    expect(page).to_have_url(inst.url + "/demo/")
+    return page
+
+
+def banner_on_top(page):
+    box = page.locator("#demobar").bounding_box()
+    assert box and box["y"] <= 0.5 and box["height"] > 20, box
+    expect(page.locator("#demobar")).to_contain_text("Demo mode: sample data for a fictional household, not real accounts.")
+
+
+def test_demo_from_the_sign_in_page_fills_every_card_with_sample_data(full, open_page):
+    page = open_demo(open_page, full)
+    all_loaded(page)
+    expect(page).to_have_title("Demo · Wealth Ledger")
+    expect(page.locator("header.top h1 .demotag")).to_have_text("DEMO")
+    banner_on_top(page)
+    expect(page.locator("#demobar")).to_contain_text("Alex, 35")
+    shown = cards(page)
+    assert {c["id"] for c in shown} == set(DEMO_SAYS) and hidden_cards(page) == {"ira", "rentalcard"}
+    for c in shown:
+        assert c["cells"] + c["charts"] > 0, c
+        expect(page.locator("#" + c["id"])).to_contain_text(DEMO_SAYS[c["id"]])
+    expect(page.locator("#syncpill")).to_have_text("Sample data")
+    expect(page.locator("#syncnow, #refresh, form.logout:visible")).to_have_count(0)
+    body = page.locator("body").inner_text()
+    for real in ("Example Bank", "Example Rewards", "EXAMPLE EMPLOYER", "Cold Wallet", NET_WORTH, ASSETS):
+        assert real not in body, real  # nothing of the instance's own (signed-in) ledger
+    assert not page.context.cookies()  # no session, no demo cookie
+
+
+def test_demo_banner_stays_at_the_top_at_both_widths(full, open_page):
+    for phone in (False, True):
+        page = open_demo(open_page, full, phone=phone)
+        banner_on_top(page)
+        page.evaluate("scrollTo(0, document.body.scrollHeight)")
+        page.wait_for_timeout(100)
+        banner_on_top(page)
+        expect(page.locator("#ownbtn")).to_be_visible()
+        expect(page.locator("#demoexit")).to_be_visible()
+        expect(page.locator("#demoback")).to_be_hidden()
+        page.evaluate("scrollTo(0, 0)")
+        fits_the_screen(page)
+
+
+def test_people_your_age_compares_the_demo_person_with_his_band(full, open_page):
+    page = open_demo(open_page, full)
+    expect(page.locator("#peerwho")).to_have_text("Alex, 35 · against ages 35-44")
+    expect(page.locator("#peernw")).to_contain_text("median $155,600")
+    expect(page.locator("#peernw")).to_contain_text(re.compile(r"(above|below|about the same as) the median family, (between|below|above)"))
+    expect(page.locator("#peerinc")).to_contain_text("Alex: $82,000 · median $114,100")
+    expect(page.locator("#peerinc")).to_contain_text("below the median household")
+    expect(page.locator("#peersrc")).to_contain_text("Survey of Consumer Finances 2025")
+    expect(page.locator("#peersrc")).to_contain_text("HINC-02")
+    expect(page.locator("#peersrc")).to_contain_text("per family or household")
+    expect(page.locator("#peernw .pbar .tick")).to_have_count(4)
+    lookups = page.evaluate("""() => { const P = JSON.parse(document.getElementById('demodata').textContent).peers, b = window.demoPeers.band;
+        return [b(P.net_worth, 34), b(P.net_worth, 35), b(P.net_worth, 75), b(P.income, 24), b(P.income, 25), b(P.income, 14),
+                window.demoPeers.pctWords(155600, b(P.net_worth, 40)), window.demoPeers.pctPos(155600, b(P.net_worth, 40))].map(x => Array.isArray(x) ? x.slice(0, 2) : x); }""")
+    assert lookups == [[0, 34], [35, 44], [75, None], [15, 24], [25, 34], None,
+                       "between the median and the 75th percentile", 50]
+
+
+def test_own_numbers_round_trip_stays_in_the_browser(full, open_page):
+    page = open_demo(open_page, full)
+    demo_nw = page.locator("#nw").inner_text()
+    sent = []
+    page.on("request", lambda r: sent.append((r.method, r.url, r.post_data or "")))
+    page.locator("#ownbtn").click()
+    expect(page.locator("#owndlg")).to_be_visible()
+    expect(page.locator("#owndlg")).to_contain_text("Full bank syncing isn't available to the public yet")
+    for k, v in OWN.items():
+        page.fill(f"#ownform [name={k}]", v)
+    page.locator("#ownsave").click()
+    expect(page.locator("#owndlg")).to_be_hidden()
+    has_totals(page, "$90,000", "$245,000", "$155,000")
+    expect(page.locator("#demowho")).to_contain_text("your numbers")
+    expect(page.locator("#syncpill")).to_have_text("Your numbers")
+    assert hidden_cards(page) == {c for c in DEMO_SAYS if c not in ("alloccard", "liabcard")} | {"ira", "rentalcard"}
+    expect(page.locator("#cats")).to_contain_text("$200,000")
+    expect(page.locator("#liabcats")).to_contain_text("$155,000")
+    assert page.evaluate("Chart.getChart('donut').data.datasets[0].data.length") == 5  # cash, retirement, brokerage, home, car
+    expect(page.locator("#peerwho")).to_have_text("You, 29 · against ages under 35")
+    expect(page.locator("#peerinc")).to_contain_text("You: $68,000 · median $94,880")
+    stored = page.evaluate("JSON.parse(localStorage.getItem('wl.demo.own'))")
+    assert stored == {"age": 29, "income": 68000, "cash": 10000, "retirement": 20000, "investments": 5000, "home": 200000,
+                      "mortgage": 150000, "car": 10000, "carloan": 4000, "cards": 1000}
+    assert not [s for s in sent if s[0] != "GET" or "68000" in s[1] or "150000" in s[1] or "/demo/api" not in s[1] and "/api/markets" not in s[1]], sent
+
+    page.reload()  # kept in this browser
+    page.wait_for_selector(READY)
+    has_totals(page, "$90,000", "$245,000", "$155,000")
+    page.locator("#demoback").click()  # the demo again, the numbers still kept
+    expect(page.locator("#nw")).to_have_text(demo_nw)
+    assert len(cards(page)) == len(DEMO_SAYS) and page.evaluate("localStorage.getItem('wl.demo.own')")
+    expect(page.locator("#ownbtn")).to_have_text("Show my numbers")
+
+    page.locator("#ownbtn").click()  # bitcoin and gold at the prices on the markets line
+    btc = page.evaluate("""() => +[...document.querySelectorAll('.mktbar .mkt > div')].find(d => d.querySelector('.n').textContent.trim() === 'Bitcoin').querySelector('b').textContent.replace(/[^0-9.]/g, '')""")
+    expect(page.locator("#ownprices")).to_contain_text(f"${btc:,.0f}/BTC")
+    page.fill("#ownform [name=btc]", "0.5")
+    page.locator("#ownsave").click()
+    expect(page.locator("#nw")).to_have_text(f"${90000 + 0.5 * btc:,.0f}")
+
+    page.locator("#ownbtn").click()
+    page.locator("#ownclear").click()  # gone from the browser, back to the demo
+    expect(page.locator("#nw")).to_have_text(demo_nw)
+    assert page.evaluate("localStorage.getItem('wl.demo.own')") is None
+    expect(page.locator("#ownbtn")).to_have_text("Use your own numbers")
+    assert not [s for s in sent if s[0] != "GET"], sent
+
+
+def test_own_numbers_work_without_storage(full, open_page):
+    page = open_page(full, signed_in=False, go=False)
+    page.add_init_script("Object.defineProperty(window, 'localStorage', {get() { throw new Error('blocked'); }})")
+    page.goto(full.url + "/demo/")
+    page.wait_for_selector(READY)
+    page.locator("#ownbtn").click()
+    for k, v in OWN.items():
+        page.fill(f"#ownform [name={k}]", v)
+    page.locator("#ownsave").click()
+    has_totals(page, "$90,000", "$245,000", "$155,000")
+
+
+def test_demo_cannot_change_anything_or_reach_the_real_ledger(full, open_page):
+    page = open_demo(open_page, full)
+    for path in ("/api/summary", "/api/accounts", "/api/last", "/"):
+        r = page.request.get(full.url + path, max_redirects=0)
+        assert r.status in (401, 303), path
+    for path in ("/demo/api/sync", "/demo/api/refresh"):
+        r = page.request.post(full.url + path)
+        assert r.status == 403 and "Not available in the demo" in r.json()["error"], path
+    assert full.sync_runs() == 0
+
+
+def test_report_a_bug_link_on_every_page_has_no_money_in_it(full, open_page):
+    signed_in = open_page(full)
+    demo = open_demo(open_page, full, phone=True)
+    out = open_page(full, signed_in=False, go=False)
+    out.goto(full.url + "/login")
+    for page, mode in ((out, "signed out"), (signed_in, "signed in"), (demo, "demo")):
+        link = page.locator("#fbk")
+        expect(link).to_be_visible()
+        page.evaluate("fbFill(document.getElementById('fbk'))")  # what clicking it does before the mail app opens
+        href = link.get_attribute("href")
+        assert href.startswith("mailto:bugs@example.com?subject=Wealth%20Ledger%20bug%20report") and len(href) < 1800, href
+        body = unquote(href.split("&body=")[1])
+        assert f"Mode: {mode}" in body and "Browser: Mozilla/5.0" in body and "Screen: " in body and "Screen: -" not in body
+        assert "$" not in href and "$" not in body and not re.search(r"\d{4,}(?!x\d)", re.sub(r"Browser: .*|Time: .*|Screen: .*|App version: .*", "", body)), body
+    assert "(demo)" in unquote(demo.locator("#fbk").get_attribute("href"))
+    reachable(demo, "#fbk")

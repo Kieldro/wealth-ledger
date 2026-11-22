@@ -14,6 +14,9 @@ background; GET /api/sync says how it is going), /api/trend, /api/accounts,
 /api/inherited_ira (10-year rule tracker), /api/last (the last good answer to each of those, kept on disk), /api/markets
 (the markets strip with live Bitcoin, gold and S&P 500 prices, insights/live_markets.py; public, like the sign-in page
 that shows it), /healthz. Page: /
+
+The public demo, /demo/ and /demo/api/*, needs no session and never reaches any of the above: it serves the same page
+on a made-up person whose answers are built in a sealed child process (dashboard/demo.py) and kept in memory.
 """
 from __future__ import annotations
 
@@ -42,7 +45,7 @@ from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from html import escape as html_escape
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -54,6 +57,9 @@ from insights import holding_prices  # noqa: E402
 from insights import live_markets  # noqa: E402
 from insights import mortgage  # noqa: E402
 from valuations.crypto import norm_coin  # noqa: E402
+sys.path.insert(0, HERE)
+import demo  # noqa: E402
+import peers  # noqa: E402
 
 _DASH = personal.section("dashboard")
 DB = os.path.expanduser(os.environ.get("WEALTH_LEDGER_DB") or "~/.local/share/wealth-ledger/txns.db")
@@ -1574,6 +1580,86 @@ def cli_set_password(argv: list[str]):
 
 # ---------- http ----------
 ROBOTS = b"User-agent: *\nDisallow: /\n"
+
+# ---------- report a bug ----------
+# A mailto: link on the sign-in page, the dashboard and the demo, to the address in personal.json
+# "dashboard.feedback_email" (none = no link). The body is a fixed template: three questions, then the app's version,
+# the page and the mode; the page's script fills in the browser, screen size, installed-app-or-browser, the section
+# in view and the time when the link is used. Nothing about money is ever in it.
+FEEDBACK_MAX = 1800  # characters in the whole link: Android's mail apps cut longer mailto: links
+_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_version: str | None = None
+
+
+def app_version() -> str:
+    """The checkout's short commit hash (once per process), or "unknown"."""
+    global _version
+    if _version is None:
+        try:
+            r = subprocess.run(["git", "-C", ROOT, "rev-parse", "--short", "HEAD"], capture_output=True, text=True, timeout=5)
+            _version = r.stdout.strip() if r.returncode == 0 and re.fullmatch(r"[0-9a-f]{4,40}", r.stdout.strip()) else "unknown"
+        except Exception:  # noqa: BLE001 - no git, not a checkout
+            _version = "unknown"
+    return _version
+
+
+def feedback_email() -> str | None:
+    try:
+        e = personal.section("dashboard").get("feedback_email")
+    except Exception:  # the sign-in page must still open when personal.json is missing or broken
+        return None
+    return e.strip() if isinstance(e, str) and _EMAIL.fullmatch(e.strip()) else None
+
+
+FEEDBACK_PAGES = {"signin": ("sign-in page", "signed out"), "dashboard": ("dashboard", "signed in"),
+                  "demo": ("demo dashboard", "demo")}
+
+
+def feedback_href(page: str) -> str | None:
+    """The mailto: link for one of FEEDBACK_PAGES, or None when no address is configured."""
+    to = feedback_email()
+    if not to:
+        return None
+    where, mode = FEEDBACK_PAGES[page]
+    subject = "Wealth Ledger bug report" + (" (demo)" if page == "demo" else "")
+    body = ("What happened:\n\n\nWhat you expected:\n\n\nSteps to reproduce:\n1. \n2. \n\n"
+            "-- Filled in for you (please leave out balances, account names and other money details) --\n"
+            f"App version: {app_version()}\nPage: {where}\nMode: {mode}\n"
+            + ("Section: -\n" if page != "signin" else "") + "Browser: -\nScreen: -\nApp: -\nTime: -\n")
+    return f"mailto:{quote(to, safe='@')}?subject={quote(subject, safe='')}&body={quote(body, safe='')}"
+
+
+_BUG_ICON = ('<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" '
+             'stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H8l-4 4z"/><path d="M12 8v3.5M12 13.5v.01"/></svg>')
+
+
+def feedback_link(page: str) -> str:
+    href = feedback_href(page)
+    if not href:
+        return ""
+    return (f'<a class="fbk" id="fbk" href="{html_escape(href)}" title="Report a bug by email (opens your mail app)">'
+            f'{_BUG_ICON}<span class="hide-sm">Report a bug</span></a>')
+
+
+# fills in the browser's details when the link is used (sign-in page, dashboard and demo); the browser's user agent is
+# cut to 200 characters so the link stays under FEEDBACK_MAX
+FEEDBACK_JS = r"""function fbFill(a) {  // the report-a-bug link: this browser's details, never anything about money
+  var i = a.href.indexOf("&body=");
+  if (i < 0) return;
+  var body = decodeURIComponent(a.href.slice(i + 6)), sec = "", secs = document.querySelectorAll("section[data-nav]");
+  for (var k = 0; k < secs.length; k++) {
+    var r = secs[k].getBoundingClientRect();
+    if (!secs[k].hidden && r.height > 0 && r.bottom > 90) { sec = secs[k].getAttribute("data-nav"); break; }
+  }
+  var standalone = (window.matchMedia && matchMedia("(display-mode: standalone)").matches) || navigator.standalone;
+  var set = {Section: sec || "top of the page", Browser: navigator.userAgent.slice(0, 200),
+    Screen: screen.width + "x" + screen.height + " (window " + innerWidth + "x" + innerHeight + ", pixel ratio " + (window.devicePixelRatio || 1) + ")",
+    App: standalone ? "installed app" : "browser", Time: new Date().toISOString().slice(0, 16).replace("T", " ") + " UTC"};
+  body = body.replace(/^(Section|Browser|Screen|App|Time): .*$/gm, function (m, key) { return key + ": " + set[key]; });
+  a.href = a.href.slice(0, i + 6) + encodeURIComponent(body);
+}
+document.addEventListener("click", function (e) { var a = e.target.closest && e.target.closest("a.fbk"); if (a) fbFill(a); }, true);
+"""
 CHARTJS = "https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"
 CSP_BASE = "default-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 LOGIN_HTML = """<!doctype html>
@@ -1670,6 +1756,14 @@ input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px 
 .mkt i.down { color: var(--neg); }
 .upd { font-size: 11.5px; color: var(--muted); margin: 12px 0 0; font-variant-numeric: tabular-nums; }
 .by { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+.or { display: flex; align-items: center; gap: 10px; margin: 20px 0 14px; font-size: 12.5px; color: var(--muted); }
+.or::before, .or::after { content: ""; flex: 1; border-top: 1px solid var(--border); }
+.demo { display: flex; align-items: center; justify-content: center; height: 46px; border-radius: 10px; border: 1px solid var(--border-2);
+  color: var(--text); background: none; font-weight: 600; text-decoration: none; transition: border-color .12s, background-color .12s; }
+.demo:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.demo:focus-visible, .fbk:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.fbk { display: inline-flex; align-items: center; gap: 5px; margin: 14px 0 0; font-size: 12px; color: var(--muted); text-decoration: none; }
+.fbk:hover { color: var(--text); }
 @media (max-width: 420px) { .card { padding: 26px 20px 22px; } }
 @media (prefers-reduced-motion: reduce) { input, .go { transition: none; } }
 </style>
@@ -1696,11 +1790,16 @@ if ("serviceWorker" in navigator) addEventListener("load", function () { navigat
     <button type="submit" class="go" id="go">Sign in</button>
   </form>
   <p class="foot">You stay signed in on this device until you log out.</p>
+  <div class="or">or</div>
+  <a class="demo" id="demo" href="/demo/">Try the demo</a>
+  <p class="foot">No account needed: the same dashboard on a made-up person's money.</p>
 </main>
 <div class="mktbar" id="mkts" data-poll="{{markets_poll}}">{{markets}}</div>
 {{credit}}
+{{feedback}}
 <script>
 "use strict";
+""" + FEEDBACK_JS + """
 (function () {
   var f = document.forms[0], u = document.getElementById("u"), p = document.getElementById("p"),
       t = document.getElementById("t"), caps = document.getElementById("caps"), go = document.getElementById("go");
@@ -2000,6 +2099,91 @@ def assetlinks() -> list[dict]:
              "target": {"namespace": "android_app", "package_name": pkg, "sha256_cert_fingerprints": fps}}]
 
 
+# ---------- the public demo ----------
+# /demo/ is the dashboard page on a made-up person, for anyone: no session, no cookie, nothing written on the server.
+# Its own handlers answer /demo/api/* from the demo's generated answers (dashboard/demo.py builds them once a day in a
+# child process with an environment of its own, pointed at a temp folder: no path, sheet or credential of the owner's
+# exists there), so a demo request never reaches a real route or the ledger, and a real session is neither needed,
+# given nor changed. Anything but GET of a known route is refused with a friendly "not in the demo".
+DEMO_PARTS = re.compile(r"<!-- part: (\w+) -->")
+DEMO_LIMIT, DEMO_WINDOW = 600, 600  # requests per client IP per 10 minutes (a page load is about 15)
+DEMO_NOT_HERE = "Not available in the demo: it has no bank connection, sheet or settings to change."
+
+
+def live_anchors() -> dict[str, float]:
+    """Today's public BTC, gold and S&P 500 prices already fetched for the markets line (never waits), so the demo's
+    bitcoin and gold are valued near the prices the line shows."""
+    try:
+        live = live_markets.quotes(0)
+    except Exception:  # noqa: BLE001
+        return {}
+    return {sym: float(q["usd"]) for sym, q in live.items() if sym in ("BTC", "XAU", "SPX") and q.get("usd")}
+
+
+DEMO = demo.Demo(anchors=live_anchors)
+
+
+class RateLimit:
+    """At most `limit` requests per `window` seconds per key (client IP). Memory is bounded: old keys are dropped."""
+
+    def __init__(self, limit: int, window: float):
+        self.limit, self.window, self.lock, self.hits = limit, window, threading.Lock(), {}
+
+    def retry_after(self, key: str, now: float | None = None) -> int:
+        """0 when this request may go ahead (and counts it), else the seconds until one may."""
+        now = time.monotonic() if now is None else now
+        with self.lock:
+            if len(self.hits) > 10000:
+                self.hits = {k: q for k, q in self.hits.items() if q and q[-1] > now - self.window}
+            q = self.hits.setdefault(key, deque())
+            while q and q[0] <= now - self.window:
+                q.popleft()
+            if len(q) >= self.limit:
+                return max(1, math.ceil(q[0] + self.window - now))
+            q.append(now)
+            return 0
+
+
+DEMO_RATE = RateLimit(DEMO_LIMIT, DEMO_WINDOW)
+
+
+def demo_parts() -> dict[str, str]:
+    """demo.html split into its parts: {"top": banner and form, "peers": the panel, "script": its script}."""
+    with open(os.path.join(HERE, "demo.html"), encoding="utf-8") as f:
+        text = f.read()
+    chunks = DEMO_PARTS.split(text)
+    out = {"top": chunks[0].split("-->", 1)[1].strip()}  # past the file's own comment
+    out.update({chunks[i]: chunks[i + 1].strip() for i in range(1, len(chunks) - 1, 2)})
+    return out
+
+
+def demo_data() -> str:
+    """The demo page's data block: who the demo person is and the people-your-age figures (peers.py). JSON with "<"
+    escaped, so nothing in it can close the <script> it sits in."""
+    return json.dumps({"name": demo.NAME, "household": demo.HOUSEHOLD, "age": demo.AGE, "income": demo.SALARY,
+                       "peers": peers.PEERS}).replace("<", "\\u003c")
+
+
+def page_html(which: str) -> bytes:
+    """The dashboard page: "dashboard" (signed in) or "demo"."""
+    with open(os.path.join(HERE, "index.html"), encoding="utf-8") as f:
+        page = with_theme(f.read())
+    if which == "demo":
+        parts = demo_parts()
+        page = (page.replace('<html lang="en"', '<html lang="en" data-demo="1"', 1)
+                .replace("<title>Wealth Ledger</title>", "<title>Demo · Wealth Ledger</title>", 1)
+                .replace("Wealth Ledger</h1>", 'Wealth Ledger <span class="demotag">DEMO</span></h1>', 1)
+                .replace("{{demo}}", parts["top"].replace("{{demo_name}}", html_escape(demo.NAME))
+                         .replace("{{demo_household}}", html_escape(demo.HOUSEHOLD)), 1)
+                .replace("{{demo_peers}}", parts["peers"], 1)
+                .replace("{{demo_js}}", parts["script"].replace("{{demo_data}}", demo_data()), 1))
+    else:
+        page = page.replace("{{demo}}", "", 1).replace("{{demo_peers}}", "", 1).replace("{{demo_js}}", "", 1)
+    return (page.replace("{{markets}}", markets_line(wait=0), 1).replace("{{markets_poll}}", markets_poll(), 1)
+            .replace("{{credit}}", credit_line(), 1).replace("{{feedback}}", feedback_link(which), 1)
+            .replace("/*{{feedback_js}}*/", FEEDBACK_JS, 1).encode())
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "wealth-ledger-dashboard"
     sys_version = ""
@@ -2109,8 +2293,9 @@ class Handler(BaseHTTPRequestHandler):
         # the page is public: besides the theme it shows only the allowlisted market prices, the optional credit
         # line, the error and the typed username (replaced last, so typed text can't smuggle in a placeholder)
         page = (with_theme(LOGIN_HTML).replace("{{error}}", err).replace("{{markets}}", markets_line(wait=0))
-                .replace("{{markets_poll}}", markets_poll())
+                .replace("{{markets_poll}}", markets_poll()).replace("{{feedback}}", feedback_link("signin"))
                 .replace("{{credit}}", credit_line()).replace("{{username}}", html_escape(username)))
+        DEMO.warm()  # the next click may well be "Try the demo"
         return self._send(code, page.encode(), "text/html; charset=utf-8", headers, CSP_LOGIN)
 
     # --- routes
@@ -2134,13 +2319,12 @@ class Handler(BaseHTTPRequestHandler):
             if p == ASSETLINKS:
                 return self._send(200, json.dumps(assetlinks(), indent=1).encode(), "application/json",
                                   cache="public, max-age=3600")
+            if p == "/demo" or p.startswith("/demo/"):  # public, and never past this point
+                return self._demo_get(p, u.query)
             if not self._authed():
                 return self._deny(p)
             if p in ("/", "/index.html"):
-                with open(os.path.join(HERE, "index.html"), encoding="utf-8") as f:
-                    page = (with_theme(f.read()).replace("{{markets}}", markets_line(wait=0), 1)
-                            .replace("{{markets_poll}}", markets_poll(), 1)
-                            .replace("{{credit}}", credit_line(), 1).encode())
+                page = page_html("dashboard")
                 return self._send(200, page, "text/html; charset=utf-8", self._renewal(), index_csp(page))
             if p == "/healthz":
                 return self._send(200, b"ok\n", "text/plain")
@@ -2169,6 +2353,37 @@ class Handler(BaseHTTPRequestHandler):
             log(f"error on GET {p}: {e!r}")
             return self._json(500, {"error": str(e) if self._authed() else "internal error"})
 
+    def _demo_get(self, p: str, query: str):
+        """GET /demo, /demo/ and /demo/api/*: the demo page and its answers, for anyone, from the demo's own data only."""
+        wait = DEMO_RATE.retry_after(self._client_ip())
+        if wait:
+            return self._json(429, {"error": "Too many requests to the demo. Try again in a minute."}, [("Retry-After", str(wait))])
+        if p == "/demo":
+            return self._redirect("/demo/")
+        if p in ("/demo/", "/demo/index.html"):
+            DEMO.warm()
+            page = page_html("demo")
+            return self._send(200, page, "text/html; charset=utf-8", csp=index_csp(page))
+        name = p.removeprefix("/demo/api/") if p.startswith("/demo/api/") else None
+        if name == "last":  # nothing kept from earlier answers: the demo's own come at once
+            return self._send(200, b"{}", "application/json")
+        if name == "sync":
+            return self._json(200, {"running": False, "demo": True, "message": DEMO_NOT_HERE})
+        if name == "markets":
+            return self._json(200, {"html": markets_line(), "refresh_s": live_markets.TTL})
+        if not name or name.startswith("_") or "/" in name:
+            return self._json(404, {"error": "not found"})
+        data = DEMO.get(wait=30)
+        if data is None:
+            return self._json(503, {"error": "The demo is starting up. Try again in a moment."}, [("Retry-After", "5")])
+        if name == "account_txns":
+            body = data["account_txns"].get(parse_qs(query).get("id", [""])[0])
+        else:
+            body = data.get(name) if isinstance(data.get(name), bytes) else None
+        if body is None:
+            return self._json(404, {"error": "not found"})
+        return self._send(200, body, "application/json")
+
     def do_POST(self):
         p = "?"
         try:
@@ -2193,6 +2408,8 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/logout":
                 AUTH.revoke(self._cookie_values())
                 return self._redirect("/login", [self._set_cookie("", 0)])
+            if p == "/demo" or p.startswith("/demo/"):  # nothing in the demo changes anything
+                return self._json(403, {"error": DEMO_NOT_HERE, "demo": True})
             if not self._authed():
                 return self._deny(p)
             if p == "/api/connect":
@@ -2255,6 +2472,7 @@ def main():
         os.makedirs(os.path.dirname(DB), exist_ok=True)
         ctdb.connect(DB).close()
     threading.Thread(target=networth, daemon=True).start()  # warm the cache
+    DEMO.warm()  # and build the demo's answers for today
     serve("127.0.0.1", a.port)
 
 

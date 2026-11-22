@@ -86,7 +86,7 @@ def personal_json(today: date) -> dict:
         },
         "credit_limits": {"Example Rewards Card%": 10000},
         "rules": [[10, "%EXAMPLE CARD PYMT%", "checking", "out", "card_payment", "checking-side card payment"]],
-        "dashboard": {"ledger_start": _monthly(today, 1)[0].isoformat(),
+        "dashboard": {"ledger_start": _monthly(today, 1)[0].isoformat(), "feedback_email": "bugs@example.com",
                       **{k: example["dashboard"][k] for k in ("exact", "rules")}},
         "budget": {"rules": [["EXAMPLE CITY UTILITIES", "^bills/water"]]},
         "inherited_ira": {"account": "Example Inherited IRA%", "death_year": today.year - 2, "owner_started_rmds": True,

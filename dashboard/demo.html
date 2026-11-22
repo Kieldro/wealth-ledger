@@ -1,0 +1,261 @@
+<!-- The public demo's additions to index.html, served only at /demo/ (server.py demo_page): the banner and the
+     own-numbers form (at {{demo}}), the people-your-age panel (at {{demo_peers}}) and their script (at {{demo_js}}).
+     The parts are split on the "part:" comments. Nothing here sends anything anywhere: the visitor's own numbers
+     stay in this browser (localStorage, when it allows it). -->
+<style>
+.demobar { position: sticky; top: 0; z-index: 60; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+  margin: -16px -16px 14px; padding: 10px 16px; font-size: 13.5px; line-height: 1.35; color: var(--text);
+  background: color-mix(in srgb, var(--warn) 15%, var(--bg)); border-bottom: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); }
+.demobar .tag { flex: none; font-size: 12px; font-weight: 750; letter-spacing: .08em; color: #1d1600; background: var(--warn);
+  border-radius: 6px; padding: 2px 8px; }
+.demobar .msg { flex: 1 1 320px; min-width: 0; }
+.demobar .msg b { color: var(--warn); }
+.demobar .acts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.demobar .acts [hidden] { display: none !important; }
+.demobar .acts button, .demobar .acts a { font-size: 13px; padding: 6px 13px; border-radius: 999px; white-space: nowrap; }
+.demobar #ownbtn { background: var(--warn); color: #1d1600; border-color: var(--warn); font-weight: 650; }
+.demobar #ownbtn:hover { filter: brightness(1.08); }
+.demobar .acts a { color: var(--text); border: 1px solid var(--border); background: var(--surface); text-decoration: none; }
+.demotag { font-size: 11px; font-weight: 750; letter-spacing: .08em; color: #1d1600; background: var(--warn); border-radius: 5px; padding: 1px 6px; }
+html[data-demo] .logout { display: none !important; }
+body.ownmode :is(#chg, #nwage, #nwnote, #assetsnote, #assetchg, #alloccard .sheetnote) { display: none; }
+.badge.b-yours { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+/* the own-numbers form */
+#owndlg { width: min(560px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); padding: 0; border: 1px solid var(--border);
+  border-radius: 16px; background: var(--surface); color: var(--text); }
+#owndlg::backdrop { background: rgb(0 0 0 / .6); }
+#owndlg form { padding: 20px 20px 18px; }
+#owndlg h2 { font-size: 18px; margin: 0 0 4px; }
+#owndlg .sub { margin: 0 0 14px; color: var(--text-2); font-size: 13px; }
+#owndlg .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
+#owndlg label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--text-2); }
+#owndlg label .opt { color: var(--muted); font-weight: 400; }
+#owndlg input { height: 42px; font: inherit; font-size: 16px; color: var(--text); background: var(--bg); border: 1px solid var(--border);
+  border-radius: 10px; padding: 0 11px; width: 100%; }
+#owndlg input:focus { outline: none; border-color: var(--accent); }
+#owndlg .wide { grid-column: 1 / -1; }
+#owndlg .note { margin: 12px 0 0; }
+#owndlg .btns { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+#owndlg .btns button { font-size: 14px; padding: 9px 16px; }
+#owndlg .btns .go { background: var(--btn); color: var(--btn-text); border-color: var(--btn); font-weight: 600; }
+#owndlg .btns .clear { margin-right: auto; }
+@media (max-width: 640px) {
+  .demobar { margin: -12px -12px 12px; padding: 8px 12px; font-size: 12.5px; gap: 6px 10px; }
+  .demobar .msg { flex-basis: calc(100% - 70px); }
+  .demobar .acts { width: 100%; gap: 6px; }
+  .demobar .acts button, .demobar .acts a { min-height: 40px; display: inline-flex; align-items: center; padding: 0 12px; font-size: 12.5px; }
+  #owndlg .fields { grid-template-columns: 1fr; }
+  #owndlg form { padding: 16px 14px 14px; }
+}
+/* people your age */
+.peers { margin-top: 12px; }
+.peers .hd { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.peers h2 { margin: 0; }
+.peers .rows { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 28px; margin-top: 10px; }
+.peer .what { font-size: 13px; color: var(--text-2); }
+.peer .fig { font-size: 15px; margin: 2px 0 8px; }
+.peer .fig b { font-variant-numeric: tabular-nums; }
+.peer .says { font-size: 12.5px; color: var(--text-2); margin-top: 28px; }
+.peer .says b.up { color: var(--pos); } .peer .says b.down { color: var(--warn); }
+.pbar { position: relative; height: 10px; border-radius: 5px; background: linear-gradient(90deg, var(--surface-2), color-mix(in srgb, var(--s1) 35%, var(--surface-2))); }
+.pbar .tick { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--muted); }
+.pbar .tick.med { background: var(--text); width: 2px; top: -5px; bottom: -5px; }
+.pbar .tick span { position: absolute; top: 20px; transform: translateX(-50%); font-size: 10.5px; color: var(--muted); white-space: nowrap; }
+.pbar .tick.med span { color: var(--text); font-weight: 600; }
+.pbar .tick.edge-l span { transform: none; left: 0; } .pbar .tick.edge-r span { transform: translateX(-100%); }
+.pbar .you { position: absolute; top: 50%; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; background: var(--warn);
+  border: 2px solid var(--bg); box-shadow: 0 0 0 1px var(--warn); }
+.peers .src { margin: 16px 0 0; font-size: 11.5px; color: var(--muted); line-height: 1.45; }
+.peers .src a { color: var(--text-2); }
+@media (max-width: 760px) { .peers .rows { grid-template-columns: 1fr; } }
+</style>
+<div class="demobar" id="demobar" role="region" aria-label="Demo mode">
+  <span class="tag">DEMO</span>
+  <span class="msg"><b>Demo mode: sample data for a fictional household, not real accounts.</b> <span id="demowho"><span class="hide-sm">You're looking at </span><b>{{demo_name}}</b> ({{demo_household}})<span class="hide-sm">, a made-up person</span>.</span></span>
+  <span class="acts"><button type="button" id="ownbtn">Use your own numbers</button><button type="button" id="demoback" hidden>Back to demo data</button><a href="/login" id="demoexit">Exit demo</a></span>
+</div>
+<dialog id="owndlg" aria-labelledby="ownh">
+  <form method="dialog" id="ownform" novalidate>
+    <h2 id="ownh">Your own numbers</h2>
+    <p class="sub">Type rough totals to see your net worth, assets, debts and how you compare with people your age. Everything is worked out in this browser and kept only here; nothing is sent anywhere. Leave out what doesn't apply.</p>
+    <div class="fields">
+      <label>Your age<input name="age" inputmode="numeric" autocomplete="off" placeholder="35"></label>
+      <label>Household income a year <span class="opt">(optional)</span><input name="income" inputmode="decimal" autocomplete="off" placeholder="$"></label>
+      <label>Cash: checking and savings<input name="cash" inputmode="decimal" autocomplete="off" placeholder="$"></label>
+      <label>Retirement: 401(k), IRA, HSA<input name="retirement" inputmode="decimal" autocomplete="off" placeholder="$"></label>
+      <label>Other investments<input name="investments" inputmode="decimal" autocomplete="off" placeholder="$"></label>
+      <label>Home value<input name="home" inputmode="decimal" autocomplete="off" placeholder="$"></label>
+      <label>Mortgage owed<input name="mortgage" inputmode="decimal" autocomplete="off" placeholder="$"></label>
+      <label>Car value<input name="car" inputmode="decimal" autocomplete="off" placeholder="$"></label>
+      <label>Car loan owed<input name="carloan" inputmode="decimal" autocomplete="off" placeholder="$"></label>
+      <label>Credit card debt<input name="cards" inputmode="decimal" autocomplete="off" placeholder="$"></label>
+      <label>Bitcoin held <span class="opt">(optional, in BTC)</span><input name="btc" inputmode="decimal" autocomplete="off" placeholder="0.05"></label>
+      <label>Gold held <span class="opt">(optional, troy oz)</span><input name="gold" inputmode="decimal" autocomplete="off" placeholder="1"></label>
+    </div>
+    <p class="note" id="ownprices"></p>
+    <p class="note">Full bank syncing isn't available to the public yet; this demo only adds up what you type.</p>
+    <div class="btns"><button type="button" class="clear" id="ownclear">Clear my numbers</button><button type="button" id="owncancel">Cancel</button><button type="submit" class="go" id="ownsave" value="save">Show my numbers</button></div>
+  </form>
+</dialog>
+<!-- part: peers -->
+<section class="card peers" id="peers" aria-labelledby="peers-h">
+  <div class="hd"><h2 id="peers-h">People your age</h2><span class="note" id="peerwho"></span></div>
+  <div class="rows"><div class="peer" id="peernw"></div><div class="peer" id="peerinc"></div></div>
+  <p class="src" id="peersrc"></p>
+</section>
+<!-- part: script -->
+<script type="application/json" id="demodata">{{demo_data}}</script>
+<script>
+"use strict";
+// The demo's own parts: the people-your-age panel and the visitor's own numbers. Both are worked out here, in the
+// browser, from what the page already has: nothing is sent to the server, and the numbers typed in are kept only in
+// this browser's localStorage (when it allows it; without it they last until the page is closed).
+(function () {
+  const D = JSON.parse(document.getElementById("demodata").textContent), PEERS = D.peers;
+  const OWN_KEY = "wl.demo.own", FIELDS = ["age", "income", "cash", "retirement", "investments", "home", "mortgage", "car", "carloan", "cards", "btc", "gold"];
+  const form = $("ownform"), dlg = $("owndlg");
+  let own = null, showingOwn = false;
+  const num = v => { const x = parseFloat(String(v ?? "").replace(/[$,\s]/g, "")); return isFinite(x) && x >= 0 ? x : null; };
+  function cleanOwn(o) {
+    if (!o || typeof o !== "object") return null;
+    const out = {};
+    for (const k of FIELDS) { const x = num(o[k]); if (x != null) out[k] = x; }
+    if (out.age != null && !(out.age >= 15 && out.age <= 120)) delete out.age;
+    return Object.keys(out).length ? out : null;
+  }
+  try { own = cleanOwn(JSON.parse(localStorage.getItem(OWN_KEY) || "null")); showingOwn = !!own; } catch { /* storage blocked or a bad value */ }
+
+  // ---- prices for the visitor's bitcoin and gold: the live markets line on this page, else the demo's own
+  function stripPrice(name) {
+    for (const d of document.querySelectorAll(".mktbar .mkt > div")) {
+      if (d.querySelector(".n")?.textContent.trim() === name) {
+        const v = parseFloat((d.querySelector("b")?.textContent || "").replace(/[^0-9.]/g, ""));
+        if (v > 0) return {usd: v, from: d.hasAttribute("data-live") ? "live" : "latest close"};
+      }
+    }
+    return null;
+  }
+  const price = (name, sym) => stripPrice(name) || (data.trend?.spot?.[sym]?.usd > 0 ? {usd: data.trend.spot[sym].usd, from: "the demo's price"} : null);
+
+  // ---- people your age
+  const band = (table, age) => age == null ? null : table.bands.find(r => age >= r[0] && (r[1] == null || age < r[1] + 1)) || null;
+  const bandLabel = r => r[1] == null ? `${r[0]} and over` : r[0] === 0 ? `under ${r[1] + 1}` : `${r[0]}-${r[1]}`;
+  // where a value sits on a percentile scale, from the known points (0 at nothing, 25/50/75/90 at those percentiles)
+  function pctPos(v, r) {
+    const [, , p25, p50, p75, p90] = r;
+    if (v <= 0) return 1;
+    if (v < p25) return Math.max(1, 25 * v / p25);
+    if (v < p50) return 25 + 25 * (v - p25) / (p50 - p25);
+    if (v < p75) return 50 + 25 * (v - p50) / (p75 - p50);
+    if (v < p90) return 75 + 15 * (v - p75) / (p90 - p75);
+    return Math.min(99, 90 + 10 * (1 - p90 / v));
+  }
+  function pctWords(v, r) {
+    const [, , p25, p50, p75, p90] = r;
+    return v < p25 ? "below the 25th percentile" : v < p50 ? "between the 25th percentile and the median"
+      : v < p75 ? "between the median and the 75th percentile" : v < p90 ? "between the 75th and 90th percentiles" : "above the 90th percentile";
+  }
+  const vsMedian = (v, med) => { const d = 100 * (v - med) / Math.abs(med); return Math.abs(d) < 1 ? "about the same as" : `<b class="${d > 0 ? "up" : "down"}">${Math.round(Math.abs(d))}% ${d > 0 ? "above" : "below"}</b>`; };
+  const tick = (left, label, cls = "") => `<span class="tick ${cls}${left < 8 ? " edge-l" : left > 92 ? " edge-r" : ""}" style="left:${left}%"><span>${label}</span></span>`;
+  function renderPeers(who) {  // who: {age, income, net_worth, name}
+    const nwRow = band(PEERS.net_worth, who.age), incRow = band(PEERS.income, who.age), usdF = v => usdF0(v), k = v => compactIn(v, "USD");
+    $("peerwho").textContent = who.age == null ? "" : (who.mine ? `You, ${Math.round(who.age)}` : who.name) + (nwRow ? ` · against ages ${bandLabel(nwRow)}` : "");
+    if (!nwRow) $("peernw").innerHTML = `<div class="what">Net worth</div><p class="note">${who.age == null ? "Add your age to compare your net worth with people your age." : "No published figures for that age."}</p>`;
+    else {
+      const [, , p25, p50, p75, p90] = nwRow, v = who.net_worth;
+      $("peernw").innerHTML = `<div class="what">Net worth, ages ${bandLabel(nwRow)}</div>
+        <div class="fig">${esc(who.mine ? "You" : who.name.split(",")[0])}: <b>${usdF(v)}</b> · median <b>${usdF(p50)}</b></div>
+        <div class="pbar" role="img" aria-label="${esc(`Net worth ${usdF(v)} against the 25th, 50th, 75th and 90th percentiles for ages ${bandLabel(nwRow)}`)}">
+          ${tick(25, "25th " + k(p25))}${tick(50, "Median " + k(p50), "med")}${tick(75, "75th " + k(p75))}${tick(90, "90th " + k(p90))}
+          <span class="you" style="left:${pctPos(v, nwRow).toFixed(1)}%" title="${esc(usdF(v))}"></span></div>
+        <div class="says">${vsMedian(v, p50)} the median family, ${pctWords(v, nwRow)}.</div>`;
+    }
+    if (!incRow) $("peerinc").innerHTML = `<div class="what">Household income</div><p class="note">${who.age == null ? "Add your age to compare." : "No published figure for that age."}</p>`;
+    else if (who.income == null) $("peerinc").innerHTML = `<div class="what">Household income, ages ${bandLabel(incRow)}</div><div class="fig">Median <b>${usdF(incRow[2])}</b> a year</div><p class="note">Add your household income to compare.</p>`;
+    else {
+      const med = incRow[2], v = who.income, top = Math.max(med, v) * 1.25, at = x => (100 * x / top).toFixed(1);
+      $("peerinc").innerHTML = `<div class="what">Household income, ages ${bandLabel(incRow)}</div>
+        <div class="fig">${esc(who.mine ? "You" : who.name.split(",")[0])}: <b>${usdF(v)}</b> · median <b>${usdF(med)}</b></div>
+        <div class="pbar" role="img" aria-label="${esc(`Income ${usdF(v)} against the median household's ${usdF(med)}`)}">${tick(+at(med), "Median " + k(med), "med")}<span class="you" style="left:${at(v)}%" title="${esc(usdF(v))}"></span></div>
+        <div class="says">${vsMedian(v, med)} the median household of that age${who.single ? " (one earner, against all households, many with two)" : ""}.</div>`;
+    }
+    const nw = PEERS.net_worth, inc = PEERS.income;
+    $("peersrc").innerHTML = `Net worth: <a href="${esc(nw.url)}" target="_blank" rel="noopener noreferrer">${esc(nw.source)}</a>, median ${esc(nw.unit)} by age of the family head (published ${esc(String(nw.year + 1))}); ${esc(nw.pct_note)}. ` +
+      `Income: <a href="${esc(inc.url)}" target="_blank" rel="noopener noreferrer">${esc(inc.source)}</a>, median ${esc(inc.unit)} by age of householder, before taxes. ` +
+      `Both are per family or household, not per person, and in ${nw.year} dollars. The dot's place between the percentiles is a straight-line estimate.`;
+  }
+
+  // ---- the visitor's own numbers, as a summary the page draws like any other
+  function ownSummary(o) {
+    const btc = price("Bitcoin", "BTC"), gold = price("Gold", "XAU");
+    const v = k => o[k] || 0, cat = (key, label, type, lines) => {
+      const ls = lines.filter(([, x]) => x > 0).map(([line, x]) => ({line, value: type === "asset" ? x : -x, source: "yours"}));
+      const value = ls.reduce((a, l) => a + l.value, 0);
+      return {key, label, type, value, live: 0, est: 0, sheet: 0, source: "yours", lines: ls};
+    };
+    const btcUsd = o.btc && btc ? o.btc * btc.usd : 0, goldUsd = o.gold && gold ? o.gold * gold.usd : 0;
+    const cats = [cat("cash", "Cash & banking", "asset", [["Cash", v("cash")]]), cat("retirement", "Retirement", "asset", [["Retirement", v("retirement")]]),
+      cat("taxable", "Taxable brokerage", "asset", [["Investments", v("investments")]]),
+      cat("crypto", "Crypto", "asset", [[`Bitcoin (${o.btc || 0} BTC)`, btcUsd]]), cat("metals", "Precious metals", "asset", [[`Gold (${o.gold || 0} oz)`, goldUsd]]),
+      cat("realestate", "Real estate", "asset", [["Home", v("home")]]), cat("vehicles", "Vehicles", "asset", [["Car", v("car")]]),
+      cat("other", "Other", "asset", []),
+      cat("mortgage", "Mortgage", "liability", [["Mortgage", v("mortgage")]]),
+      cat("cards", "Credit cards & other debt", "liability", [["Car loan", v("carloan")], ["Credit cards", v("cards")]])];
+    const assets = cats.filter(c => c.type === "asset").reduce((a, c) => a + c.value, 0), liabilities = -cats.filter(c => c.type === "liability").reduce((a, c) => a + c.value, 0);
+    const keep = ["alloccard", "liabcard"], hide = [...document.querySelectorAll(".grid > section.card")].map(x => x.id).filter(id => !keep.includes(id));
+    return {own: true, status: {}, hide, sheetless: false, connect: null, changes: {}, side_changes: null, input_ages: {},
+      net_worth: assets - liabilities, assets, liabilities, categories: cats, debt: {cards: {owed: v("cards"), util_pct: null}},
+      prices: {btc, gold}};
+  }
+  function showPrices() {
+    const btc = price("Bitcoin", "BTC"), gold = price("Gold", "XAU"), p = (x, unit) => x ? `${usd0.format(x.usd)}${unit} (${x.from})` : "unknown";
+    $("ownprices").textContent = `Bitcoin and gold are valued at ${p(btc, "/BTC")} and ${p(gold, "/oz")}.`;
+  }
+
+  // the page calls this after drawing any summary: the demo's (then the visitor's numbers take over when chosen)
+  // or the visitor's own
+  window.demoSummary = s => {
+    if (!s.own && showingOwn && own) return renderSummary(ownSummary(own));
+    document.body.classList.toggle("ownmode", !!s.own);
+    $("ownbtn").textContent = s.own ? "Edit my numbers" : own ? "Show my numbers" : "Use your own numbers";
+    $("demoback").hidden = !s.own;
+    $("demowho").innerHTML = s.own ? 'Showing <b>your numbers</b>, kept only in this browser.<span class="hide-sm"> The other cards need bank syncing, which isn\'t available to the public yet.</span>'
+      : `<span class="hide-sm">You're looking at </span><b>${esc(D.name)}</b> (${esc(D.household)})<span class="hide-sm">, a made-up person</span>.`;
+    if (s.own) $("status").innerHTML = '<span class="pill" id="syncpill" title="Added up in this browser from what you typed"><span class="dot"></span>Your numbers</span>';
+    $("footer").innerHTML = s.own ? "<b>Your numbers</b> are added up in this browser and kept only here (localStorage); nothing is sent to the server. Bitcoin and gold use the prices on the markets line above."
+      : "<b>Demo:</b> every account, balance and transaction on this page is made up and generated fresh each day for a fictional person; the market prices on the line above are real. Nothing you do here is saved on the server.";
+    renderPeers(s.own ? {mine: true, name: "You", age: own.age ?? null, income: own.income ?? null, net_worth: s.net_worth}
+      : {name: D.name, age: D.age, income: D.income, net_worth: s.net_worth, single: true});
+  };
+  function backToDemo() {
+    showingOwn = false;
+    if (data.summary) { renderSummary(data.summary); renderAll(); } else document.body.classList.remove("ownmode");
+  }
+  function save() {
+    const fd = new FormData(form), o = {};
+    for (const k of FIELDS) o[k] = fd.get(k);
+    own = cleanOwn(o);
+    try { if (own) localStorage.setItem(OWN_KEY, JSON.stringify(own)); else localStorage.removeItem(OWN_KEY); } catch { /* storage blocked: kept until the page closes */ }
+    if (!own) return backToDemo();
+    showingOwn = true;
+    renderSummary(ownSummary(own));
+    scrollTo({top: 0});
+  }
+  $("ownbtn").onclick = () => {
+    for (const k of FIELDS) form.elements[k].value = own?.[k] ?? "";
+    showPrices();
+    dlg.showModal();
+  };
+  $("owncancel").onclick = () => dlg.close();
+  $("ownclear").onclick = () => {
+    own = null;
+    try { localStorage.removeItem(OWN_KEY); } catch { /* storage blocked */ }
+    form.reset();
+    dlg.close();
+    backToDemo();
+  };
+  form.addEventListener("submit", e => { e.preventDefault(); save(); dlg.close(); });
+  $("demoback").onclick = backToDemo;
+  window.demoPeers = {band, pctPos, pctWords, ownSummary};  // for the tests
+})();
+</script>

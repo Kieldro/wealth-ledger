@@ -1190,7 +1190,7 @@ def test_page_has_sync_now_that_follows_the_sync_and_reloads():
     for needle in ('<button id="syncnow"', '>Sync now</button>', 'fetch("/api/sync", {method: "POST"', 'await get("/api/sync")',
                    'key: "syncrun"', 'noteTime("syncrun", took)', "`Syncing…<span class=\"hide-sm\"> ${Math.floor((now - syncRun.t0) / 1000)}s</span>`",
                    "`<span class=\"hint\">(usually ${secsText(u)})</span>`", "await load(true);", 'id="syncnote" role="status"',
-                   "limited = r.status === 429", "st.finished_ago_s * 1000 <= took + 5000", "SHEETLESS ? \"Reload\" : 'Re-read<span class=\"hide-sm\"> sheet</span>'", "\ncheckSync();\n",
+                   "limited = r.status === 429", "st.finished_ago_s * 1000 <= took + 5000", "SHEETLESS ? \"Reload\" : 'Re-read<span class=\"hide-sm\"> sheet</span>'", "\nif (!DEMO) checkSync();\n",
                    "#status .pill, #syncnow) { display: none; }"):
         assert needle in html, needle
     assert ">Refresh</button>" not in html

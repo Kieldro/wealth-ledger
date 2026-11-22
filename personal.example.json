@@ -81,8 +81,9 @@
   "xpub_export_wallet": "Wallet"
  },
  "dashboard": {
-  "_help": "Optional. default_username: the name set-password uses when none is given (default admin). ledger_start: first day of complete transaction data; spending before it is not shown (default: everything). web_connect: true lets a signed-in viewer paste a SimpleFIN setup token on the page while nothing is connected yet (for a second person's ledger). exact: networth.py line label -> category; rules: [regex, category] fallbacks tried in order. Categories: cash retirement taxable crypto metals realestate vehicles other. theme: the colour theme (all dark) for browsers that haven't picked one in the page footer: graphite (default), rose, amethyst, plum or sage. credit (not shown here): one line of plain text under the sign-in page and the dashboard, e.g. who runs this ledger; nothing by default.",
+  "_help": "Optional. default_username: the name set-password uses when none is given (default admin). ledger_start: first day of complete transaction data; spending before it is not shown (default: everything). web_connect: true lets a signed-in viewer paste a SimpleFIN setup token on the page while nothing is connected yet (for a second person's ledger). exact: networth.py line label -> category; rules: [regex, category] fallbacks tried in order. Categories: cash retirement taxable crypto metals realestate vehicles other. theme: the colour theme (all dark) for browsers that haven't picked one in the page footer: graphite (default), rose, amethyst, plum or sage. credit (not shown here): one line of plain text under the sign-in page and the dashboard, e.g. who runs this ledger; nothing by default. feedback_email: where the 'Report a bug' link (sign-in page, dashboard and the public demo) sends its email; the address is visible to anyone who opens the sign-in page; no link without it.",
   "default_username": "admin",
+  "feedback_email": "you@example.com",
   "web_connect": false,
   "theme": "graphite",
   "ledger_start": "2026-01-01",
