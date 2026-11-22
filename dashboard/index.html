@@ -316,11 +316,6 @@ td.neg { color: var(--neg); font-weight: 600; }
 .bench [data-b="SPX"] { --c: var(--s3); }
 .bench button .corr { font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
 .bench button .corr:empty { display: none; }
-/* an estimated correlation must not pass for a measured one: ≈, italic, dimmed, dashed underline and an "est" tag */
-.bench button .corr.est { font-style: italic; opacity: .72; white-space: nowrap; text-decoration: underline dashed; text-decoration-thickness: 1px; text-underline-offset: 3px; }
-.bench button .corr.est small { display: inline-block; margin-left: 4px; padding: 0 3px; border: 1px dashed var(--muted); border-radius: 4px;
-  font-size: 9px; font-style: normal; letter-spacing: .04em; text-transform: uppercase; }
-#trendcorrnote { margin: -2px 0 8px; font-style: italic; }
 .bench [data-b="XAU"] { --c: var(--s4); } .bench [data-b="BTC"] { --c: var(--s2); }
 /* display unit picker ($, BTC, metals, rial, dinar): one choice converts every value on the page */
 .unitpick { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-2); flex-wrap: wrap; }
@@ -486,7 +481,7 @@ footer code { font-size: 11.5px; }
   /* the picker takes what the pill and Sync now leave, and drops to a row of its own only when that is too little */
   #unitpick { order: 6; margin: 8px 0 0 auto; flex: 1 1 112px; max-width: 190px; }
   .unitpick select { width: 100%; border-radius: 999px; font-size: 13px; }
-  /* the benchmarks in one even row; an estimate drops under its name rather than push the chip wider */
+  /* the benchmarks in one even row; a figure drops under its name rather than push the chip wider */
   .bench { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
   .bench button { min-width: 0; padding: 0 4px; justify-content: center; flex-wrap: wrap; align-content: center; gap: 0 4px; font-size: 11.5px; white-space: nowrap; }
   .bench button i { width: 9px; flex: none; }
@@ -593,7 +588,6 @@ document.querySelector('meta[name="theme-color"]').content = getComputedStyle(do
       <div class="trendchg num" id="trendchg"></div>
       <p class="sub" id="trendsub">Daily snapshots</p>
       <div class="bench" id="trendbench" role="group" aria-label="Compare with a benchmark"><span class="hide-sm">Compare</span><button type="button" data-b="SPX" aria-pressed="false" title="S&amp;P 500 index"><i></i>S&amp;P 500<span class="corr"></span></button><button type="button" data-b="XAU" aria-pressed="false" title="Gold (COMEX close)"><i></i>Gold<span class="corr"></span></button><button type="button" data-b="BTC" aria-pressed="false" title="Bitcoin"><i></i>Bitcoin<span class="corr"></span></button></div>
-      <p class="note" id="trendcorrnote" hidden></p>
       <div class="chartbox"><canvas id="trend" aria-label="Net worth trend" role="img"></canvas></div>
       <div class="legend" id="trendlegend"><span><i></i>Net worth (synced accounts daily + sheet-only items held constant)</span></div>
       <p class="note" id="trendbenchnote" style="margin:6px 0 0" hidden></p>
@@ -1595,7 +1589,7 @@ function benchCorr(t, u, inR, k) {
   }
   return {r: pearson(xs, ys), n: xs.length, weekly, since: kept[0]?.date};
 }
-// The same figure for a range that reaches back before the daily snapshots: an estimate. Net worth is read off a
+// The same figure for a range that reaches back before the daily snapshots. Net worth is read off a
 // straight line between the points it is given (never before the first or after the last: no slope is invented) at
 // the benchmark's own dates (the same day, as above), weekly once the points span over 120 days.
 function benchCorrEst(t, u, pts, k) {
@@ -1621,35 +1615,28 @@ function benchCorrEst(t, u, pts, k) {
   return {r: pearson(xs, ys), n: xs.length, weekly, since: first.date};
 }
 // Each chip's figure for the range. Measured: a range that starts no earlier than the daily snapshots do (their first
-// date comes from the data), from however many daily changes it has (2+), so a week reads like a month. Otherwise an
-// estimate, shown so it can't pass for a measured one: straight lines between snapshots, starting where the range
-// does: on the line from the snapshot before it to the first one inside it (the dashed line the chart draws), so the
-// figure follows the range.
+// date comes from the data), from however many daily changes it has (2+), so a week reads like a month. Otherwise net
+// worth is interpolated: straight lines between snapshots (the honest guess: a curve fitted to the benchmarks would
+// correlate with them by construction), starting where the range does: on the line from the snapshot before it to the
+// first one inside it (the dashed line the chart draws), so the figure follows the range. Shown like a measured one.
 function syncBenchCorr(t, u, inR, pts, start) {
-  const real = inR.filter(p => !p.est), daily = pts.filter(p => p.kind === "daily"), d0 = daily[0];
+  const real = inR.filter(p => !p.est), d0 = pts.find(p => p.kind === "daily");
   const early = !d0 || (pts[0].x < d0.x && start < d0.x);  // the range reaches back before the dailies, where there is data
   const prev = pts.filter(p => p.x < start).at(-1), next = real[0];
   const lead = prev && next && next.x > start
     ? {x: start, y: prev.y + (next.y - prev.y) * (start - prev.x) / (next.x - prev.x), date: new Date(start).toISOString().slice(0, 10)} : null;
-  const path = lead ? [lead, ...real] : real, onLine = lead ? ` between the ${fmtDay(prev.date)} and ${fmtDay(next.date)} snapshots` : "";
-  let anyEst = false;
+  const path = lead ? [lead, ...real] : real;
   for (const btn of document.querySelectorAll("#trendbench button")) {
     const k = btn.dataset.b, el = btn.querySelector(".corr");
     const c = !benchHas(t, k) ? null : early ? benchCorrEst(t, u, path, k) : benchCorr(t, u, inR, k);
     const num = c?.r != null ? (c.r < 0 ? "−" : "") + Math.abs(c.r).toFixed(2) : "";
-    const est = !!num && early;
-    el.classList.toggle("est", est);
-    el.textContent = !c ? "" : !num ? "—" : est ? "≈" + num : num;
-    if (est) { el.insertAdjacentHTML("beforeend", "<small>est</small>"); anyEst = true; }
+    el.textContent = !c ? "" : !num ? "—" : num;
     const key = " 1 = move together, 0 = unrelated, −1 = opposite. Net worth moves also include pay, spending and transfers.";
     const steps = c && `${c.weekly ? "weekly" : "daily"} moves`;
     btn.title = BENCH[k].label + (!c ? "" : !num ? (c.n < 2 ? `: too few points in this range for a correlation (${c.n} change${c.n === 1 ? "" : "s"}, needs 2).` : ": no correlation in this range: one of the two never moves.")
-      : est ? `: estimate only, ≈${num}. ${d0 ? `This range reaches back before the daily snapshots began (${fmtDay(d0.date)})` : "There are no daily snapshots yet"}, so net worth between snapshots is taken as a straight line${lead ? `, starting on the one${onLine}` : ""} (${steps} since ${fmtDay(c.since)}, ${c.n} changes). It mostly shows the long-run trend, not real day-to-day co-movement.` + key
+      : early ? `: correlation ${num} between its ${steps} and net worth's since ${fmtDay(c.since)} (${c.n} changes; ${d0 ? `before the daily snapshots began on ${fmtDay(d0.date)}` : "with no daily snapshots yet"}, net worth is interpolated between balance-sheet snapshots).` + key
       : `: correlation ${num} between its ${steps} and net worth's since ${fmtDay(c.since)} (${c.n} changes, daily snapshots only).` + key);
   }
-  const note = $("trendcorrnote"), since = d0 ? ` Measured correlations use the daily snapshots since ${fmtDay(d0.date)} (${daily.length - 1} changes).` : "";
-  note.hidden = !anyEst;
-  note.textContent = anyEst ? `≈ = estimate: ${lead ? `this range starts on a straight line${onLine}, and ` : ""}net worth between snapshots is taken as a straight line, so these mostly reflect the long-run trend, not real day-to-day co-movement.` + since : "";
 }
 const pctStr = p => p == null || !isFinite(p) ? "n/a" : (p < 0 ? "−" : "+") + Math.abs(p).toFixed(1) + "%";
 

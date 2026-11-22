@@ -941,20 +941,20 @@ def test_correlation_pairs_each_point_with_the_same_days_close(desk):
     assert late["r"] < 0.9
 
 
-def test_correlation_chips_measured_and_estimated(desk):
-    chips, note = desk.locator("#trendbench button .corr"), desk.locator("#trendcorrnote")
-    measured, estimate = re.compile(r"^[−-]?[01]\.\d\d$"), re.compile(r"^≈[−-]?[01]\.\d\dest$", re.I)
+def test_correlation_chips_are_plain_numbers_for_every_range(desk):
+    chips, plain = desk.locator("#trendbench button .corr"), re.compile(r"^[−-]?[01]\.\d\d$")
     for r in ("1M", "1W"):  # all daily snapshots: measured, however few changes a week has
         desk.locator(f'#trendrng button[data-r="{r}"]').click()
-        expect(chips).to_have_text([measured] * 3)
-        expect(desk.locator("#trendbench .corr.est")).to_have_count(0)
-        expect(note).to_be_hidden()
+        expect(chips).to_have_text([plain] * 3)
     expect(desk.locator('#trendbench button[data-b="SPX"]')).to_have_attribute("title", re.compile(r"correlation [−-]?[01]\.\d\d .*\(\d+ changes, daily snapshots only\)"))
-    desk.locator('#trendrng button[data-r="All"]').click()  # a stretch drawn as a straight line between sheet points: estimates
-    expect(chips).to_have_text([estimate] * 3)
-    expect(desk.locator("#trendbench .corr.est")).to_have_count(3)
-    expect(note).to_be_visible()
-    expect(note).to_contain_text("≈ = estimate")
+    desk.locator('#trendrng button[data-r="All"]').click()  # back before the dailies: interpolated between sheet points
+    expect(chips).to_have_text([plain] * 3)  # shown like a measured figure: no ≈, no est tag, no note
+    expect(desk.locator("#trendbench .corr small, #trendbench .corr.est, #trendcorrnote")).to_have_count(0)
+    assert desk.evaluate("""() => [...document.querySelectorAll('#trendbench .corr')].every(e =>
+        getComputedStyle(e).fontStyle === 'normal' && getComputedStyle(e).opacity === '1')""")
+    expect(desk.locator('#trendbench button[data-b="SPX"]')).to_have_attribute("title", re.compile(
+        r"correlation [−-]?[01]\.\d\d .*net worth is interpolated between balance-sheet snapshots"))
+    assert "estimat" not in desk.locator('#trendbench button[data-b="SPX"]').get_attribute("title").lower()
     spx = desk.locator('#trendbench button[data-b="SPX"]')
     lines = desk.evaluate("Chart.getChart('trend').data.datasets.length")
     spx.click()  # a chip draws its benchmark over the trend
@@ -1089,7 +1089,6 @@ def test_simplefin_only_hides_the_optional_cards(sfo, open_page):
     expect(page.locator("#problems")).to_be_empty()
     assert pressed(page, "trendrng") == ["1M"]  # nothing older than the daily snapshots to show
     expect(page.locator("#trendbench button .corr")).to_have_text([re.compile(r"^[−-]?[01]\.\d\d$")] * 3)
-    expect(page.locator("#trendcorrnote")).to_be_hidden()
     fits_the_screen(page)
 
     button = page.locator("#refresh")  # no sheet to re-read: the button reloads the numbers
