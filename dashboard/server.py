@@ -11,6 +11,9 @@ background; GET /api/sync says how it is going), /api/trend, /api/accounts,
 /api/holdings, /api/crypto, /api/cards, /api/spending, /api/drafts (overdraft forecast), /api/budget (budget vs actual),
 /api/subscriptions (recurring charges + unusual charges), /api/rental (rental P&L),
 /api/inherited_ira (10-year rule tracker), /api/last (the last good answer to each of those, kept on disk), /healthz. Page: /
+
+Crypto, metals and synced stocks/ETFs are at live prices (valuations/live.py, fetched at most once a minute) in the
+summary, trend (today's point), holdings and crypto answers; networth.py's own output is at the daily run's prices.
 """
 from __future__ import annotations
 
@@ -48,6 +51,7 @@ import personal  # noqa: E402
 from insights import budget, inherited_ira, monthly_email, overdraft, rental, subscriptions  # noqa: E402
 from insights import prices as price_hist  # noqa: E402
 from insights import holding_prices  # noqa: E402
+from valuations import live as livepx  # noqa: E402
 
 _DASH = personal.section("dashboard")
 DB = os.path.expanduser(os.environ.get("WEALTH_LEDGER_DB") or "~/.local/share/wealth-ledger/txns.db")
@@ -173,7 +177,7 @@ class Series(list):
     repriced: int
 
 
-def synced_series() -> Series:
+def synced_series(quotes: dict | None = None) -> Series:
     """Daily sum of synced balances networth.py counts (non-custodial/crypto, non-superseded), carried forward.
     Each day also has "accounts" (account_id -> value that day) so period_changes can compare like with like.
 
@@ -181,7 +185,10 @@ def synced_series() -> Series:
     of its feed balance (the feed's balances and prices arrive a day or two late, and irregularly): shares from that
     snapshot x the last close on or before the day (a weekend or holiday carries the trading day before), plus the
     snapshot's balance minus its holdings' market values (cash and anything unpriced); see holding_prices.revalue.
-    Such a day also has "close": the newest market close used, the date its investments are valued as of."""
+    Such a day also has "close": the newest market close used, the date its investments are valued as of.
+
+    quotes (live_quotes()): today's live quotes count as today's close, and a point for today is added at live prices
+    when today's sync hasn't run yet."""
     rows = q(f"""SELECT b.snapshot_date d, b.account_id a, CAST(b.balance AS REAL) bal FROM balances b
                  JOIN account_kind k USING (account_id)
                  WHERE k.kind IN ({','.join('?' * len(NW_KINDS))})
@@ -206,14 +213,19 @@ def synced_series() -> Series:
         closes = holding_prices.load(con, {(p[0] or "").strip() for ps in snaps.values() for p in ps})
     finally:
         con.close()
+    today = date.today().isoformat()
+    if quotes and quotes["stocks"]["prices"]:
+        closes = livepx.stock_closes(closes, quotes, today)
     dates = sorted({r["d"] for r in rows})
+    if quotes and any(g["prices"] for g in quotes.values()) and dates and dates[-1] < today:
+        dates.append(today)
     last, held, out = {}, {}, Series()
     out.fallback, repriced = {}, set()
     by_date: dict[str, list] = {}
     for r in rows:
         by_date.setdefault(r["d"], []).append(r)
     for d in dates:
-        for r in by_date[d]:
+        for r in by_date.get(d, []):
             last[r["a"]] = r["bal"] or 0.0
             held[r["a"]] = snaps.get((d, r["a"]))  # none: that snapshot has no holdings, its balance stands
         vals, newest, missed = dict(last), None, set()
@@ -300,13 +312,13 @@ def in_synced_series(line: dict) -> bool:
     return line["synced"] if "synced" in line else line["from"].startswith("live")
 
 
-def crypto_wallet_lines(line: dict, src: str) -> list[dict]:
+def crypto_wallet_lines(line: dict, src: str, quotes: dict | None = None) -> list[dict]:
     """The crypto total split into one allocation line per wallet, when the latest valuation is the number in use
     (so the parts add up to it); otherwise nothing. A wallet's dollar cash has its own balance-sheet row, so that
     row is relabelled "<wallet> cash" to tell it from the wallet's coins. Each wallet is marked on its own: live
     when today's run read every counted amount in it from a chain or the exchange, even if another wallet's
     typed-in amount makes the total an estimate."""
-    crypto = api_crypto({}) if line["line"] in (CRYPTO_LINE, *CRYPTO_CASH_ROWS) else {"wallets": []}
+    crypto = api_crypto({}, quotes) if line["line"] in (CRYPTO_LINE, *CRYPTO_CASH_ROWS) else {"wallets": []}
     wallets = {w["wallet"]: w["value"] for w in crypto["wallets"] if abs(w["value"]) >= 0.005}
     read = {w["wallet"] for w in crypto["wallets"] if crypto.get("as_of") == date.today().isoformat()
             and all(h["qty_source"] in READ_QTY for h in w["holdings"] if h["counted"])}
@@ -325,9 +337,55 @@ def hidden_sections() -> list[str]:
     return [k for k, v in off.items() if v]
 
 
+def live_quotes() -> dict | None:
+    """Live prices for what the ledger holds (valuations/live.py; fetched at most once a minute, a slow source waited
+    for a few seconds at most), or None when they are off or fail: the stored daily prices then stand."""
+    if not livepx.enabled():
+        return None
+    try:
+        con = db()
+        try:
+            return livepx.quotes(livepx.wanted(con))
+        finally:
+            con.close()
+    except Exception as e:  # noqa: BLE001 - never fail a page over a price
+        log(f"live prices: {e!r}")
+        return None
+
+
+def live_networth(data: dict, quotes: dict | None) -> dict:
+    """networth.py's result at live prices (crypto, metals, synced holdings); unchanged without any."""
+    if not quotes:
+        return data
+    try:
+        con = db()
+        try:
+            return livepx.reprice(data, con, quotes)
+        finally:
+            con.close()
+    except Exception as e:  # noqa: BLE001
+        log(f"live prices: {e!r}")
+        return data
+
+
+def _iso(t: float | None) -> str | None:
+    return datetime.fromtimestamp(t).astimezone().isoformat(timespec="seconds") if t else None
+
+
+def live_info(priced: dict | None, quotes: dict | None) -> dict | None:
+    """For the page's "Prices live" note: per group priced live, when its prices were fetched ("at"), the newest
+    market quote time (stocks) and the sources; "refresh_s": how often the page should re-read. None when off."""
+    if quotes is None:
+        return None
+    return {"refresh_s": livepx.TTL, "groups": {g: {"at": _iso(w["at"]), "quote_time": _iso(w["quote_time"]),
+                                                    "sources": w["sources"]} for g, w in (priced or {}).items()},
+            "errors": [g["error"] for g in quotes.values() if g.get("error")]}
+
+
 def api_summary(params) -> dict:
     nw = networth(refresh="refresh" in params)
-    data = nw["data"]
+    quotes = live_quotes()
+    data = live_networth(nw["data"], quotes) if nw["data"] else None
     res = {"status": read_status(), "networth_error": nw["error"],
            "networth_fetched": datetime.fromtimestamp(nw["fetched"]).astimezone().isoformat() if nw["fetched"] else None,
            "cache_ttl_s": CACHE_TTL, "sheetless": not personal.has_sheet(), "hide": hidden_sections(),
@@ -345,43 +403,55 @@ def api_summary(params) -> dict:
         src = line_source(l)
         c["value"] += signed
         c[src] += signed
-        c["lines"] += crypto_wallet_lines(l, src) or [{"line": l["line"], "value": round(signed, 2), "source": src}]
+        c["lines"] += (crypto_wallet_lines(l, src, quotes)
+                       or [{"line": l["line"], "value": round(signed, 2), "source": src}])
     for c in cats.values():
         c["lines"].sort(key=lambda x: -abs(x["value"]))
         for k in ("value", "live", "est", "sheet"):
             c[k] = round(c[k], 2)
     sheet_const = round(sum((l["used"] if l["type"] == "asset" else -l["used"])
                             for l in data["lines"] if not in_synced_series(l)), 2)
-    changes = period_changes(synced_series())
+    changes = period_changes(synced_series(quotes))
     res.update(net_worth=data["net_worth"], assets=data["assets"], liabilities=data["liabilities"],
                sheet_net_worth=data.get("sheet_net_worth"), sheet_only_total=sheet_const,
-               changes=changes, categories=list(cats.values()), input_ages=input_ages(data["lines"]))
+               changes=changes, categories=list(cats.values()), input_ages=input_ages(data["lines"]),
+               live=live_info(data.get("prices"), quotes))
     return res
+
+
+def sheet_only(data: dict) -> float:
+    """The part of net worth the synced daily series doesn't have (sheet rows, valuations), signed."""
+    return round(sum((l["used"] if l["type"] == "asset" else -l["used"]) for l in data["lines"]
+                     if not in_synced_series(l)), 2)
 
 
 def api_trend(params) -> dict:
     nw = networth()
-    full = synced_series()
+    quotes = live_quotes()
+    full = synced_series(quotes)
     series = [{k: s[k] for k in ("date", "synced", "close") if k in s} for s in full]
-    sheet_const = None
+    sheet_const = live_const = None
     if nw["data"]:
-        sheet_const = round(sum((l["used"] if l["type"] == "asset" else -l["used"])
-                                for l in nw["data"]["lines"] if not in_synced_series(l)), 2)
-    for s in series:
-        s["total"] = round(s["synced"] + sheet_const, 2) if sheet_const is not None else None
+        sheet_const = sheet_only(nw["data"])
+        live_const = sheet_only(live_networth(nw["data"], quotes))
+    today = date.today().isoformat()
+    for s in series:  # past points keep the daily run's prices; today's has the live ones
+        const = live_const if s["date"] == today else sheet_const
+        s["total"] = round(s["synced"] + const, 2) if const is not None else None
     first_daily = series[0]["date"] if series else None
     points = sheet_points(first_daily)
     fallback = getattr(full, "fallback", {})
-    return {"series": series, "sheet_only_total": sheet_const,
+    return {"series": series, "sheet_only_total": sheet_const, "live_sheet_only_total": live_const,
             "note": "Synced accounts from daily snapshots (custodial accounts, crypto exchange wallets and "
                     "superseded feeds excluded, as in networth.py) plus today's sheet-only total held constant. "
                     "Each point is that date's value: accounts with holdings are valued at the market close on or "
                     "before the date (\"close\": the newest close used; a weekend carries Friday's), the rest at "
-                    "their synced balance.",
+                    "their synced balance. Today's point is at live prices (crypto, metals, stocks and ETFs) and "
+                    "uses live_sheet_only_total.",
             "valued": {"accounts": getattr(full, "repriced", 0), "fallback": fallback},
             "first_daily": first_daily, "sheet_points": points,
             **trend_prices([s["date"] for s in series] + [s["close"] for s in series if "close" in s]
-                           + [p["date"] for p in points])}
+                           + [p["date"] for p in points], quotes=quotes)}
 
 
 # where the valuations providers keep today's spot (valuations/crypto.py, valuations/metals.py detail JSON)
@@ -408,11 +478,15 @@ def bench_dates(dates, today: str) -> list[str]:
     return sorted(x for x in out if x <= today)
 
 
-def trend_prices(dates, today: str | None = None) -> dict:
+LIVE_SPOT = {"BTC": ("crypto", "BTC"), "XAU": ("metals", "Au"), "XAG": ("metals", "Ag"), "XPT": ("metals", "Pt")}
+
+
+def trend_prices(dates, today: str | None = None, quotes: dict | None = None) -> dict:
     """USD per unit of every display unit in insights/prices.py (BTC, metals, rial, dinar), for showing values in it.
     prices: {sym: {date: usd}} for every trend date (series + sheet_points; that day's close or the nearest earlier
     one; a date before the first stored price is left out). spot: {sym: {usd, date, source}} = the latest price,
-    from the prices table or, when newer, the valuations providers' live spot; None when neither has one.
+    from the prices table or, when newer, the valuations providers' spot; a live price (quotes) beats both; None when
+    none.
     benchmarks: {dates: [...bench_dates], prices: {sym: [usd or None per date]}, lag: {sym: [days from that close to
     the date, or None, per date]}} for the trend's overlays (S&P 500, Nasdaq, gold, bitcoin) and every unit with a
     price history, so the page can price an overlay in the shown unit and pair a net-worth point with the same day's
@@ -447,6 +521,9 @@ def trend_prices(dates, today: str | None = None) -> dict:
                 v = []
             if v and (best is None or v[0]["d"] > best["date"]):
                 best = {"usd": float(v[0]["usd"]), "date": v[0]["d"], "source": f"valuations ({v[0]['src']})"}
+        r = quotes[LIVE_SPOT[sym][0]]["prices"].get(LIVE_SPOT[sym][1]) if quotes and sym in LIVE_SPOT else None
+        if r:
+            best = {"usd": r["usd"], "date": today, "source": f"live ({r['source']}, {_iso(r['at'])[11:16]})"}
         out["spot"][sym] = best
     return out
 
@@ -497,14 +574,33 @@ def api_accounts(params) -> dict:
     return {"accounts": rows, "stale_days": STALE_DAYS, "spark_days": SPARK_DAYS}
 
 
+def holding_rows(quotes: dict | None, where: str = "", args=()) -> list[dict]:
+    """v_holdings_latest rows (custodial accounts and blank symbols left out) with the account's kind; with live quotes
+    (live_quotes()) a stock, ETF or coin is valued at shares x its live price ("live": the source), the rest keep
+    the feed's value."""
+    rows = q(f"""SELECT h.symbol, h.description, h.account_name, h.value, h.source, h.snapshot_date,
+                        CAST(NULLIF(TRIM(h.shares), '') AS REAL) shares, CAST(NULLIF(TRIM(h.price), '') AS REAL) price,
+                        COALESCE(k.kind,'') kind
+                 FROM v_holdings_latest h LEFT JOIN account_kind k USING (account_id)
+                 WHERE TRIM(COALESCE(h.symbol,'')) <> '' AND COALESCE(k.kind,'') <> 'custodial' {where}""", args)
+    for r in rows:
+        feed_price = r["price"] or ((r["value"] or 0) / r["shares"] if r["shares"] else None)
+        hit = livepx.holding_quote(quotes, r["symbol"], r["kind"], feed_price) \
+            if quotes and r["source"] != "manual" and r["shares"] else None
+        if hit:
+            r["value"], r["price"], r["live"] = r["shares"] * hit[1]["usd"], hit[1]["usd"], hit
+    return rows
+
+
 def api_holdings(params) -> dict:
-    rows = q("""SELECT h.symbol, h.description, h.account_name, h.value, h.shares, h.price, h.source, h.snapshot_date
-                FROM v_holdings_latest h LEFT JOIN account_kind k USING (account_id)
-                WHERE TRIM(COALESCE(h.symbol,'')) <> '' AND COALESCE(k.kind,'') <> 'custodial'""")
+    quotes = live_quotes()
+    rows = holding_rows(quotes)
     agg: dict[str, dict] = {}
     for r in rows:
         a = agg.setdefault(r["symbol"], {"symbol": r["symbol"], "description": r["description"], "value": 0.0,
                                          "accounts": [], "sources": set(), "as_of": r["snapshot_date"]})
+        if r.get("live"):
+            a["live"] = r["live"][1]["source"]
         a["value"] += r["value"] or 0
         if abs(r["value"] or 0) >= 0.01:
             a["accounts"].append(re.sub(r"\s*\([0-9a-f-]+\)$", "", r["account_name"] or ""))
@@ -517,20 +613,34 @@ def api_holdings(params) -> dict:
         a["pct"] = round(100 * a["value"] / total, 2) if total else 0
         a["accounts"] = sorted(set(a["accounts"]))
         a["sources"] = sorted(a["sources"])
+    priced: dict[str, list] = {}
+    for r in rows:
+        if r.get("live"):
+            priced.setdefault(r["live"][0], []).append(r["live"][1])
     return {"holdings": out, "total": round(total, 2), "count": len(out),
+            "live": live_info({g: livepx.when(rs) for g, rs in priced.items()}, quotes),
             "note": "Excludes custodial accounts and blank-symbol cash sweeps. SimpleFIN has no cost basis, so no gains. "
                     "Manual holdings are as of their last manual entry."}
 
 
-def api_crypto(params) -> dict:
+def api_crypto(params, quotes: dict | None = None) -> dict:
     """Every crypto holding from the latest valuations/crypto.py run, grouped by wallet and by coin (each coin
-    with the wallets it is kept in)."""
+    with the wallets it is kept in), at live prices when there are any (quotes: live_quotes(), fetched if not given)."""
     rows = q("SELECT snapshot_date, value, detail, fetched_at FROM v_valuations_latest "
              "WHERE asset = ?", (CRYPTO_LINE,))
     if not rows:
         return {"total": None, "wallets": [], "coins": [], "transfers": crypto_transfers()}
-    r = rows[0]
+    r = dict(rows[0])
     d = json.loads(r["detail"] or "{}")
+    quotes = quotes if quotes is not None else live_quotes()
+    con = db()
+    try:
+        rep = livepx.reprice_crypto(livepx.latest_valuation(con, CRYPTO_LINE), quotes) if quotes else None
+    finally:
+        con.close()
+    if rep:  # same quantities, live prices
+        d.update(holdings=rep["holdings"], by_coin=rep["by_coin"])
+        r["value"], r["fetched_at"] = rep["total"], _iso(rep["when"]["at"])
     wallets: dict[str, dict] = {}
     for h in d.get("holdings") or []:
         value, qty = h.get("value") or 0, h.get("qty") or 0
@@ -560,8 +670,9 @@ def api_crypto(params) -> dict:
                    key=lambda c: -c["value"])
     btc_price = (d.get("by_coin") or {}).get("BTC", {}).get("price")
     return {"total": round(total, 2), "as_of": r["snapshot_date"], "fetched_at": r["fetched_at"],
+            "live": live_info({"crypto": rep["when"]} if rep else {}, quotes),
             "sheet_total": d.get("sheet_total"), "wallets": out, "coins": coins, "warnings": d.get("warnings") or [],
-            "btc": btc_locations(out, btc_price), "transfers": crypto_transfers()}
+            "btc": btc_locations(out, btc_price, quotes), "transfers": crypto_transfers()}
 
 
 # Spot bitcoin funds (Grayscale's Mini Trust trades as "BTC"); held in brokerage/IRA accounts, not wallets.
@@ -569,18 +680,21 @@ BTC_FUNDS = {"FBTC", "IBIT", "GBTC", "BTC", "BITB", "ARKB", "HODL", "BRRR", "EZB
 EXCHANGES = {"Gemini", "Coinbase", "Kraken", "Binance", "Fidelity Crypto", "Cash App", "Strike", "River"}
 
 
-def btc_locations(wallets: list[dict], btc_price: float | None) -> dict:
+def btc_locations(wallets: list[dict], btc_price: float | None, quotes: dict | None = None) -> dict:
     """Where the owner's bitcoin is: wallets (self-custody or exchange) plus bitcoin funds in brokerage/IRA accounts,
     as BTC-equivalent at today's price (fund value / BTC price; close enough, the funds track spot)."""
     rows = [{"where": w["wallet"], "type": "exchange" if w["wallet"] in EXCHANGES else "self-custody",
              "btc": h["qty"], "value": h["value"], "source": h["qty_source"]}
             for w in wallets for h in w["holdings"] if h["coin"] == "BTC" and h["counted"] and h["qty"]]
-    funds = q(f"""SELECT h.account_name, h.symbol, SUM(h.value) value, MIN(h.snapshot_date) as_of
-                  FROM v_holdings_latest h JOIN account_kind k USING (account_id)
-                  WHERE h.symbol IN ({",".join("?" * len(BTC_FUNDS))}) AND k.kind IN ('investment', 'retirement')
-                    AND h.value > 0
-                  GROUP BY h.account_name, h.symbol""", sorted(BTC_FUNDS))
-    for f in funds:
+    funds: dict[tuple, dict] = {}
+    for h in holding_rows(quotes, f"""AND h.symbol IN ({",".join("?" * len(BTC_FUNDS))})
+                                     AND k.kind IN ('investment', 'retirement') AND h.value > 0""", sorted(BTC_FUNDS)):
+        f = funds.setdefault((h["account_name"], h["symbol"]),
+                             {"account_name": h["account_name"], "symbol": h["symbol"], "value": 0.0,
+                              "as_of": h["snapshot_date"]})
+        f["value"] += h["value"] or 0
+        f["as_of"] = min(f["as_of"], h["snapshot_date"])
+    for f in funds.values():
         rows.append({"where": re.sub(r"\s*\([0-9a-f]{8}-[0-9a-f-]+\)$", "", f["account_name"] or ""), "symbol": f["symbol"],
                      "type": "fund", "btc": f["value"] / btc_price if btc_price else None,
                      "value": round(f["value"], 2), "source": "fund", "as_of": f["as_of"]})

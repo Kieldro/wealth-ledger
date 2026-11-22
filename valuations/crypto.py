@@ -836,7 +836,10 @@ def simplefin_sources(db_path: Path | None = None) -> list[dict]:
 
 # ---------------------------------------------------------------- prices
 
-def prices(coins: set[str], sheet_prices: dict[str, float]) -> tuple[dict[str, tuple[float, str]], list[str]]:
+def prices(coins: set[str], sheet_prices: dict[str, float],
+           check: bool = True) -> tuple[dict[str, tuple[float, str]], list[str]]:
+    """{coin: (usd, source)} and warnings. check=False skips the Kraken cross-check, so Kraken is only asked for the
+    coins CoinGecko had no price for (valuations/live.py, which asks once a minute)."""
     out: dict[str, tuple[float, str]] = {c: (1.0, "par") for c in coins if c == "USD"}
     warns = []
     want = sorted(c for c in coins if c in COINS)
@@ -851,6 +854,8 @@ def prices(coins: set[str], sheet_prices: dict[str, float]) -> tuple[dict[str, t
         warns.append(f"coingecko: {e}")
     kr: dict[str, float] = {}
     for c in want:  # one call per pair: Kraken rejects a whole batch if any pair is unknown/delisted
+        if not check and c in out:
+            continue
         try:
             d = _req(f"https://api.kraken.com/0/public/Ticker?pair={COINS[c][1]}")
             res = d.get("result") or {}

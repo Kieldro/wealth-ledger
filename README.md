@@ -90,10 +90,10 @@ Each is off until you set it up, and none is needed by the others unless noted.
 | `simplefin/simplefin_sync.py` | SimpleFIN Bridge -> SQLite (transactions, balances, holdings) |
 | `plaid/plaid_sync.py` | Plaid -> SQLite, for accounts SimpleFIN can't reach (link / relink / sync); also stores card credit limits (`balances.limit`) |
 | `fidelity/history_import.py` | One-off backfill of Fidelity history from saved fidelity.com activity responses (JSON, kept outside the repo) into `txns` as source `fidelity_web`: only rows dated before each account's first live-feed transaction, on the live account's id, with the overlap compared against the feed; idempotent, `--dry-run` to preview |
-| `networth.py` | Net worth = live synced balances + the sheet's manual rows + valuations |
+| `networth.py` | Net worth = live synced balances + the sheet's manual rows + valuations, at the daily run's market prices; `--live` reprices crypto, metals and synced stocks/ETFs now, as the dashboard does |
 | `sheet_marks.py` | Marks balance-sheet rows nothing keeps current (yellow label + note); unmarks them once they're live. Formatting only |
 | `sheet_estimates.py` | Writes the latest home valuation, its date and the estimates behind it to the sheet's `estimates` tab (only that tab; only when it changed), so the balance sheet can point at it |
-| `valuations/` | Daily/monthly estimates: `metals`, `crypto`, `home`, `cars`; `run.py` runs whichever are due |
+| `valuations/` | Daily/monthly estimates: `metals`, `crypto`, `home`, `cars`; `run.py` runs whichever are due. `live.py` prices the stored quantities at live prices for the dashboard (at most once a minute, free keyless sources) |
 | `insights/overdraft.py` | Overdraft check: projects recurring bills, card autopays and pay 31 days ahead per checking account |
 | `insights/zelle_memos.py` | Adds the note typed on each Zelle (from the bank's Zelle emails, read with `gws`) to the matching transaction's memo |
 | `insights/amazon.py` | Imports an Amazon "Your Orders" data export (items, refunds; no addresses/gift/tracking), matches Amazon card charges to the shipments they paid for, so `insights/budget.py` splits each charge across its items' budget lines |

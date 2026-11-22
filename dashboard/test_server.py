@@ -1,6 +1,7 @@
 """Dashboard API helpers against a small synthetic database (no real data)."""
 import json
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -385,7 +386,7 @@ def test_live_exchange_reading_stays_in_the_trend_constant(dbfile, monkeypatch):
              {"line": "Old cache", "type": "asset", "used": 7.0, "from": "live (no sheet row)"}]  # no key: by prefix
     data = {"lines": lines, "assets": 1357.0, "liabilities": 20.0, "net_worth": 1337.0}
     monkeypatch.setattr(server, "networth", lambda refresh=False: {"data": data, "error": None, "fetched": 0.0})
-    monkeypatch.setattr(server, "synced_series", lambda: [])
+    monkeypatch.setattr(server, "synced_series", lambda quotes=None: [])
     monkeypatch.setattr(server, "STATUS", "/nonexistent")
     assert server.api_summary({})["sheet_only_total"] == 330.0
     assert server.api_trend({})["sheet_only_total"] == 330.0
@@ -487,7 +488,7 @@ def test_summary_shows_networth_warnings_with_the_sync_problems(tmp_path, monkey
     data = {"lines": [], "assets": 0, "liabilities": 0, "net_worth": 0, "sheet_net_worth": 0,
             "warnings": ["Net worth: Savings (1111) was last updated 2026-01-01 and is still counted"]}
     monkeypatch.setattr(server, "networth", lambda refresh=False: {"data": data, "error": None, "fetched": 0.0})
-    monkeypatch.setattr(server, "synced_series", lambda: [])
+    monkeypatch.setattr(server, "synced_series", lambda quotes=None: [])
     assert server.api_summary({})["status"]["problems"] == data["warnings"]
 
 
@@ -748,7 +749,7 @@ def test_allocation_splits_the_crypto_total_by_wallet(dbfile, monkeypatch):
               "synced": False}]
     data = {"lines": lines, "assets": 60050.0, "liabilities": 0, "net_worth": 60050.0}
     monkeypatch.setattr(server, "networth", lambda refresh=False: {"data": data, "error": None, "fetched": 0.0})
-    monkeypatch.setattr(server, "synced_series", lambda: [])
+    monkeypatch.setattr(server, "synced_series", lambda quotes=None: [])
     monkeypatch.setattr(server, "STATUS", "/nonexistent")
     monkeypatch.setattr(server, "CRYPTO_CASH_ROWS", {"W2"})
     monkeypatch.setattr(server, "EXACT", {"W2": "crypto"})
@@ -1441,3 +1442,100 @@ def test_account_with_no_matching_label_is_filed_by_its_type():
     assert server.categorize({"line": "Account 7", "type": "asset"}) == "other"  # sheet rows carry no kind
     assert server.categorize(line("Account 7", "credit", "liability")) == "cards"
 
+
+
+def _live_quotes(crypto=None, metals=None, stocks=None):
+    now = datetime.now().timestamp()
+    return {g: {"prices": {k: {"usd": v, "source": "test", "time": None, "at": now} for k, v in (p or {}).items()},
+                "error": None} for g, p in (("crypto", crypto), ("metals", metals), ("stocks", stocks))}
+
+
+@pytest.fixture
+def live_ledger(dbfile, monkeypatch):
+    """An IRA with 10 VTI @100 + 500 money market, a crypto run (0.5 BTC @80k) and a metals run (2 oz gold @4000),
+    stored this morning; networth.py's lines for them; yesterday's IRA snapshot for the trend."""
+    con = ctdb.connect(dbfile)
+    con.execute("DELETE FROM balances")
+    con.execute("INSERT INTO account_kind VALUES ('ira','retirement',NULL), ('cb','crypto',NULL)")
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    for d in (yesterday, TODAY):
+        con.execute(ctdb.UPSERT_BALANCE, (d, "simplefin", "ira", "IRA (1)", "Broker", "1500.00", None, "USD", None))
+        for sym, sh, px in (("VTI", 10, 100.0), ("SPAXX", 500, 1.0)):
+            con.execute(ctdb.UPSERT_HOLDING, (d, "simplefin", "ira", "IRA (1)", "Broker", sym, sym, sym,
+                                              str(sh), str(px), str(sh * px), "0", "USD"))
+    con.execute(ctdb.UPSERT_HOLDING, (TODAY, "simplefin", "cb", "Coinbase (ab-1)", "CB", "BTC", "BTC", "Bitcoin",
+                                      "0.1", None, "8000", "0", "USD"))
+    con.execute("INSERT INTO security_prices VALUES (?,?,?,?)", (yesterday, "VTI", 100.0, "y"))
+    crypto = {"holdings": [{"wallet": "Cold", "coin": "BTC", "qty": 0.5, "price": 80000.0, "value": 40000.0,
+                            "qty_source": "onchain", "counted": True}],
+              "by_coin": {"BTC": {"qty": 0.5, "price": 80000.0, "value": 40000.0}}}
+    metals = {"metals": {"gold": {"oz": 2.0, "spot": 4000.0, "source": "swissquote", "value": 8000.0}}}
+    for asset, value, detail in ((server.CRYPTO_LINE, 40000.0, crypto), ("Total metals value", 8000.0, metals)):
+        con.execute("INSERT INTO valuations VALUES (?,?,?,?,?,?)",
+                    (TODAY, asset, value, "x", json.dumps(detail), f"{TODAY}T00:00:01+00:00"))
+    con.commit()
+    con.close()
+    lines = [{"line": "IRA", "type": "asset", "used": 1500.0, "from": "live", "synced": True, "accounts": ["ira"],
+              "as_of": TODAY},
+             {"line": server.CRYPTO_LINE, "type": "asset", "used": 40000.0, "from": "estimate (x)", "synced": False},
+             {"line": "Total metals value", "type": "asset", "used": 8000.0, "from": "estimate (x)", "synced": False}]
+    data = {"lines": lines, "assets": 49500.0, "liabilities": 0.0, "net_worth": 49500.0}
+    monkeypatch.setattr(server, "networth", lambda refresh=False: {"data": data, "error": None, "fetched": 0.0})
+    monkeypatch.setattr(server, "STATUS", "/nonexistent")
+    return yesterday
+
+
+def test_market_values_are_live_everywhere_but_history(live_ledger, monkeypatch):
+    q = _live_quotes(crypto={"BTC": 90000.0}, metals={"Au": 4100.0}, stocks={"VTI": 110.0})
+    monkeypatch.setattr(server, "live_quotes", lambda: q)
+    s = server.api_summary({})
+    assert s["net_worth"] == 1600.0 + 45000.0 + 8200.0  # 10 VTI +$10; 0.5 BTC at 90k; 2 oz at 4100
+    cats = {c["key"]: c["value"] for c in s["categories"]}
+    assert cats["crypto"] == 45000.0 and cats["metals"] == 8200.0
+    assert s["sheet_only_total"] == 53200.0 and s["changes"]["1"]["delta"] == 100.0  # today vs yesterday: VTI
+    assert set(s["live"]["groups"]) == {"crypto", "metals", "stocks"} and s["live"]["refresh_s"] == 60
+    t = server.api_trend({})
+    assert [p["total"] for p in t["series"]] == [1500.0 + 48000.0, 1600.0 + 53200.0]  # yesterday keeps daily prices
+    assert (t["sheet_only_total"], t["live_sheet_only_total"]) == (48000.0, 53200.0)
+    assert t["series"][-1]["total"] == s["net_worth"]  # the headline and today's point agree
+    assert t["spot"]["BTC"]["usd"] == 90000.0 and t["spot"]["XAU"]["usd"] == 4100.0
+    h = server.api_holdings({})
+    vals = {x["symbol"]: x["value"] for x in h["holdings"]}
+    assert vals == {"VTI": 1100.0, "SPAXX": 500.0, "BTC": 9000.0}  # the coin at its coin price, cash as sent
+    assert set(h["live"]["groups"]) == {"stocks", "crypto"}
+    c = server.api_crypto({})
+    assert c["total"] == 45000.0 and c["coins"][0]["price"] == 90000.0 and c["live"]["groups"]["crypto"]
+    assert c["btc"]["price"] == 90000.0
+
+
+def test_market_values_fall_back_to_the_daily_run(live_ledger, monkeypatch):
+    monkeypatch.setattr(server, "live_quotes", lambda: None)  # live prices off (or failing)
+    s = server.api_summary({})
+    assert s["net_worth"] == 49500.0 and s["live"] is None and s["changes"]["1"]["delta"] == 0.0
+    assert [p["total"] for p in server.api_trend({})["series"]] == [49500.0, 49500.0]
+    assert server.api_crypto({})["total"] == 40000.0
+    # every source down: the same numbers, and the page is told which groups are at the daily prices
+    down = _live_quotes()
+    for g in down.values():
+        g["error"] = "timed out"
+    monkeypatch.setattr(server, "live_quotes", lambda: down)
+    s = server.api_summary({})
+    assert s["net_worth"] == 49500.0 and s["live"]["groups"] == {} and len(s["live"]["errors"]) == 3
+    assert {x["symbol"]: x["value"] for x in server.api_holdings({})["holdings"]}["VTI"] == 1000.0
+
+
+def test_trend_adds_todays_point_at_live_prices_before_the_sync(live_ledger, monkeypatch):
+    con = ctdb.connect(server.DB)
+    con.execute("DELETE FROM balances WHERE snapshot_date = ?", (TODAY,))
+    con.commit()
+    con.close()
+    monkeypatch.setattr(server, "live_quotes", lambda: _live_quotes(stocks={"VTI": 110.0}))
+    t = server.api_trend({})
+    assert [p["date"] for p in t["series"]] == [live_ledger, TODAY]
+    assert t["series"][-1]["synced"] == 1600.0
+
+
+def test_page_rereads_live_prices_quietly():
+    html = (Path(server.HERE) / "index.html").read_text()
+    assert 'id="nwlive"' in html and "function liveRefresh" in html and "quiet" in html
+    assert 'const LIVE_PARTS = ["summary", "trend", "holdings", "crypto"]' in html

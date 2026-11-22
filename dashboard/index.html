@@ -564,7 +564,7 @@ document.querySelector('meta[name="theme-color"]').content = getComputedStyle(do
 
   <section class="hero" id="hero">
     <div class="card"><div class="label">Net worth</div>
-      <div class="big" id="nw"><span class="skel" role="status" aria-label="Loading"></span></div><div class="nwunit num" id="nwunit"></div><div class="chips" id="chg"></div><div class="note" id="nwage" style="margin-top:6px"></div><div class="note" id="nwnote" style="margin-top:6px"></div></div>
+      <div class="big" id="nw"><span class="skel" role="status" aria-label="Loading"></span></div><div class="nwunit num" id="nwunit"></div><div class="chips" id="chg"></div><div class="note" id="nwlive" style="margin-top:6px"></div><div class="note" id="nwage" style="margin-top:6px"></div><div class="note" id="nwnote" style="margin-top:6px"></div></div>
     <div class="card golink" data-go="asset" tabindex="0" role="button" title="Show every asset"><div class="label">Assets</div><div class="mid num" id="assets"><span class="skel" role="status" aria-label="Loading"></span></div><div class="note" id="assetsnote"></div></div>
     <div class="card golink" data-go="liability" tabindex="0" role="button" title="Show every debt"><div class="label">Liabilities</div><div class="mid num" id="liabs"><span class="skel" role="status" aria-label="Loading"></span></div><div class="note" id="liabsnote"></div></div>
   </section>
@@ -902,11 +902,11 @@ function flightEnd(id) {
   if (!flights.size) clearInterval(tickTimer);
   tick();
 }
-async function get(path, opts = {}) {
-  const {timeout = TIMEOUT_MS, part = null, ...init} = opts, ac = new AbortController(), key = path.slice(5).split("?")[0];
+async function get(path, opts = {}) {  // quiet: no loading bar or list (the live-price re-reads)
+  const {timeout = TIMEOUT_MS, part = null, quiet = false, ...init} = opts, ac = new AbortController(), key = path.slice(5).split("?")[0];
   const f = {key, part, path, method: init.method || "GET", name: REQ_NAME[key] || key, t0: performance.now(), timeout};
   const timer = setTimeout(() => ac.abort(), timeout);
-  const id = flightStart(f);
+  const id = quiet ? 0 : flightStart(f);
   try {
     const r = await fetch(path, {cache: "no-store", credentials: "same-origin", signal: ac.signal, ...init});
     if (r.status === 401) { location.href = "/login"; throw new Error("signed out"); }
@@ -920,7 +920,7 @@ async function get(path, opts = {}) {
     throw e;
   } finally {
     clearTimeout(timer);
-    flightEnd(id);
+    if (id) flightEnd(id);
   }
 }
 // Sync now: starts the bank sync on the server (POST /api/sync) and follows it (GET /api/sync) until it ends, then
@@ -1221,6 +1221,21 @@ function agePill(s) {
   return `<span class="pill old" title="Last finished sync or balance-sheet read; see the problems below">Numbers from ${esc(fmtTime(new Date(Math.min(...times)).toISOString()))} · ${age < 48 * 3600e3 ? Math.round(age / 36e5) + " hours" : Math.floor(age / 864e5) + " days"} old</span>`;
 }
 
+// Crypto, metals and synced stocks/ETFs are priced live by the server (valuations/live.py, fetched at most once a
+// minute); s.live.groups says which and from when. Older than LIVE_OLD_MS (the page or a source stalled) it says the
+// time instead of "live". A source that is down just leaves its group at the daily run's prices, named in the tooltip.
+const LIVE_NAME = {crypto: "Crypto", metals: "Metals", stocks: "Stocks & ETFs"}, LIVE_OLD_MS = 10 * 60e3;
+function liveNote(l) {
+  if (!l) return ["", ""];
+  const gs = Object.entries(l.groups || {}), down = (l.errors || []).map(e => e.split(":")[0]);
+  const tail = down.length ? `\nAt the daily run's prices just now: ${down.map(g => LIVE_NAME[g] || g).join(", ")}.` : "";
+  if (!gs.length) return [down.length ? "Prices from the daily run" : "", "Live prices are unavailable just now, so market values are at the daily run's prices." + tail];
+  const at = Math.min(...gs.map(([, g]) => Date.parse(g.at)));
+  const tip = gs.map(([k, g]) => `${LIVE_NAME[k] || k}: ${g.sources.join(", ")}, fetched ${fmtFrom(Date.parse(g.at))}` +
+    (g.quote_time ? ` (last trade ${fmtTime(g.quote_time)})` : "")).join("\n") + tail;
+  return [(Date.now() - at > LIVE_OLD_MS ? "Prices from " : "Prices live ") + fmtFrom(at), tip];
+}
+
 // Shown while this ledger has no bank connection yet (server: dashboard.web_connect): where to link accounts and a
 // box for the SimpleFIN setup token. While the first sync runs the page re-checks every 10 s.
 let connectTimer = 0;
@@ -1291,6 +1306,8 @@ function renderSummary(s) {
   // one line, the rest on tap: the banner used to push the net worth off a phone's first screen
   $("problems").innerHTML = !probs.length ? "" : `<details${probs.length === 1 && probs[0].length < 90 ? " open" : ""}><summary><b>${probs.length} data warning${probs.length > 1 ? "s" : ""}</b><span class="first"> · ${esc(probs[0])}</span></summary>${probs.map(p => `<div>${esc(p)}</div>`).join("")}</details>`;
   if ($("fetched")) $("fetched").textContent = s.networth_fetched ? "sheet read " + fmtTime(s.networth_fetched) : "sheet not read yet";
+  const [live, liveTip] = liveNote(s.live);
+  $("nwlive").textContent = live; $("nwlive").title = liveTip; $("nwlive").hidden = !live;
   renderNW(s);
   if (s.net_worth == null) {  // no balance sheet at all (the warning above says why): say so rather than leave blanks
     $("assets").textContent = $("liabs").textContent = $("donutc").textContent = "unavailable";
@@ -1353,7 +1370,7 @@ function catTable(id, list, totalLabel, assetTotal) {
   }
   const sum = list.reduce((a, c) => a + c.value, 0);
   rows += `<tr class="total"><td>${totalLabel}</td><td class="r">${amt(sum)}</td>${liab ? "" : '<td class="hide-sm"></td>'}<td></td></tr></tbody>`;
-  const t = $(id);
+  const t = $(id), wasOpen = new Set([...t.querySelectorAll('tr.cat[aria-expanded="true"]')].map(tr => tr.dataset.k));
   t.innerHTML = rows;
   t.querySelectorAll("tr.cat").forEach(tr => {
     tr.onclick = () => {
@@ -1362,6 +1379,7 @@ function catTable(id, list, totalLabel, assetTotal) {
       t.querySelectorAll(`tr[data-p="${tr.dataset.k}"]`).forEach(x => x.hidden = !open);
     };
     tr.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); tr.onclick(); } };
+    if (wasOpen.has(tr.dataset.k)) tr.onclick();  // a redraw (the live-price re-read every minute) keeps what was open
   });
 }
 function drawDonut(cats, total) {
@@ -1671,6 +1689,7 @@ function renderTrend(t) {
   $("trendnote").textContent = (SHEETLESS ? "One point per daily sync, from your linked accounts."
     : t.sheet_only_total != null
     ? `Sheet-only items (${f0(t.sheet_only_total)}: home, self-custody crypto, metals, vehicles, cash…) are added to the daily points as a constant at today's sheet values, so daily moves are synced accounts only.` +
+      (t.live_sheet_only_total != null && Math.abs(t.live_sheet_only_total - t.sheet_only_total) >= 0.5 ? ` Today's point has crypto and metals at live prices (${f0(t.live_sheet_only_total)}).` : "") +
       (!sheet.length && s.length < 14 ? " History is short; it grows by one point per daily sync." : "")
     : "Sheet total unavailable; showing synced accounts only.") + valued;
   const pts = [
@@ -1890,7 +1909,8 @@ function clearAccount() {
 let holdLimit = 15;
 function renderHoldings(hd) {
   kf("holdscard", `${hd.count} positions · ${compact(hd.total)}`);
-  $("holdsub").textContent = `${hd.count} positions, ${f0(hd.total)} total. ${hd.note}`;
+  const st = hd.live?.groups?.stocks;
+  $("holdsub").textContent = `${hd.count} positions, ${f0(hd.total)} total. ` + (st ? `Stocks, ETFs and coins at live prices (last trade ${fmtTime(st.quote_time || st.at)}); mutual funds at their last NAV, the rest as the feed sent them. ` : "") + hd.note;
   const max = hd.holdings[0]?.value || 1;
   let h = `<thead><tr><th>Symbol</th><th class="r">Value</th><th class="r">%</th><th class="bart hide-sm"></th><th class="hide-sm">Accounts</th></tr></thead><tbody>`;
   for (const r of hd.holdings.slice(0, holdLimit)) h += `<tr><td title="${esc(r.description)}"><b>${esc(r.symbol)}</b>${r.sources.includes("manual") ? ' <span class="badge b-sheet" title="manual entry, as of ' + esc(r.as_of) + '">manual</span>' : ""}<div class="note desc">${esc(r.description)}</div><div class="note show-sm">${esc(r.accounts.join(", "))}</div></td>
@@ -1911,7 +1931,7 @@ const QTY_SRC = {onchain: ["on-chain", "b-live", "Amount read from the blockchai
 function renderCrypto(c) {
   if (c.total == null) { $("cryptosub").textContent = "No crypto valuation yet (valuations/crypto.py runs in the daily sync)."; return; }
   kf("cryptocard", f0(c.total));
-  $("cryptonote").textContent = `priced ${fmtTime(c.fetched_at)}`;
+  $("cryptonote").textContent = `priced ${c.live?.groups?.crypto ? "live " + fmtFrom(Date.parse(c.fetched_at)) : fmtTime(c.fetched_at)}`;
   $("cryptosub").textContent = `${f0(c.total)} across ${c.wallets.length} wallets` +
     (c.sheet_total ? ` (sheet says ${f0(c.sheet_total)}).` : ".") +
     " Exchange USD cash is shown dimmed and counted as its own balance-sheet line, not in this total." +
@@ -2513,18 +2533,21 @@ function showFailed() {
   $("loaderrors").innerHTML = !ks.length ? "" : `<div class="err" role="alert" title="${esc([...failed].map(([k, m]) => k + ": " + m).join("\n"))}">` +
     `<span>Couldn't ${kept || !parts.length ? "refresh" : "load"}: ${esc(names.join(", "))}.${kept ? ` Showing the numbers from ${esc(fmtFrom(Math.min(...parts.map(k => shownAt[k]))))}.` : ""}</span>${retryBtn("all")}</div>`;
 }
-function loadPart(k, refresh = false) {
+// quiet: the live-price re-read (no loading state; a failure changes nothing on screen and is not reported)
+function loadPart(k, refresh = false, quiet = false) {
   return pending[k] ||= (async () => {
     const p = PARTS[k];
-    setLoad(k, k in data ? "old" : "loading");
+    if (!quiet) setLoad(k, k in data ? "old" : "loading");
     try {
-      const d = await get(refresh ? "/api/refresh" : p.url, {part: k, timeout: p.slow ? SLOW_MS : TIMEOUT_MS, ...(refresh ? {method: "POST"} : {})});
+      const d = await get(refresh ? "/api/refresh" : p.url, {part: k, quiet, timeout: p.slow ? SLOW_MS : TIMEOUT_MS, ...(refresh ? {method: "POST"} : {})});
       data[k] = d; shownAt[k] = Date.now(); failed.delete(k); setLoad(k, null);  // before drawing: a chart sizes itself to a card that shows
       p.fn(d);
-      if (k === "summary") loadedAt = Date.now();
+      if (k === "summary" && !quiet) loadedAt = Date.now();
+      if (k === "summary") scheduleLive();
       if (k === "trend" && curUnit() !== "USD") renderAll();
       return true;
     } catch (e) {
+      if (quiet) return false;
       console.error(k, e);
       failed.set(k, e.message); setLoad(k, k in data ? "stale" : "error", e.message);
       return false;
@@ -2574,6 +2597,23 @@ async function load(refresh = false) {
 document.addEventListener("click", e => {
   const k = e.target.closest("button[data-retry]")?.dataset.retry;
   if (k === "all") load(failed.has("refresh")); else if (k) loadPart(k);
+});
+// While the page shows and the server has live prices, the parts priced from them are re-read quietly every
+// refresh_s seconds: no loading bar, nothing dimmed, and a failed re-read keeps the numbers without a word (the next
+// full reload reports real trouble). It leaves loadedAt alone, so the 10-minute reload of everything still happens.
+const LIVE_PARTS = ["summary", "trend", "holdings", "crypto"];
+let liveTimer = 0;
+function scheduleLive() {
+  clearTimeout(liveTimer);
+  const l = data.summary?.live;
+  if (l) liveTimer = setTimeout(liveRefresh, (l.refresh_s || 60) * 1000);  // also while every source is down: they come back
+}
+async function liveRefresh() {
+  if (document.visibilityState === "visible" && !loading) await Promise.all(LIVE_PARTS.filter(k => k in data).map(k => loadPart(k, false, true)));
+  scheduleLive();
+}
+document.addEventListener("visibilitychange", () => {  // back on the page after a while: today's prices at once
+  if (document.visibilityState === "visible" && data.summary?.live && Date.now() - (shownAt.summary || 0) > (data.summary.live.refresh_s || 60) * 1000) liveRefresh();
 });
 function reloadIfOld() {
   if (document.visibilityState === "visible" && Date.now() - loadedAt > (data.summary?.cache_ttl_s || 600) * 1000) load();
