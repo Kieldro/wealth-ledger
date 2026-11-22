@@ -38,6 +38,7 @@ CHART_URL = "https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min
 CHART_JS = HERE / "testdata" / "chart-4.4.1.umd.min.js"  # served to the page in its place
 DESK, PHONE = {"width": 1280, "height": 900}, {"width": 390, "height": 844}
 NOT_LOCAL = re.compile(r"^https?://(?!127\.0\.0\.1[:/])")
+SW_BLOCKED = "Service Worker registration blocked by Playwright"  # console.warn on every page without one
 READY = 'body[data-ready="1"]'  # set when the page's first load has finished, whatever came of it
 CARDS = ".grid > section.card"
 WAITING = "[data-load]"  # a card (or the totals) that is loading, failed, or showing saved numbers
@@ -136,7 +137,7 @@ class Watch:
     def listen(self, page):
         def console(m):
             self.events.append(f"console.{m.type}: {m.text}")
-            if m.type in ("error", "warning"):
+            if m.type in ("error", "warning") and m.text != SW_BLOCKED:
                 self.found.append(("console", f"console.{m.type}: {m.text} [{m.location.get('url', '')}]"))
 
         def failed(r):
@@ -250,6 +251,9 @@ def open_page(browser, request):
         return "\n".join(lines)
 
     def make(inst, *, phone=False, signed_in=True, go=True, clock=False, **options):
+        # no service worker unless the test asks for one (service_workers="allow"): it only stands between the page
+        # and the network, and the page is what these tests are about
+        options.setdefault("service_workers", "block")
         ctx = browser.new_context(viewport=PHONE if phone else DESK, is_mobile=phone, has_touch=phone,
                                   storage_state=inst.state if signed_in else None, **options)
         page = ctx.new_page()
@@ -403,7 +407,7 @@ def test_installable_app_signs_in_and_never_caches_the_numbers(full, open_page):
     """The web app as installed: Chrome finds nothing missing to install it, sign-in works under the service worker,
     the worker's cache holds only the public shell (never /api/ or a signed-in page), and offline shows the offline
     page, not the last numbers."""
-    page = open_page(full, signed_in=False, go=False)
+    page = open_page(full, signed_in=False, go=False, service_workers="allow")
     page.goto(full.url + "/login")
     page.evaluate("() => navigator.serviceWorker.ready")
     cdp = page.context.new_cdp_session(page)

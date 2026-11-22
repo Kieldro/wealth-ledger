@@ -1,0 +1,52 @@
+{
+  "packageId": "life.keo.finance",
+  "host": "finance.keo.life",
+  "name": "Wealth Ledger",
+  "launcherName": "Ledger",
+  "display": "standalone",
+  "themeColor": "#111110",
+  "themeColorDark": "#111110",
+  "navigationColor": "#111110",
+  "navigationColorDark": "#111110",
+  "navigationDividerColor": "#111110",
+  "navigationDividerColorDark": "#111110",
+  "backgroundColor": "#111110",
+  "enableNotifications": false,
+  "startUrl": "/",
+  "iconUrl": "https://finance.keo.life/pwa/icon-512.png",
+  "maskableIconUrl": "https://finance.keo.life/pwa/icon-maskable-512.png",
+  "splashScreenFadeOutDuration": 300,
+  "signingKey": {
+    "path": "~/.config/wealth-ledger/android/upload-keystore.jks",
+    "alias": "upload"
+  },
+  "appVersionName": "1",
+  "appVersionCode": 1,
+  "shortcuts": [],
+  "generatorApp": "bubblewrap-cli",
+  "webManifestUrl": "https://finance.keo.life/manifest.webmanifest",
+  "fallbackType": "customtabs",
+  "features": {},
+  "alphaDependencies": {
+    "enabled": false
+  },
+  "enableSiteSettingsShortcut": true,
+  "isChromeOSOnly": false,
+  "isMetaQuest": false,
+  "fullScopeUrl": "https://finance.keo.life/",
+  "minSdkVersion": 24,
+  "orientation": "any",
+  "fingerprints": [
+    {
+      "name": "upload",
+      "value": "F5:08:EE:F2:BC:25:0A:AB:4A:5A:7D:DE:36:65:51:80:A5:EE:75:A1:45:94:54:21:60:83:4B:C2:49:3F:E2:36"
+    }
+  ],
+  "additionalTrustedOrigins": [],
+  "retainedBundles": [],
+  "protocolHandlers": [],
+  "fileHandlers": [],
+  "launchHandlerClientMode": "",
+  "displayOverride": [],
+  "appVersion": "1"
+}
