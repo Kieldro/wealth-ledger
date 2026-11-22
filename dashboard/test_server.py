@@ -436,6 +436,33 @@ def test_btc_locations_add_bitcoin_funds(dbfile):
     assert [t["type"] for t in b["by_type"]] == ["fund", "exchange"]
 
 
+def test_holdings_value_exchange_coins_at_the_daily_runs_price(dbfile):
+    """A synced crypto exchange sends coins with no price or value: they are valued at the latest crypto run's price
+    (the same daily price the Crypto card uses), not left out at $0; the exchange's dollar cash is not a holding."""
+    con = ctdb.connect(dbfile)
+    for aid, kind in (("ira", "retirement"), ("cb", "crypto")):
+        con.execute("INSERT INTO account_kind VALUES (?,?,NULL)", (aid, kind))
+    con.executemany("INSERT INTO holdings VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", [
+        (TODAY, "simplefin", "ira", "IRA (1234)", "Fid", "k1", "BTC", "Bitcoin Mini Trust", "100", "40", "4000", None, "USD"),
+        (TODAY, "simplefin", "cb", "Wallet (ab-12)", "CB", "k2", "BTC", "Bitcoin", "0.1", "0", "0", None, "USD"),
+        (TODAY, "simplefin", "cb", "Wallet (ab-12)", "CB", "k3", "ETH2", "Staked ether", "2", None, "0", None, "USD"),
+        (TODAY, "simplefin", "cb", "Wallet (ab-12)", "CB", "k4", "USD", "Cash", "500", None, "0", None, "USD"),
+        (TODAY, "simplefin", "cb", "Wallet (ab-12)", "CB", "k5", "ZZZ", "Unpriced", "3", None, "0", None, "USD")])
+    con.commit()
+    con.close()
+    assert [h["symbol"] for h in server.api_holdings({})["holdings"]] == ["BTC"]  # no crypto run yet: as the feed says
+    con = ctdb.connect(dbfile)
+    con.execute("INSERT INTO valuations VALUES (?,?,?,?,?,?)", (TODAY, server.CRYPTO_LINE, 1.0, "crypto", json.dumps(
+        {"by_coin": {"BTC": {"qty": 1, "price": 80000.0, "value": 80000.0}, "ETH": {"qty": 1, "price": 3000.0, "value": 3000.0},
+                     "USD": {"qty": 1, "price": 1.0, "value": 1.0}}}), "2026-01-01T00:00:00"))
+    con.commit()
+    con.close()
+    out = server.api_holdings({})
+    assert [(h["symbol"], h["value"], h["accounts"]) for h in out["holdings"]] == [
+        ("BTC", 12000.0, ["IRA", "Wallet"]), ("ETH2", 6000.0, ["Wallet"])]
+    assert out["total"] == 18000.0
+
+
 def test_crypto_without_a_valuation(dbfile):
     assert server.api_crypto({}) == {"total": None, "wallets": [], "coins": [], "transfers": []}
 

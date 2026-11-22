@@ -50,6 +50,7 @@ from insights import budget, inherited_ira, monthly_email, overdraft, rental, su
 from insights import prices as price_hist  # noqa: E402
 from insights import holding_prices  # noqa: E402
 from insights import live_markets  # noqa: E402
+from valuations.crypto import norm_coin  # noqa: E402
 
 _DASH = personal.section("dashboard")
 DB = os.path.expanduser(os.environ.get("WEALTH_LEDGER_DB") or "~/.local/share/wealth-ledger/txns.db")
@@ -499,10 +500,30 @@ def api_accounts(params) -> dict:
     return {"accounts": rows, "stale_days": STALE_DAYS, "spark_days": SPARK_DAYS}
 
 
+def daily_coin_prices() -> dict[str, float]:
+    """{coin: usd} from the latest valuations/crypto.py run (the daily prices the Crypto card shows)."""
+    try:
+        rows = q("SELECT detail FROM v_valuations_latest WHERE asset = ?", (CRYPTO_LINE,))
+        by_coin = (json.loads(rows[0]["detail"] or "{}").get("by_coin") or {}) if rows else {}
+    except (sqlite3.OperationalError, ValueError, AttributeError):
+        return {}
+    return {c: float(v["price"]) for c, v in by_coin.items() if isinstance(v, dict) and (v.get("price") or 0) > 0}
+
+
 def api_holdings(params) -> dict:
-    rows = q("""SELECT h.symbol, h.description, h.account_name, h.value, h.shares, h.price, h.source, h.snapshot_date
+    rows = q("""SELECT h.symbol, h.description, h.account_name, h.value, h.shares, h.price, h.source, h.snapshot_date,
+                       COALESCE(k.kind,'') kind
                 FROM v_holdings_latest h LEFT JOIN account_kind k USING (account_id)
                 WHERE TRIM(COALESCE(h.symbol,'')) <> '' AND COALESCE(k.kind,'') <> 'custodial'""")
+    coin_px = None
+    for r in rows:  # a synced crypto exchange sends its coins without a price or value: the daily run's price
+        if r["kind"] == "crypto" and not r["value"] and norm_coin(r["symbol"]) != "USD":  # its cash isn't a holding
+            coin_px = daily_coin_prices() if coin_px is None else coin_px
+            try:
+                px = coin_px.get(norm_coin(r["symbol"]))
+                r["value"] = float(r["shares"]) * px if px else r["value"]
+            except (TypeError, ValueError):
+                pass
     agg: dict[str, dict] = {}
     for r in rows:
         a = agg.setdefault(r["symbol"], {"symbol": r["symbol"], "description": r["description"], "value": 0.0,
