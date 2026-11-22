@@ -10,7 +10,8 @@ Endpoints: /api/summary, POST /api/refresh (re-runs networth.py), POST /api/sync
 background; GET /api/sync says how it is going), /api/trend, /api/accounts,
 /api/holdings, /api/crypto, /api/cards, /api/spending, /api/drafts (overdraft forecast), /api/budget (budget vs actual),
 /api/subscriptions (recurring charges + unusual charges), /api/rental (rental P&L),
-/api/inherited_ira (10-year rule tracker), /api/last (the last good answer to each of those, kept on disk), /healthz. Page: /
+/api/inherited_ira (10-year rule tracker), /api/last (the last good answer to each of those, kept on disk), /api/markets
+(the markets strip with live Bitcoin, gold and S&P 500 prices, insights/live_markets.py), /healthz. Page: /
 """
 from __future__ import annotations
 
@@ -48,6 +49,7 @@ import personal  # noqa: E402
 from insights import budget, inherited_ira, monthly_email, overdraft, rental, subscriptions  # noqa: E402
 from insights import prices as price_hist  # noqa: E402
 from insights import holding_prices  # noqa: E402
+from insights import live_markets  # noqa: E402
 
 _DASH = personal.section("dashboard")
 DB = os.path.expanduser(os.environ.get("WEALTH_LEDGER_DB") or "~/.local/share/wealth-ledger/txns.db")
@@ -1675,7 +1677,8 @@ def credit_line() -> str:
 
 
 # One line of public market closes for the sign-in page (and the dashboard's top), read from the prices the daily sync already stores
-# (insights/prices.py): nothing is fetched at request time. The page is public, so the lookup is memoized.
+# (insights/prices.py): nothing is fetched at request time. The page is public, so the lookup is memoized. The signed-in
+# dashboard shows the same line with live Bitcoin, gold and S&P 500 prices (dashboard_markets, insights/live_markets.py).
 # The sign-in page is public, so its one line of market closes is limited to this fixed list of broad benchmarks
 # below. Nothing else in the prices table, and nothing from the ledger, can ever reach that page:
 # which other symbols are stored could hint at what is held.
@@ -1698,11 +1701,30 @@ _login_markets: tuple[float, str] | None = None  # (time.monotonic() when built,
 _login_markets_lock = threading.Lock()
 
 
-def _market_closes_html() -> str:
+def _clock(t: float) -> str:
+    when = datetime.fromtimestamp(t).astimezone()
+    return f"{when.hour % 12 or 12}:{when:%M %p}"
+
+
+def _when(t: float) -> str:
+    """'1:39 PM' today, else 'Nov 20, 4:00 PM' (a market's last trade before a weekend)."""
+    d = datetime.fromtimestamp(t).astimezone()
+    return _clock(t) if d.date() == date.today() else f"{d:%b} {d.day}, {_clock(t)}"
+
+
+def _market_closes_html(live: dict | None = None) -> str:
+    """The markets line; live (insights/live_markets.quotes()) puts a live price in place of a symbol's stored close,
+    its move measured from the stored close before the quote's trading day (a weekend shows Friday's move, never live
+    against an old close). A symbol without a usable live price keeps its stored close."""
     today = date.today()
     since = (today - timedelta(days=LOGIN_MARKETS_MAX_AGE + LOGIN_MARKETS_PREV_GAP)).isoformat()
-    rows = q("SELECT symbol, date, usd FROM prices WHERE symbol IN (%s) AND date >= ? ORDER BY date DESC"
-             % ",".join("?" * len(LOGIN_MARKETS)), [*(m[0] for m in LOGIN_MARKETS), since])
+    try:
+        rows = q("SELECT symbol, date, usd FROM prices WHERE symbol IN (%s) AND date >= ? ORDER BY date DESC"
+                 % ",".join("?" * len(LOGIN_MARKETS)), [*(m[0] for m in LOGIN_MARKETS), since])
+    except sqlite3.OperationalError:  # no prices table or no DB: live prices can still show, without a move
+        if not live:
+            raise
+        rows = []
 
     def close(r):  # (day, usd), or None when the row isn't a date and a positive number
         try:
@@ -1710,19 +1732,33 @@ def _market_closes_html() -> str:
         except (TypeError, ValueError):
             return None
         return (day, usd) if 0 < usd < float("inf") else None
-    parts, newest = [], None
+    parts, newest, live_at = [], None, None
     for sym, label, prefix, icon in LOGIN_MARKETS:
-        mine = [close(r) for r in rows if r["symbol"] == sym][:2]  # the latest close and the one before it
-        # -2: the sync stamps UTC dates, which can run a day ahead of local time; anything later is a bad row
-        if not mine or not mine[0] or not (-2 <= (today - mine[0][0]).days <= LOGIN_MARKETS_MAX_AGE):
-            continue
-        (day, usd), prev, chg = mine[0], mine[1] if len(mine) > 1 else None, ""
+        closes = [close(r) for r in rows if r["symbol"] == sym]  # newest first
+        lq, tip, chg = (live or {}).get(sym), "", ""
+        if lq:  # a live price; its move from the last stored close before its trading day, on the same instrument
+            day, usd, ref = date.fromisoformat(lq["day"]), lq["usd"], lq.get("vs")
+            prev = next((c for c in closes if c and c[0] < day), None)
+            if prev and not 0.5 < usd / prev[1] < 2:  # a broken quote or another unit: the stored close stands
+                lq = None
+            elif not ref:  # no price on the stored closes' instrument: no move rather than one across two
+                prev = None
+        if lq:
+            tip = f' title="Live price ({html_escape(lq["source"])}), {_when(lq["time"])}"'
+            live_at = max(live_at or lq["at"], lq["at"])
+        else:
+            mine = closes[:2]  # the latest close and the one before it
+            # -2: the sync stamps UTC dates, which can run a day ahead of local time; anything later is a bad row
+            if not mine or not mine[0] or not (-2 <= (today - mine[0][0]).days <= LOGIN_MARKETS_MAX_AGE):
+                continue
+            (day, usd), prev = mine[0], mine[1] if len(mine) > 1 else None
+            ref, newest = usd, max(newest or day, day)
         if prev and 0 < (day - prev[0]).days <= LOGIN_MARKETS_PREV_GAP:  # daily move: new ledgers have only a week stored
-            pct = round(100 * (usd / prev[1] - 1), 1)
+            pct = round(100 * (ref / prev[1] - 1), 1)
             chg = (f'<i class="{"up" if pct > 0 else "down" if pct < 0 else "flat"}" title="Since the close before, '
                    f'{prev[0].isoformat()}">{"+" if pct > 0 else "−" if pct < 0 else ""}{abs(pct):.1f}%</i>')
-        parts.append(f'<div><span class="n">{icon}{html_escape(label)}</span><b>{prefix}{round(usd):,}</b>{chg}</div>')
-        newest = max(newest or day, day)
+        parts.append(f'<div{" data-live" if lq else ""}><span class="n">{icon}{html_escape(label)}</span>'
+                     f'<b{tip}>{prefix}{round(usd):,}</b>{chg}</div>')
     try:  # the inflation figure the sync keeps beside the prices (insights/prices.py: the Cleveland Fed's CPI nowcast)
         infl = json.loads(q("SELECT value FROM meta WHERE key = 'inflation'")[0]["value"])
         pct, asof = float(infl["pct"]), date.fromisoformat(str(infl["asof"])[:10])
@@ -1734,6 +1770,9 @@ def _market_closes_html() -> str:
         pass
     if not parts:
         return ""
+    if live_at:
+        return (f'<div class="mkt" title="Live prices; each move is from the close before its trading day">{"".join(parts)}'
+                f'</div><p class="upd" title="Re-read every minute">Live {_clock(live_at)}</p>')
     try:  # when the sync last fetched them; a ledger from before that was recorded has only the date
         when = datetime.fromisoformat(q("SELECT value FROM meta WHERE key = 'prices_updated'")[0]["value"]).astimezone()
         note = f"Updated {when:%b} {when.day}, {when.hour % 12 or 12}:{when:%M %p %Z}".rstrip()
@@ -1766,6 +1805,25 @@ def login_markets() -> str:
     finally:
         _login_markets_lock.release()
     return html
+
+
+def dashboard_markets(wait: float = live_markets.WAIT) -> str:
+    """The markets line for the signed-in dashboard: as login_markets(), with live Bitcoin, gold and S&P 500 prices
+    where there are any (insights/live_markets.py: each fetched at most once a minute, whoever asks; a caller waits at
+    most `wait` seconds, 0 = only what is already fetched). A source that is down or slow leaves its stored close.
+    Never raises."""
+    try:
+        live = live_markets.quotes(wait)
+    except Exception as e:  # noqa: BLE001 - never fail a page over a price
+        log(f"live markets: {e!r}")
+        live = {}
+    if not live:
+        return login_markets()
+    try:
+        return _market_closes_html(live)
+    except Exception as e:  # noqa: BLE001
+        log(f"live markets: {e!r}")
+        return login_markets()
 
 
 LOGIN_ERR_ICON = ('<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" '
@@ -1915,7 +1973,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._deny(p)
             if p in ("/", "/index.html"):
                 with open(os.path.join(HERE, "index.html"), encoding="utf-8") as f:
-                    page = (with_theme(f.read()).replace("{{markets}}", login_markets(), 1)
+                    page = (with_theme(f.read()).replace("{{markets}}", dashboard_markets(wait=0), 1)
+                            .replace("{{markets_poll}}", str(live_markets.TTL) if live_markets.enabled() else "", 1)
                             .replace("{{credit}}", credit_line(), 1).encode())
                 return self._send(200, page, "text/html; charset=utf-8", self._renewal(), index_csp(page))
             if p == "/healthz":
@@ -1931,6 +1990,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, last_good(), "application/json")
             if p == "/api/sync":
                 return self._json(200, sync_state())
+            if p == "/api/markets":  # the page re-reads the strip every refresh_s while it shows
+                return self._json(200, {"html": dashboard_markets(), "refresh_s": live_markets.TTL})
             fn = ROUTES.get(p)
             if not fn:
                 return self._json(404, {"error": "not found"})

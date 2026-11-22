@@ -279,6 +279,8 @@ class Instance:
             "WEALTH_LEDGER_ACCESS": str(self.conf / "simplefin_access_url"), "WEALTH_LEDGER_LOCK": str(self.lock),
             "WEALTH_LEDGER_SYNC_LOG": f"{d}/sync.log", "WEALTH_LEDGER_SYNC_CMD": str(self.bin / "fake-sync"),
             "WEALTH_LEDGER_EMAIL_STATE": f"{d}/email-state.json", "PLAID_CONFIG": f"{d}/plaid.json",
+            # live market prices from a file the tests write (set_live_markets), never the network; no file = off
+            "WEALTH_LEDGER_LIVE_MARKETS": f"{d}/live-markets.json",
         }
         if not self.env["TZ"]:
             del self.env["TZ"]
@@ -338,10 +340,23 @@ class Instance:
         tmp.replace(self.status)
 
     def reset(self) -> None:
-        """Back to the starting point: a clean sync two hours ago, no Sync now history, no sync held or planned."""
+        """Back to the starting point: a clean sync two hours ago, no Sync now history, no sync held or planned, no live
+        market prices (the strip shows the stored closes)."""
         self.set_status()
-        for p in (self.conf / "dashboard_sync.json", self.dir / "sync-hold", self.dir / "sync-plan.json", self.dir / "sync-runs"):
+        for p in (self.conf / "dashboard_sync.json", self.dir / "sync-hold", self.dir / "sync-plan.json", self.dir / "sync-runs",
+                  self.dir / "live-markets.json"):
             p.unlink(missing_ok=True)
+
+    def set_live_markets(self, prices: dict | None) -> None:
+        """What the markets strip's live sources answer now: {"BTC": usd, "XAU": usd, "SPX": usd} (a symbol left out =
+        that source down); None = live prices off."""
+        path = self.dir / "live-markets.json"
+        if prices is None:
+            path.unlink(missing_ok=True)
+        else:
+            tmp = self.dir / "live-markets.new"
+            tmp.write_text(json.dumps(prices))
+            tmp.replace(path)
 
     def hold_sync(self) -> None:
         """The next Sync now keeps running until release_sync()."""

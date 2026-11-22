@@ -560,7 +560,7 @@ document.querySelector('meta[name="theme-color"]').content = getComputedStyle(do
 
   <section class="card" id="connect" hidden></section>
 
-  <div class="mktbar">{{markets}}</div>
+  <div class="mktbar" data-poll="{{markets_poll}}">{{markets}}</div>
 
   <section class="hero" id="hero">
     <div class="card"><div class="label">Net worth</div>
@@ -2583,6 +2583,30 @@ addEventListener("pageshow", e => { if (e.persisted) reloadIfOld(); });  // back
 addEventListener("focus", reloadIfOld);
 addEventListener("online", reloadIfOld);
 setInterval(reloadIfOld, 60e3);
+// markets strip: live Bitcoin, gold and S&P 500 (the server fetches each at most once a minute, whoever asks), re-read
+// every data-poll seconds while the page shows, quietly: no loading bar, nothing dimmed; a failed re-read keeps what is
+// there. No data-poll: live prices are off, the stored closes stand.
+const mktEvery = +document.querySelector(".mktbar").dataset.poll * 1e3;
+let mktAt = Date.now(), mktBusy = false;
+async function loadMarkets() {
+  if (mktBusy) return;
+  mktBusy = true;
+  try {
+    const r = await fetch("/api/markets", {cache: "no-store", credentials: "same-origin"});
+    const html = r.ok ? (await r.json()).html : "";
+    const bar = document.querySelector(".mktbar");
+    if (html && bar.innerHTML !== html) bar.innerHTML = html;
+  } catch { /* offline or signed out: keep the last numbers */ }
+  finally { mktBusy = false; mktAt = Date.now(); }
+}
+function marketsIfOld() {
+  if (document.visibilityState === "visible" && Date.now() - mktAt >= mktEvery - 1e3) loadMarkets();
+}
+if (mktEvery > 0) {
+  document.addEventListener("visibilitychange", marketsIfOld);
+  setInterval(marketsIfOld, mktEvery);
+  if (!document.querySelector(".mktbar [data-live]")) loadMarkets();  // the page came with stored closes: go live now
+}
 $("showzero").onchange = () => data.accounts && renderAccounts(data.accounts);
 $("txq").oninput = $("txcls").onchange = $("txcat").onchange = () => (acctView || data.spending) && renderRecent(data.spending?.recent || []);
 $("acctclear").onclick = clearAccount;

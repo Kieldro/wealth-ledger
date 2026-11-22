@@ -1123,6 +1123,52 @@ def test_simplefin_only_on_a_phone(sfo, open_page):
     assert sfo.sync_runs() == 1
 
 
+# ---------- live prices in the markets line ----------
+def test_markets_line_is_live_and_rereads_quietly(full, open_page):
+    """Bitcoin, gold and the S&P 500 at live prices in the line above the totals; a minute later the page re-reads just
+    that line by itself, with no loading bar and nothing dimmed. A source that is down shows its stored close, and the
+    totals stay at the daily run's prices throughout."""
+    full.set_live_markets({"BTC": 123_456.0, "XAU": 4321.0, "SPX": 6789.0})
+    page = open_page(full, clock=True)
+    bar = page.locator(".mktbar")
+    expect(bar.locator("[data-live]")).to_have_count(3)
+    expect(bar).to_contain_text("$123,456")
+    expect(bar.locator(".upd")).to_have_text(re.compile(r"^Live \d+:\d\d [AP]M$"))
+    has_totals(page)
+    all_loaded(page)
+    full.set_live_markets({"BTC": 124_000.0, "SPX": 6789.0})  # gold's source is down
+    slow = Hold(page, "/api/markets")
+    page.clock.fast_forward(61_000)
+    for _ in range(200):  # until the page's own re-read is out
+        if slow.waiting:
+            break
+        page.wait_for_timeout(25)
+    assert slow.waiting, "the page did not re-read the markets line"
+    expect(bar).to_contain_text("$123,456")  # the numbers on screen stay meanwhile
+    all_loaded(page)  # no loading bar, list or card state for a quiet re-read
+    faded = page.evaluate("""() => ['.mktbar', '.mktbar *', '.grid > section.card > .secbody', '#hero .big']
+        .flatMap(q => [...document.querySelectorAll(q)]).map(e => [getComputedStyle(e).opacity, getComputedStyle(e).filter])
+        .filter(([o, f]) => o !== '1' || f !== 'none')""")
+    assert faded == [], faded
+    slow.release()
+    expect(bar).to_contain_text("$124,000")
+    expect(bar.locator("[data-live]")).to_have_count(2)
+    expect(bar.locator("div:not([data-live]) > .n", has_text="Gold")).to_have_count(1)  # its stored close
+    has_totals(page)
+    all_loaded(page)
+
+
+def test_markets_line_is_not_reread_with_live_prices_off(full, open_page):
+    page = open_page(full, clock=True)  # no live prices: the stored closes, and nothing to re-read
+    asked = []
+    page.on("request", lambda r: "/api/markets" in r.url and asked.append(r.url))
+    expect(page.locator(".mktbar .mkt")).to_be_visible()
+    expect(page.locator(".mktbar [data-live]")).to_have_count(0)
+    page.clock.fast_forward(181_000)
+    page.wait_for_timeout(200)
+    assert asked == []
+
+
 # ---------- the page's one outside file ----------
 def test_page_loads_nothing_else_from_outside_and_the_test_copy_of_chartjs_is_the_real_one():
     html = (HERE / "index.html").read_text()

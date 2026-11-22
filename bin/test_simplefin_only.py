@@ -103,7 +103,7 @@ class Ledger:
         self.env = {"PATH": "/usr/bin:/bin", "HOME": str(home), "WEALTH_LEDGER_CONFIG_DIR": str(self.conf),
                     "WEALTH_LEDGER_DB": str(home / "data" / "txns.db"), "WEALTH_LEDGER_STATUS": str(self.status),
                     "WEALTH_LEDGER_LOCK": str(home / "lock"), "WEALTH_LEDGER_EMAIL_STATE": str(home / "email"),
-                    "WEALTH_LEDGER_PYTHON": str(self.py)}
+                    "WEALTH_LEDGER_PYTHON": str(self.py), "WEALTH_LEDGER_LIVE_MARKETS": "off"}
 
     def sync(self):
         return subprocess.run(["bash", str(SYNC)], env=self.env, capture_output=True, text=True, timeout=120)

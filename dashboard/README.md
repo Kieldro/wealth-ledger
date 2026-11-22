@@ -20,6 +20,15 @@ Every path needs a login, including requests from 127.0.0.1 (a Cloudflare Tunnel
 - `networth.py --json` (reads the balance-sheet tab of the Google Sheet in personal.json via `gws`), cached 10 min. **Re-read sheet** (`POST /api/refresh`; **Reload** on a ledger without a sheet) re-reads the sheet only; it does not call SimpleFIN or Plaid.
 - `~/.cache/wealth-ledger-status` for the last sync time and problems.
 
+## Live markets line
+The line above the totals (Bitcoin, gold, S&P 500, inflation) is the sign-in page's line of stored closes, with Bitcoin, gold and the S&P 500 at live prices on the signed-in dashboard (`insights/live_markets.py`). Nothing else is live: net worth, allocation, trend, holdings and crypto stay at the daily run's prices, as `networth.py` prints them.
+- **Sources** (free, keyless): Bitcoin from Coinbase's spot price (CoinGecko if that fails); gold at Swissquote's XAU/USD spot (`metals.spot_price`: gold-api.com, then Yahoo futures, if that fails); the S&P 500 at Yahoo's ^GSPC last trade (it moves only while the market is open).
+- **Daily move:** the live price against the last stored close before the quote's trading day (Bitcoin: the UTC day, like the stored candles; gold: the COMEX trade date, a weekend being Friday's; S&P 500: the day of the last trade), so a weekend shows Friday's move, never live against an old close. Gold's move is measured on the COMEX future the stored closes are of (Yahoo GC=F), since spot and the future differ by a fraction of a percent; without it gold shows no move.
+- **How often:** each source at most once a minute per server (`TTL`), however many pages are open; `/api/markets` waits at most 5 s (`WAIT`), and the page itself never waits (it shows what is already fetched, else the stored closes, and asks `/api/markets` at once). The page re-reads only the line every minute while it shows (no loading bar, nothing dimmed; a failed re-read keeps what is there) and says "Live 1:39 PM"; each price's tooltip names its source and time.
+- **Fallback:** a source that fails, is slow, or answers something implausible leaves that item at its stored close; a quote older than 5 minutes is dropped. A source that starts failing is logged once to the journal; nothing is notified and nothing is written.
+- **Sign-in page:** stored closes only, never a request to a price source: it is public, so a visitor can't make the server call out.
+- **Off / tests:** `WEALTH_LEDGER_LIVE_MARKETS=off` turns it off (the test suite does); a path makes it read prices from that JSON file instead of the network (the browser tests' dashboard; no file = off).
+
 ## Sync now
 The button starts the same sync cron runs, in the background (`POST /api/sync`), and the page follows it (`GET /api/sync`) and reloads its numbers when it ends; problems show in the page's warnings. Nothing is notified.
 - **Which sync:** `bin/wealth-ledger-sync`, run with the dashboard's own environment, so an instance started with its own `WEALTH_LEDGER_*` variables syncs its own ledger. Set `WEALTH_LEDGER_SYNC_CMD` (a command line) to run a wrapper of your own instead.
@@ -46,7 +55,7 @@ The button starts the same sync cron runs, in the background (`POST /api/sync`),
 - **New controls:** give the test something stable to find (an `id`, a role and name), and add the card's telltale text to `CARD_SAYS` in `test_ui.py` when adding a card.
 
 ## API
-`/api/summary`, `POST /api/refresh`, `POST /api/sync` + `GET /api/sync`, `/api/trend`, `/api/accounts`, `/api/holdings`, `/api/cards`, `/api/spending`, `/healthz`.
+`/api/summary`, `POST /api/refresh`, `POST /api/sync` + `GET /api/sync`, `/api/trend`, `/api/accounts`, `/api/holdings`, `/api/cards`, `/api/spending`, `/api/markets` (`{html, refresh_s}`: the markets line, see Live markets line), `/healthz`.
 
 ## Notes
 - Credit cards show owed / limit and utilization per card, plus overall utilization across cards with a known limit. The limit is `v_accounts.credit_limit` (feed, or `credit_limits` in personal.json, badged `manual limit`); without one it is estimated as owed + available credit (`est.`).
