@@ -1123,50 +1123,6 @@ def test_simplefin_only_on_a_phone(sfo, open_page):
     assert sfo.sync_runs() == 1
 
 
-# ---------- live market prices ----------
-LIVE = {"crypto": {"BTC": 110_000.0, "ETH": 3000.0}, "metals": {"Au": 4000.0, "Ag": 50.0},  # BTC 10k over the stored run
-        "stocks": {"VTI": 300.0, "FBTC": 90.0, "VXUS": 64.0, "BND": 80.0}}
-
-
-def test_market_values_are_live_and_reread_quietly(full, open_page):
-    """Crypto, metals and stocks at live prices: the headline says from when, and a minute later the page re-reads
-    them by itself, with no loading bar and nothing dimmed. With live prices off it is the daily run's numbers again."""
-    base = F.ASSETS - F.LIABILITIES
-    full.set_live_prices(LIVE)
-    page = open_page(full, clock=True)
-    expect(page.locator("#nw")).to_have_text(f"${base + 0.26 * 10_000:,.0f}")  # 0.26 BTC counted
-    expect(page.locator("#nwlive")).to_have_text(re.compile(r"^Prices live \d+:\d\d [AP]M$"))
-    expect(page.locator("#cryptonote")).to_contain_text("priced live")
-    expect(page.locator("#holdsub")).to_contain_text("at live prices")
-    all_loaded(page)
-    crypto = page.locator('#cats tr.cat[data-k="crypto"]')
-    crypto.click()  # opened by the viewer: stays open through the re-reads
-    full.set_live_prices({**LIVE, "crypto": {**LIVE["crypto"], "BTC": 120_000.0}})
-    slow = Hold(page, "/api/summary")
-    page.clock.fast_forward(61_000)
-    for _ in range(200):  # until the page's own re-read is out
-        if slow.waiting:
-            break
-        page.wait_for_timeout(25)
-    assert slow.waiting, "the page did not re-read the live prices"
-    expect(page.locator("#nw")).to_have_text(f"${base + 2600:,.0f}")  # the numbers on screen stay meanwhile
-    all_loaded(page)  # no loading bar, list or card state for a quiet re-read
-    faded = page.evaluate("""() => ['.grid > section.card > .secbody', '#hero .big', '#hero .mid', '#hero .chips']
-        .flatMap(q => [...document.querySelectorAll(q)]).map(e => [getComputedStyle(e).opacity, getComputedStyle(e).filter])
-        .filter(([o, f]) => o !== '1' || f !== 'none')""")
-    assert faded == [], faded
-    slow.release()
-    expect(page.locator("#nw")).to_have_text(f"${base + 5200:,.0f}")
-    expect(page.locator("#nwlive")).to_have_text(re.compile(r"^Prices live "))
-    expect(crypto).to_have_attribute("aria-expanded", "true")
-    expect(page.locator('#cats tr.sub[data-p="crypto"]').first).to_be_visible()
-    full.set_live_prices(None)  # off: the stored daily prices, and no note
-    load(page)
-    has_totals(page)
-    expect(page.locator("#nwlive")).to_be_hidden()
-    all_loaded(page)
-
-
 # ---------- the page's one outside file ----------
 def test_page_loads_nothing_else_from_outside_and_the_test_copy_of_chartjs_is_the_real_one():
     html = (HERE / "index.html").read_text()

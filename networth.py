@@ -11,8 +11,6 @@ personal.json ("sheet_id", "networth"); see personal.py and personal.example.jso
 
   networth.py            table + totals
   networth.py --json     machine-readable
-  networth.py --live     crypto, metals and synced stocks/ETFs at prices fetched now (valuations/live.py, what the
-                         dashboard shows); without it they are at the prices of the last daily run
 """
 from __future__ import annotations
 
@@ -21,7 +19,7 @@ import os
 import sqlite3
 import subprocess
 import sys
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -110,12 +108,10 @@ def compute(today: str | None = None) -> dict:
     except sqlite3.OperationalError:  # DB predates the valuations table
         vals = {}
     used_ids, lines, warnings = set(), [], []
-    ids: dict[str, list[str]] = {}  # line -> the synced accounts in it ("accounts", for valuations/live.py)
 
     def live(patterns):
         hits = [a for a in accts if any(db.execute("SELECT ? LIKE ?", (a[1], p)).fetchone()[0] for p in patterns)]
         used_ids.update(a[0] for a in hits)
-        ids[key] = [a[0] for a in hits]
         dates = [seen[a[0]] for a in hits if seen[a[0]] and abs(a[2] or 0) >= 0.01]
         return (sum(a[2] or 0.0 for a in hits), min(dates, default=None)) if hits else (None, None)
 
@@ -151,8 +147,7 @@ def compute(today: str | None = None) -> dict:
             value, src, as_of = 0.0, "sheet, excluded by sheet's own total", None
         # "synced" = a SimpleFIN/Plaid account balance, which the daily series in the dashboard trend already has
         lines.append({"line": key, "type": "liability" if is_liab else "asset", "sheet": sval,
-                      "live": lval, "used": value, "from": src, "synced": synced, "as_of": as_of,
-                      **({"accounts": ids[key]} if synced and key not in SHEET_EXCLUDED else {})})
+                      "live": lval, "used": value, "from": src, "synced": synced, "as_of": as_of})
 
     for aid, name, bal, kind, snap, _ in accts:
         if aid in used_ids or kind not in EXTRA_KINDS or abs(bal or 0) < 0.01:
@@ -161,7 +156,7 @@ def compute(today: str | None = None) -> dict:
         liab = kind in ("credit", "loan")
         lines.append({"line": name, "type": "liability" if liab else "asset", "sheet": None,
                       "live": -bal if liab else bal, "used": -bal if liab else bal, "from": "live (no sheet row)",
-                      "synced": True, "as_of": seen[aid], "kind": kind, "accounts": [aid]})
+                      "synced": True, "as_of": seen[aid], "kind": kind})
 
     for aid, name, bal, kind, snap, _ in accts:
         if aid not in used_ids:
@@ -181,20 +176,8 @@ def compute(today: str | None = None) -> dict:
     return result
 
 
-def live_prices(result: dict) -> dict:
-    """compute()'s result with crypto, metals and synced holdings at prices fetched now (valuations/live.py)."""
-    from valuations import live
-    con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
-    try:
-        return live.reprice(result, con, live.quotes(live.wanted(con), wait=60))
-    finally:
-        con.close()
-
-
 def main() -> int:
     result = compute()
-    if "--live" in sys.argv:
-        result = live_prices(result)
     lines = result["lines"]
     if "--json" in sys.argv:
         print(json.dumps(result, indent=1))
@@ -205,9 +188,6 @@ def main() -> int:
         print(f"{l['line'][:42]:42} {l['type']:9} {f(l['sheet']):>12} {f(l['live']):>12} {f(l['used']):>12}  {l['from']}")
     print(f"\nassets {result['assets']:,.0f}  liabilities {result['liabilities']:,.0f}  NET WORTH {result['net_worth']:,.0f}"
           f"   (sheet's own Total Equity: {result['sheet_net_worth'] or 0:,.0f})")
-    if "--live" in sys.argv:
-        said = [f"{g} {', '.join(w['sources'])} {datetime.fromtimestamp(w['at']):%H:%M}" for g, w in result["prices"].items()]
-        print("live prices: " + ("; ".join(said) or "none (all at the last daily run's prices)"))
     for w in result["warnings"]:
         print("WARNING: " + w)
     return 0
