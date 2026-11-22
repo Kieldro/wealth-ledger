@@ -1,6 +1,9 @@
 """Dashboard API helpers against a small synthetic database (no real data)."""
 import json
+import shutil
+import subprocess
 from datetime import date, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -1604,3 +1607,121 @@ def test_account_with_no_matching_label_is_filed_by_its_type():
     assert server.categorize({"line": "Account 7", "type": "asset"}) == "other"  # sheet rows carry no kind
     assert server.categorize(line("Account 7", "credit", "liability")) == "cards"
 
+
+
+# ---------- app shell: installable web app (PWA) and the Android app's asset links ----------
+@pytest.fixture
+def live(auth, monkeypatch):
+    """The real handler on a free loopback port; requests carry no session."""
+    import threading
+    monkeypatch.setattr(server, "AUTH", auth)
+    httpd = server.ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    yield f"127.0.0.1:{httpd.server_port}"
+    httpd.shutdown()
+    httpd.server_close()
+
+
+def fetch(host: str, path: str, accept: str = "*/*"):
+    import http.client
+    c = http.client.HTTPConnection(host, timeout=10)
+    c.request("GET", path, headers={"Accept": accept})
+    r = c.getresponse()
+    body = r.read()
+    c.close()
+    return r.status, dict(r.getheaders()), body
+
+
+def test_app_shell_files_are_public_with_their_types_and_no_session(live):
+    want = {"/manifest.webmanifest": "application/manifest+json", "/sw.js": "text/javascript",
+            "/offline.html": "text/html", "/pwa/icon-192.png": "image/png", "/pwa/icon-512.png": "image/png",
+            "/pwa/icon-maskable-512.png": "image/png", "/pwa/apple-touch-icon.png": "image/png"}
+    assert set(want) == set(server.PWA_FILES)
+    for path, ctype in want.items():
+        status, h, body = fetch(live, path)
+        assert status == 200 and h["Content-Type"].startswith(ctype), (path, status, h)
+        assert "Set-Cookie" not in h and body == (Path(server.PWA_DIR) / server.PWA_FILES[path][0]).read_bytes()
+    # the worker's own fetches (its install cache, network-first pages) are allowed; nothing else is
+    assert fetch(live, "/sw.js")[1]["Content-Security-Policy"].endswith("connect-src 'self'")
+
+
+def test_manifest_names_the_app_and_every_icon_it_lists_is_served_at_its_size(live):
+    import struct
+    m = json.loads(fetch(live, "/manifest.webmanifest")[2])
+    assert (m["name"], m["short_name"], m["start_url"], m["scope"], m["display"]) == (
+        "Wealth Ledger", "Ledger", "/", "/", "standalone")
+    assert m["theme_color"] == m["background_color"] == "#111110"  # the default (graphite) theme's --bg
+    assert {i["purpose"] for i in m["icons"]} == {"any", "maskable"}
+    assert {i["sizes"] for i in m["icons"] if i["purpose"] == "any"} == {"192x192", "512x512"}
+    for i in m["icons"]:
+        status, h, png = fetch(live, i["src"])
+        assert status == 200 and png[:8] == b"\x89PNG\r\n\x1a\n"
+        assert "%dx%d" % struct.unpack(">II", png[16:24]) == i["sizes"]
+
+
+def test_both_pages_link_the_manifest_and_allow_it_and_the_worker_in_their_csp(live):
+    page = server.LOGIN_HTML + (Path(server.HERE) / "index.html").read_text()
+    assert page.count('<link rel="manifest" href="/manifest.webmanifest">') == 2
+    assert page.count('navigator.serviceWorker.register("/sw.js")') == 2
+    status, h, _ = fetch(live, "/login", "text/html")
+    assert status == 200 and "manifest-src 'self'; worker-src 'self'" in h["Content-Security-Policy"]
+    assert "manifest-src 'self'; worker-src 'self'" in server.index_csp(b"")
+
+
+def test_assetlinks_is_public_and_built_from_personal_json(live):
+    status, h, body = fetch(live, "/.well-known/assetlinks.json")
+    assert status == 200 and h["Content-Type"] == "application/json" and "Set-Cookie" not in h
+    ex = json.loads((Path(server.ROOT) / "personal.example.json").read_text())["dashboard"]["android"]
+    assert json.loads(body) == [{"relation": ["delegate_permission/common.handle_all_urls"],
+                                 "target": {"namespace": "android_app", "package_name": ex["package"],
+                                            "sha256_cert_fingerprints": ex["sha256_cert_fingerprints"]}}]
+
+
+@pytest.mark.parametrize("android", [None, "x", {}, {"package": "com.example.app"},
+                                     {"package": "nodots", "sha256_cert_fingerprints": ["AA:" * 31 + "AA"]},
+                                     {"package": "com.example.app", "sha256_cert_fingerprints": ["AA:BB", 5]},
+                                     {"package": "com.example.app", "sha256_cert_fingerprints": "AA:" * 31 + "AA"}])
+def test_assetlinks_is_empty_unless_configured_with_a_package_and_valid_fingerprints(monkeypatch, android):
+    monkeypatch.setattr(server.personal, "section", lambda name: {"android": android} if android is not None else {})
+    assert server.assetlinks() == []
+
+
+def test_assetlinks_lists_every_valid_fingerprint_uppercased(monkeypatch):
+    a, b = "ab:" * 31 + "ab", "CD:" * 31 + "CD"
+    monkeypatch.setattr(server.personal, "section", lambda name: {"android": {
+        "package": "com.example.app", "sha256_cert_fingerprints": [a, "junk", b]}})
+    assert server.assetlinks()[0]["target"]["sha256_cert_fingerprints"] == [a.upper(), b]
+
+
+def test_everything_else_still_needs_a_session(live):
+    for path in ("/", "/index.html"):  # the page: to the sign-in page
+        status, h, _ = fetch(live, path, "text/html")
+        assert (status, h.get("Location")) == (303, "/login"), path
+    for path in ("/api/summary", "/api/last", "/api/trend", "/pwa/", "/pwa/sw.js", "/sw.js/x", "/offline.html/x",
+                 "/.well-known/other.json", "/healthz"):
+        assert fetch(live, path)[0] == 401, path
+
+
+def test_service_worker_caches_only_public_files_and_leaves_api_and_signed_in_pages_alone():
+    sw = (Path(server.PWA_DIR) / "sw.js").read_text()
+    # it never stores a response at run time: the only write to the cache is the install-time list of public files
+    assert ".put(" not in sw and sw.count("addAll(") == 1
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node isn't installed")
+    script = """
+      globalThis.self = {addEventListener() {}, location: {origin: "https://h.example"}};
+      const {route, PUBLIC} = require(process.argv[1]);
+      const r = (path, mode = "cors", method = "GET", origin = "https://h.example") =>
+        route({url: origin + path, mode, method});
+      console.log(JSON.stringify({PUBLIC, routes: {
+        page: r("/", "navigate"), login: r("/login", "navigate"), post: r("/login", "navigate", "POST"),
+        api: r("/api/summary"), apinav: r("/api/summary", "navigate"), last: r("/api/last"),
+        offline: r("/offline.html"), icon: r("/pwa/icon-192.png"), other: r("/pwa/icon-512.png"),
+        index: r("/index.html"), away: r("/", "navigate", "GET", "https://evil.example")}}));
+    """
+    out = json.loads(subprocess.run([node, "-e", script, str(Path(server.PWA_DIR) / "sw.js")], capture_output=True,
+                                    text=True, check=True).stdout)
+    assert set(out["PUBLIC"]) <= set(server.PWA_FILES)  # only files any visitor can fetch without a session
+    assert out["routes"] == {"page": "page", "login": "page", "post": None, "api": None, "apinav": None, "last": None,
+                             "offline": "shell", "icon": "shell", "other": None, "index": None, "away": None}

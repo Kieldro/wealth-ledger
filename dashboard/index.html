@@ -9,6 +9,8 @@
 <meta name="theme-color" content="#111110">
 <title>Wealth Ledger</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%232a78d6'/%3E%3Cpath d='M3 11l3-3 2 2 5-5' stroke='white' stroke-width='1.8' fill='none'/%3E%3C/svg%3E">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/pwa/apple-touch-icon.png">
 <style>
 /* Dark only. Graphite is the default; the others are picked from the dot in the header (remembered per browser as wl.theme)
    or set as this ledger's default by "dashboard.theme" in personal.json. Keep the names in step with THEMES in
@@ -542,6 +544,8 @@ footer code { font-size: 11.5px; }
 <script>
 try { var t = localStorage.getItem("wl.theme"); if (/^(graphite|rose|amethyst|plum|sage)$/.test(t)) document.documentElement.dataset.theme = t; } catch (e) { /* storage blocked */ }
 document.querySelector('meta[name="theme-color"]').content = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
+// installable app: /sw.js only shows an offline page when the network is gone; it never caches the numbers
+if ("serviceWorker" in navigator) addEventListener("load", function () { navigator.serviceWorker.register("/sw.js").catch(function () { /* not installable here; the page works the same */ }); });
 </script>
 </head>
 <body>

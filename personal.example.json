@@ -1,6 +1,6 @@
 {
  "_help": "OPTIONAL FILE. With only a SimpleFIN connection the ledger needs no personal.json at all. Every key below is optional and independent: copy just the sections you want to ~/.config/wealth-ledger/personal.json (chmod 600), replace the values with your own, and leave the rest out. Keys starting with _ are comments. Each section's _help says what it is for and what else it needs.",
- "_simplefin_only": "Useful without a spreadsheet: account_kinds, credit_limits, rules, dashboard (default_username, theme, credit, ledger_start, web_connect), subscriptions, overdraft, rental, inherited_ira, backup, simplefin_watch. Needs the gws CLI signed in to Google: sheet_id and everything that reads the sheet (networth, home, cars, crypto, budget, amazon, networth_history), zelle_memos (Gmail) and monthly_email (Gmail).",
+ "_simplefin_only": "Useful without a spreadsheet: account_kinds, credit_limits, rules, dashboard (default_username, theme, credit, ledger_start, web_connect, android), subscriptions, overdraft, rental, inherited_ira, backup, simplefin_watch. Needs the gws CLI signed in to Google: sheet_id and everything that reads the sheet (networth, home, cars, crypto, budget, amazon, networth_history), zelle_memos (Gmail) and monthly_email (Gmail).",
  "_sheet_id": "Optional. A Google Sheet with a hand-kept 'balance sheet' tab (assets the feeds can't see: cash, metals, home, cars) and an 'income sheet' budget tab. Remove this key for a ledger of synced accounts only.",
  "sheet_id": "YOUR-GOOGLE-SHEET-ID",
  "_auto_kind": "Optional key \"auto_kind\": true or false. true = each new account's type is guessed from its name at every sync. Default: true without sheet_id, false with it (you classify accounts yourself).",
@@ -86,6 +86,11 @@
   "web_connect": false,
   "theme": "graphite",
   "ledger_start": "2026-01-01",
+  "android": {
+   "_help": "Optional. The Android app (a Trusted Web Activity, see android/README.md) opens this site full screen only if /.well-known/assetlinks.json names its package and the SHA-256 fingerprint of the key it is signed with. List every key the app may be signed with: the upload key (keytool -list -keystore <upload keystore>), and, once the app is on Google Play, the app-signing key Play Console shows under Setup > App signing. Without this key the file is an empty list. Restart the service after changing it.",
+   "package": "com.example.ledger",
+   "sha256_cert_fingerprints": ["00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF"]
+  },
   "exact": {
    "Brokerage": "taxable",
    "Total cryptocurrency (USD)": "crypto",

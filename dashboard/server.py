@@ -5,7 +5,8 @@ bank sync, from the page's "Sync now"); serves on 127.0.0.1 + the Tailscale IP o
   server.py [--port 8766]
   server.py set-password [--generate]     # set/rotate the login password (signs out all sessions)
 
-Every path needs a login session (cookie) except /login, /logout (POST) and /robots.txt.
+Every path needs a login session (cookie) except /login, /logout (POST), /robots.txt and the app shell (the web
+app manifest, service worker, offline page, icons and /.well-known/assetlinks.json; see PWA_FILES).
 Endpoints: /api/summary, POST /api/refresh (re-runs networth.py), POST /api/sync (starts the bank sync in the
 background; GET /api/sync says how it is going), /api/trend, /api/accounts,
 /api/holdings, /api/crypto, /api/cards, /api/spending, /api/drafts (overdraft forecast), /api/budget (budget vs actual),
@@ -1586,6 +1587,8 @@ LOGIN_HTML = """<!doctype html>
 <meta name="theme-color" content="#111110">
 <title>Sign in · Wealth Ledger</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%232a78d6'/%3E%3Cpath d='M3 11l3-3 2 2 5-5' stroke='white' stroke-width='1.8' fill='none'/%3E%3C/svg%3E">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/pwa/apple-touch-icon.png">
 <style>
 :root {
   color-scheme: dark;
@@ -1673,6 +1676,8 @@ input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px 
 <script>
 try { var t = localStorage.getItem("wl.theme"); if (/^(graphite|rose|amethyst|plum|sage)$/.test(t)) document.documentElement.dataset.theme = t; } catch (e) { /* storage blocked */ }
 document.querySelector('meta[name="theme-color"]').content = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
+// installable app: /sw.js only shows an offline page when the network is gone; it never caches the numbers
+if ("serviceWorker" in navigator) addEventListener("load", function () { navigator.serviceWorker.register("/sw.js").catch(function () { /* not installable here; the page works the same */ }); });
 </script>
 </head>
 <body>
@@ -1946,13 +1951,53 @@ def script_hashes(page: bytes) -> str:
 
 # the sign-in page's one inline script (show password, Caps Lock hint, busy button, the markets line's re-reads); the
 # page works without it
-CSP_LOGIN = (f"{CSP_BASE}; script-src {script_hashes(LOGIN_HTML.encode())}; style-src 'unsafe-inline'; img-src data:; "
-             "connect-src 'self'")
+CSP_APP = "manifest-src 'self'; worker-src 'self'"  # both pages link the web app manifest and register /sw.js
+CSP_LOGIN = (f"{CSP_BASE}; script-src {script_hashes(LOGIN_HTML.encode())}; style-src 'unsafe-inline'; "
+             f"img-src 'self' data:; connect-src 'self'; {CSP_APP}")
 
 
 def index_csp(page: bytes) -> str:
     return (f"{CSP_BASE}; script-src {script_hashes(page)} {CHARTJS}; style-src 'self' 'unsafe-inline'; "
-            f"img-src 'self' data:; connect-src 'self'")
+            f"img-src 'self' data:; connect-src 'self'; {CSP_APP}")
+
+
+# ---------- app shell: installable web app (PWA) and the Android app (Trusted Web Activity) ----------
+# Public, like the sign-in page: these files hold nothing from the ledger. path -> (file in pwa/, type, caching, CSP).
+# The service worker caches only its own short list of these (see sw.js), never an API answer or a signed-in page.
+PWA_DIR = os.path.join(HERE, "pwa")
+_ICON = ("image/png", "public, max-age=86400", CSP_BASE)
+PWA_FILES = {
+    "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json", "no-cache", CSP_BASE),
+    # the worker's own fetches (its install-time cache of the offline page, and network-first pages) need connect-src
+    "/sw.js": ("sw.js", "text/javascript; charset=utf-8", "no-cache", f"{CSP_BASE}; connect-src 'self'"),
+    "/offline.html": ("offline.html", "text/html; charset=utf-8", "no-cache",
+                      f"{CSP_BASE}; style-src 'unsafe-inline'; img-src 'self'"),
+    **{f"/pwa/{n}": (n, *_ICON) for n in ("icon-192.png", "icon-512.png", "icon-maskable-512.png",
+                                          "apple-touch-icon.png")},
+}
+ASSETLINKS = "/.well-known/assetlinks.json"
+FINGERPRINT = re.compile(r"(?:[0-9A-F]{2}:){31}[0-9A-F]{2}")
+PACKAGE = re.compile(r"[A-Za-z]\w*(?:\.[A-Za-z]\w*)+")
+
+
+def assetlinks() -> list[dict]:
+    """Digital Asset Links statement that lets the Android app (personal.json dashboard.android.package) show this
+    site full screen, without a browser bar. dashboard.android.sha256_cert_fingerprints lists every signing key the
+    app may be signed with: the upload key's, and Play App Signing's once Play holds the app's key. [] when either is
+    missing or malformed (restart the service after changing them)."""
+    try:
+        cfg = personal.section("dashboard").get("android")
+    except Exception:  # a broken personal.json must not break the public files
+        return []
+    if not isinstance(cfg, dict):
+        return []
+    pkg, fps = cfg.get("package"), cfg.get("sha256_cert_fingerprints")
+    fps = [f.strip().upper() for f in fps if isinstance(f, str)] if isinstance(fps, list) else []
+    fps = [f for f in fps if FINGERPRINT.fullmatch(f)]
+    if not (isinstance(pkg, str) and PACKAGE.fullmatch(pkg) and fps):
+        return []
+    return [{"relation": ["delegate_permission/common.handle_all_urls"],
+             "target": {"namespace": "android_app", "package_name": pkg, "sha256_cert_fingerprints": fps}}]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -2082,6 +2127,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(405, b"use POST\n", "text/plain", [("Allow", "POST")])
             if p == "/api/markets":  # both pages re-read the line every refresh_s; public, like the sign-in page
                 return self._json(200, {"html": markets_line(), "refresh_s": live_markets.TTL})
+            if f := PWA_FILES.get(p):  # the app shell: public, nothing from the ledger
+                name, ctype, cache, csp = f
+                with open(os.path.join(PWA_DIR, name), "rb") as fh:
+                    return self._send(200, fh.read(), ctype, csp=csp, cache=cache)
+            if p == ASSETLINKS:
+                return self._send(200, json.dumps(assetlinks(), indent=1).encode(), "application/json",
+                                  cache="public, max-age=3600")
             if not self._authed():
                 return self._deny(p)
             if p in ("/", "/index.html"):

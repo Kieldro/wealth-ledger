@@ -398,6 +398,41 @@ def test_login_wrong_password_then_right_then_logout(full, open_page, browser):
     stolen.close()
 
 
+def test_installable_app_signs_in_and_never_caches_the_numbers(full, open_page):
+    """The web app as installed: Chrome finds nothing missing to install it, sign-in works under the service worker,
+    the worker's cache holds only the public shell (never /api/ or a signed-in page), and offline shows the offline
+    page, not the last numbers."""
+    page = open_page(full, signed_in=False, go=False)
+    page.goto(full.url + "/login")
+    page.evaluate("() => navigator.serviceWorker.ready")
+    cdp = page.context.new_cdp_session(page)
+    errors = [e["errorId"] for e in cdp.send("Page.getInstallabilityErrors")["installabilityErrors"]]
+    assert not [e for e in errors if e != "in-incognito"], errors  # every Playwright context is incognito-like
+    manifest = cdp.send("Page.getAppManifest")
+    assert manifest["url"].endswith("/manifest.webmanifest") and not manifest["errors"], manifest["errors"]
+
+    sign_in(page, full)  # a form POST with the worker in charge of the page
+    page.wait_for_selector(READY)
+    expect(page).to_have_url(full.url + "/")
+    assert page.evaluate("() => !!navigator.serviceWorker.controller")
+    page.reload()
+    page.wait_for_selector(READY)
+    has_totals(page)
+    cached = page.evaluate("""async () => {
+        const urls = [];
+        for (const k of await caches.keys())
+          for (const r of await (await caches.open(k)).keys()) urls.push(new URL(r.url).pathname);
+        return urls.sort(); }""")
+    assert cached == ["/offline.html", "/pwa/icon-192.png"], cached
+
+    page.watch.expect(r"ERR_INTERNET_DISCONNECTED")
+    page.context.set_offline(True)
+    page.reload()
+    expect(page.get_by_role("heading", name="You're offline")).to_be_visible()
+    assert "$" not in page.content()
+    page.context.set_offline(False)
+
+
 # ---------- every card, both widths ----------
 def test_desktop_every_card_has_its_data(desk):
     has_totals(desk)

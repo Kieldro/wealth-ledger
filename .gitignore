@@ -44,6 +44,23 @@ dashboard/screenshots/
 *.jpg
 *.jpeg
 *.webp
+# except the app icons (a drawing, see dashboard/pwa/make_icons.py)
+!dashboard/pwa/*.png
 
 # what the browser tests save when one fails (synthetic data)
 dashboard/ui-artifacts/
+
+# Android app (android/): build outputs, local SDK paths and signing keys never go in the repo
+android/build-out/
+android/**/build/
+android/.gradle/
+android/app/.gradle/
+android/local.properties
+android/.idea/
+android/*.iml
+android/**/*.jks
+android/**/*.keystore
+android/.bubblewrap/
+*.apk
+*.aab
+*.idsig
