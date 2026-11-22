@@ -51,6 +51,7 @@ from insights import budget, inherited_ira, monthly_email, overdraft, rental, su
 from insights import prices as price_hist  # noqa: E402
 from insights import holding_prices  # noqa: E402
 from insights import live_markets  # noqa: E402
+from insights import mortgage  # noqa: E402
 from valuations.crypto import norm_coin  # noqa: E402
 
 _DASH = personal.section("dashboard")
@@ -273,6 +274,49 @@ def period_changes(series: list[dict]) -> dict:
     return changes
 
 
+def side_changes(series: list[dict], days: int = 30) -> dict | None:
+    """The `days`-day change split into assets and liabilities: {"assets": delta, "liabilities": delta owed (positive =
+    more owed), "vs": date}, from the synced accounts' own values (credit and loan accounts are the liabilities), like
+    for like as period_changes; None when the history doesn't reach back that far."""
+    if not series or series[-1].get("accounts") is None:
+        return None
+    target = (date.fromisoformat(series[-1]["date"]) - timedelta(days=days)).isoformat()
+    past = [x for x in series if x["date"] <= target]
+    if not past or past[-1]["date"] != target or past[-1].get("accounts") is None:
+        return None
+    kinds = {r["account_id"]: r["kind"] for r in q("SELECT account_id, kind FROM account_kind")}
+    now, then, out = series[-1]["accounts"], past[-1]["accounts"], {"assets": 0.0, "liabilities": 0.0, "vs": target}
+    for a, bal in then.items():
+        d = now.get(a, 0.0) - bal
+        if kinds.get(a) in ("credit", "loan"):
+            out["liabilities"] -= d  # balances owed are negative: falling further is more owed
+        else:
+            out["assets"] += d
+    return {k: round(v, 2) if isinstance(v, float) else v for k, v in out.items()}
+
+
+def debt_summary(data: dict) -> dict:
+    """For the Liabilities tile: when the mortgage is paid off (insights/mortgage.py, from the ledger) and the cards'
+    total against their limits (api_cards). Either part is None when there is nothing to go on."""
+    out = {"mortgage": None, "cards": None}
+    try:
+        con = db()
+        try:
+            hint = " ".join(l["line"] for l in data["lines"] if l["type"] == "liability" and categorize(l) == "mortgage")
+            out["mortgage"] = mortgage.summary(con, rate_hint=hint)
+        finally:
+            con.close()
+    except Exception as e:  # noqa: BLE001 - a tile's extra line never fails the summary
+        log(f"mortgage payoff: {e!r}")
+    try:
+        c = api_cards({})
+        if c["cards"]:
+            out["cards"] = {"owed": c["total"], "limit": c["limit"], "util_pct": c["util_pct"], "count": len(c["cards"])}
+    except Exception as e:  # noqa: BLE001
+        log(f"cards total: {e!r}")
+    return out
+
+
 # ---------- endpoints ----------
 def line_source(line: dict) -> str:
     """live = synced balance, or read today straight from an exchange or blockchain; est = modelled or priced
@@ -356,10 +400,12 @@ def api_summary(params) -> dict:
             c[k] = round(c[k], 2)
     sheet_const = round(sum((l["used"] if l["type"] == "asset" else -l["used"])
                             for l in data["lines"] if not in_synced_series(l)), 2)
-    changes = period_changes(synced_series())
+    series = synced_series()
+    changes = period_changes(series)
     res.update(net_worth=data["net_worth"], assets=data["assets"], liabilities=data["liabilities"],
                sheet_net_worth=data.get("sheet_net_worth"), sheet_only_total=sheet_const,
-               changes=changes, categories=list(cats.values()), input_ages=input_ages(data["lines"]))
+               changes=changes, categories=list(cats.values()), input_ages=input_ages(data["lines"]),
+               side_changes=side_changes(series), debt=debt_summary(data))
     return res
 
 

@@ -99,6 +99,32 @@ def test_period_changes_leave_out_accounts_linked_during_the_period():
     assert ch["1"] == {"delta": 700.0, "vs": "2026-03-01"}  # both accounts existed yesterday: nothing left out
 
 
+def test_side_changes_split_the_30_day_change_into_assets_and_owed(dbfile):
+    """Credit and loan accounts are what's owed (paying them down is a negative change in owed); like with like."""
+    con = ctdb.connect(dbfile)
+    con.execute("INSERT INTO account_kind VALUES ('m', 'loan', NULL)")
+    con.commit()
+    con.close()
+    s = [{"date": "2026-02-01", "synced": 0.0, "accounts": {"c1": -300.0, "m": -100000.0, "chk": 5000.0}},
+         {"date": "2026-03-03", "synced": 0.0, "accounts": {"c1": -250.0, "m": -99500.0, "chk": 4200.0, "new": 900.0}}]
+    assert server.side_changes(s) == {"assets": -800.0, "liabilities": -550.0, "vs": "2026-02-01"}
+    assert server.side_changes(s[1:]) is None and server.side_changes([]) is None  # history too short
+    assert server.side_changes([{"date": "2026-02-01", "synced": 1.0}, {"date": "2026-03-03", "synced": 2.0}]) is None
+
+
+def test_summary_carries_the_debt_lines_for_the_liabilities_tile(dbfile, monkeypatch):
+    monkeypatch.setattr(server.mortgage, "summary", lambda con, rate_hint="": {"payoff": "2035-09", "hint": rate_hint})
+    data = {"lines": [{"line": "Home mortgage 6%", "type": "liability", "used": 1.0},
+                      {"line": "Visa", "type": "liability", "used": 1.0}]}
+    d = server.debt_summary(data)
+    assert d["mortgage"] == {"payoff": "2035-09", "hint": "Home mortgage 6%"}  # only mortgage lines name the rate
+    assert d["cards"] == {"owed": 310.0, "limit": 1500.0, "util_pct": 16.7, "count": 3}
+    monkeypatch.setattr(server.mortgage, "summary", lambda con, rate_hint="": 1 / 0)
+    logged = []
+    monkeypatch.setattr(server, "log", logged.append)
+    assert server.debt_summary(data)["mortgage"] is None and "ZeroDivisionError" in logged[0]  # never fails the summary
+
+
 def test_synced_series_carries_per_account_balances_and_the_trend_does_not_send_them(dbfile, monkeypatch):
     con = ctdb.connect(dbfile)
     con.execute("INSERT INTO account_kind VALUES ('s1','savings',NULL)")
@@ -1459,7 +1485,7 @@ def test_dashboard_shows_the_sign_in_pages_market_closes_once():
     index = open(server.os.path.join(server.os.path.dirname(server.__file__), "index.html")).read()
     # filled by markets_line(): the sign-in page's line, live prices included
     assert index.count("{{markets}}") == 1 and '<div class="mktbar" data-poll="{{markets_poll}}">{{markets}}</div>' in index
-    assert index.count('class="card golink" data-go="asset"') == index.count('class="card golink" data-go="liability"') == 1
+    assert index.count('class="card golink tile tile-a" data-go="asset"') == index.count('class="card golink tile tile-l" data-go="liability"') == 1
 
 
 # ---------- live prices in the dashboard's markets line ----------

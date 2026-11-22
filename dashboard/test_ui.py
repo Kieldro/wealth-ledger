@@ -43,7 +43,7 @@ WAITING = "[data-load]"  # a card (or the totals) that is loading, failed, or sh
 API = ("summary", "trend", "accounts", "holdings", "crypto", "cards", "spending", "drafts", "budget", "subscriptions",
        "rental", "inherited_ira", "last", "sync", "account_txns?id=chk")
 SHEET_ONLY = {"budget", "cryptocard", "ira", "rentalcard"}  # cards a ledger with no personal.json has nothing for
-CHARTS = ("donut", "trend", "spend", "pace", "rentalchart", "iratrend")
+CHARTS = ("donut", "liabdonut", "trend", "spend", "pace", "rentalchart", "iratrend")
 # something each card can only say once its data is in
 CARD_SAYS = {
     "draftscard": "EXAMPLE EMPLOYER PAYROLL", "alloccard": "Cash & bank", "trendcard": "daily snapshots",
@@ -415,6 +415,34 @@ def test_desktop_every_card_has_its_data(desk):
     expect(desk.locator("#syncpill")).to_contain_text("Synced")
     expect(desk.locator("#problems")).to_be_empty()
     assert desk.title() and desk.locator("#jump button[data-sec]").count() == len(shown)
+
+
+def test_assets_and_liabilities_tiles_say_whats_behind_the_number(desk):
+    """Assets: the categories as one bar in the donut's colours, liquid / retirement / illiquid, the 30-day change.
+    Liabilities: the mortgage payoff from the ledger's payments, the cards against their limits, debt as a share of
+    assets, the 30-day change; the Liabilities card has its own donut, one slice per line owed, each row's dot in its
+    slice's colour, the small card slice still drawn big enough to see."""
+    has_totals(desk)
+    cats = desk.locator("#cats tr.cat").count()
+    expect(desk.locator("#assetbar span")).to_have_count(cats)
+    expect(desk.locator("#assetbar span").first).to_have_attribute("title", re.compile(r"^Cash & bank.*: \$[\d,]+ \(\d+\.\d%\)$"))
+    expect(desk.locator("#assetsplit")).to_have_text(re.compile(r"^Liquid \$[\d.]+k · Retirement \$[\d.]+k · Illiquid \$[\d.]+k$"))
+    expect(desk.locator("#assetchg")).to_have_text(re.compile(r"^30d [+−]\$[\d,]+$"))
+    expect(desk.locator("#mortline")).to_have_text(re.compile(r"^Mortgage paid off [A-Z][a-z]{2} 20\d\d at \$1,480/mo · \d+(\.\d+)?%$"))
+    expect(desk.locator("#cardline")).to_have_text(re.compile(r"^Cards \$[\d.,]+k? · \d+(\.\d)?% of limits$"))
+    expect(desk.locator("#cardline .meter i")).to_have_count(1)
+    expect(desk.locator("#liabchg")).to_have_text(re.compile(r"^30d [+−]\$[\d,]+\d+\.\d% of assets$"))
+    expect(desk.locator("#liabdonutc")).to_have_text(re.compile(r"^\$[\d.]+k$"))
+    slices = desk.evaluate("""() => { const c = Chart.getChart('liabdonut'), d = c.data.datasets[0];
+        return d.data.map((v, i) => [c.data.labels[i], v, d.backgroundColor[i]]); }""")
+    total = sum(v for _, v, _ in slices)
+    assert len(slices) == 2 and min(v for _, v, _ in slices) / total > 0.02, slices  # mortgage + the card, both visible
+    desk.locator('#liabcats tr.cat[data-k="cards"]').click()
+    dot = desk.locator('#liabcats tr.sub[data-p="cards"] .sw').first
+    expect(dot).to_be_visible()
+    color = desk.evaluate("el => getComputedStyle(el).backgroundColor", dot.element_handle())
+    rgb = desk.evaluate("c => { const e = document.createElement('i'); e.style.color = c; document.body.append(e); const v = getComputedStyle(e).color; e.remove(); return v; }", slices[1][2])
+    assert color == rgb, (color, rgb)
 
 
 def test_desktop_fits_and_controls_are_reachable(desk):
