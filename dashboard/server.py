@@ -2113,10 +2113,11 @@ DEMO_NOT_HERE = "Not available in the demo: it has no bank connection, sheet or 
 
 
 def live_anchors() -> dict[str, float]:
-    """Today's public BTC, gold and S&P 500 prices already fetched for the markets line (never waits), so the demo's
-    bitcoin and gold are valued near the prices the line shows."""
+    """Today's public BTC, gold and S&P 500 prices from the markets line's shared cache, so the demo's bitcoin and gold
+    are valued near the prices the line shows. Runs in the demo's build thread, so it may wait for a fetch (at most
+    WAIT, the same as /api/markets); right after a restart nothing is fetched yet."""
     try:
-        live = live_markets.quotes(0)
+        live = live_markets.quotes(live_markets.WAIT)
     except Exception:  # noqa: BLE001
         return {}
     return {sym: float(q["usd"]) for sym, q in live.items() if sym in ("BTC", "XAU", "SPX") and q.get("usd")}
