@@ -1230,7 +1230,8 @@ def test_login_page_keeps_its_form_contract_and_its_script_matches_the_csp():
     import base64, hashlib, re
     html = server.LOGIN_HTML
     for needle in ('<form method="post" action="/login"', 'name="username"', 'name="password" type="password"',
-                   'autocomplete="username"', 'autocomplete="current-password"', "{{error}}", "{{username}}", "{{markets}}"):
+                   'autocomplete="username"', 'autocomplete="current-password"', "{{error}}", "{{username}}",
+                   '<div class="mktbar" id="mkts" data-poll="{{markets_poll}}">{{markets}}</div>'):
         assert needle in html, needle
     scripts = re.findall(r"<script>(.*?)</script>", html, re.S)
     assert len(scripts) == html.count("<script") == 2  # theme (in <head>) and form behaviour; nothing loaded from elsewhere
@@ -1238,6 +1239,7 @@ def test_login_page_keeps_its_form_contract_and_its_script_matches_the_csp():
         digest = base64.b64encode(hashlib.sha256(body.encode()).digest()).decode()
         assert f"'sha256-{digest}'" in server.CSP_LOGIN.split("script-src ")[1].split(";")[0]
     assert "default-src 'none'" in server.CSP_LOGIN and "http" not in server.CSP_LOGIN
+    assert "connect-src 'self'" in server.CSP_LOGIN  # the markets line's re-reads, to this server only
 
 
 def test_login_page_shows_the_error_and_keeps_the_username_escaped(monkeypatch):
@@ -1289,7 +1291,8 @@ def test_theme_default_comes_from_personal_json_and_every_theme_is_on_both_pages
 # ---------- market closes on the sign-in page ----------
 @pytest.fixture(autouse=True)
 def _fresh_login_markets(monkeypatch):
-    monkeypatch.setattr(server, "_login_markets", None)  # the memo must not carry from one test into the next
+    monkeypatch.setattr(server, "_login_markets", None)  # the memos must not carry from one test into the next
+    monkeypatch.setattr(server, "_markets_line", None)
 
 
 def _day(n: int) -> str:
@@ -1454,7 +1457,7 @@ def test_login_markets_adds_the_inflation_nowcast_the_sync_stored(dbfile, monkey
 
 def test_dashboard_shows_the_sign_in_pages_market_closes_once():
     index = open(server.os.path.join(server.os.path.dirname(server.__file__), "index.html")).read()
-    # filled by dashboard_markets(): the same line, with live prices where there are any
+    # filled by markets_line(): the sign-in page's line, live prices included
     assert index.count("{{markets}}") == 1 and '<div class="mktbar" data-poll="{{markets_poll}}">{{markets}}</div>' in index
     assert index.count('class="card golink" data-go="asset"') == index.count('class="card golink" data-go="liability"') == 1
 
@@ -1466,7 +1469,7 @@ def _live(sym, usd, day, vs="same", source="coinbase", t=None):
     return {sym: {"usd": usd, "vs": usd if vs == "same" else vs, "day": day, "time": t, "at": t, "source": source}}
 
 
-def test_dashboard_markets_shows_live_prices_moved_from_the_close_before_their_trading_day(dbfile, monkeypatch):
+def test_markets_line_shows_live_prices_moved_from_the_close_before_their_trading_day(dbfile, monkeypatch):
     _prices(dbfile, [(_day(2), "BTC", 90000.0, "c"), (_day(1), "BTC", 96000.0, "c"), (_day(0), "BTC", 99000.0, "c"),
                      (_day(4), "XAU", 4000.0, "y"), (_day(3), "XAU", 4100.0, "y"), (_day(1), "XAU", 4200.0, "y"),
                      (_day(5), "SPX", 6800.0, "y"), (_day(4), "SPX", 6900.0, "y"), (_day(3), "SPX", 7000.0, "y")])
@@ -1476,7 +1479,7 @@ def test_dashboard_markets_shows_live_prices_moved_from_the_close_before_their_t
             **_live("SPX", 7140.0, _day(3), source="yahoo ^GSPC", t=1.0)}      # a weekend: the last session's move
     asked = []
     monkeypatch.setattr(server.live_markets, "quotes", lambda wait=5.0: asked.append(wait) or live)
-    html = server.dashboard_markets()
+    html = server.markets_line()
     assert asked == [server.live_markets.WAIT]
     assert _mkt(html) == (
         '<div class="mkt" title="Live prices; each move is from the close before its trading day">'
@@ -1492,59 +1495,74 @@ def test_dashboard_markets_shows_live_prices_moved_from_the_close_before_their_t
     assert "data-live" not in server.login_markets() and "$99,000" in server.login_markets()  # the sign-in page: stored
 
 
-def test_dashboard_markets_falls_back_to_the_stored_close_per_symbol(dbfile, monkeypatch):
+def test_markets_line_falls_back_to_the_stored_close_per_symbol(dbfile, monkeypatch):
     _prices(dbfile, [(_day(2), "BTC", 96000.0, "c"), (_day(1), "BTC", 97000.0, "c"),
                      (_day(2), "XAU", 4000.0, "y"), (_day(1), "XAU", 4100.0, "y"), (_day(1), "SPX", 6800.0, "y")])
     live = {**_live("BTC", 970_000.0, _day(0)),          # ten times the close: a broken quote, not a price
             **_live("XAU", 4120.0, _day(0), vs=None)}    # no price on the closes' instrument: no move
     monkeypatch.setattr(server.live_markets, "quotes", lambda wait=5.0: live)  # and the S&P 500 source is down
-    html = _mkt(server.dashboard_markets())
+    html = _mkt(server.markets_line())
     assert f'<div><span class="n">Bitcoin</span><b>$97,000</b><i class="up" title="Since the close before, {_day(2)}">+1.0%</i></div>' in html
     assert '<div data-live><span class="n">Gold</span><b title="Live price (coinbase), ' in html and '$4,120</b></div>' in html
     assert '<div><span class="n">S&amp;P 500</span><b>6,800</b></div>' in html
     monkeypatch.setattr(server.live_markets, "quotes", lambda wait=5.0: {})  # all down or off: the sign-in page's line
-    assert server.dashboard_markets() == server.login_markets()
+    assert server.markets_line() == server.login_markets()
     logged = []
     monkeypatch.setattr(server, "log", logged.append)
     monkeypatch.setattr(server.live_markets, "quotes", lambda wait=5.0: 1 / 0)
-    assert server.dashboard_markets() == server.login_markets() and "ZeroDivisionError" in logged[0]  # never raises
+    assert server.markets_line() == server.login_markets() and "ZeroDivisionError" in logged[0]  # never raises
     monkeypatch.setattr(server, "DB", str(dbfile.parent / "missing.db"))  # live, with nothing stored: no move
     monkeypatch.setattr(server.live_markets, "quotes", lambda wait=5.0: _live("BTC", 97000.0, _day(0)))
-    assert _mkt(server.dashboard_markets()).startswith('<div class="mkt" title="Live prices; each move is from the close '
+    assert _mkt(server.markets_line()).startswith('<div class="mkt" title="Live prices; each move is from the close '
                                                        'before its trading day"><div data-live><span class="n">Bitcoin</span>')
 
 
-def test_markets_line_is_live_only_for_a_signed_in_viewer(dbfile, monkeypatch):
-    """The sign-in page keeps the stored closes and never asks a price source; the dashboard page answers from what is
-    already fetched (never waits on a source), and /api/markets waits at most WAIT."""
+def test_sign_in_page_dashboard_and_api_show_the_same_markets_line(dbfile, monkeypatch):
+    """The sign-in page and the dashboard show the same line, live prices included, from the shared cache: a page never
+    waits on a source (it shows what is already fetched), /api/markets waits at most WAIT and needs no session. Only
+    the allowlisted symbols ever show, whatever a source answers."""
     _prices(dbfile, [(_day(1), "BTC", 97000.0, "c")])
     asked = []
-    monkeypatch.setattr(server.live_markets, "quotes", lambda wait=5.0: asked.append(wait) or _live("BTC", 98000.0, _day(0)))
+    live = {**_live("BTC", 98000.0, _day(0)), **_live("ETH", 3400.0, _day(0))}  # ETH: not on the list, never shown
+    monkeypatch.setattr(server.live_markets, "quotes", lambda wait=5.0: asked.append(wait) or live)
     monkeypatch.setattr(server.live_markets, "enabled", lambda: True)
     sent = []
     h = server.Handler.__new__(server.Handler)
     h._send = lambda code, body, ctype, headers=(), csp=None, cache=None: sent.append((code, body.decode()))
     h._renewal = lambda: []
+    h._deny = lambda p: sent.append((401, p))
+    h._authed = lambda: False
     h._login_page()
-    assert asked == [] and "$97,000" in sent[0][1] and "data-live" not in sent[0][1]
+    h.path = "/api/markets"
+    h.do_GET()  # signed out
     h._authed = lambda: True
     h.path = "/"
     h.do_GET()
-    assert asked == [0] and '<div class="mktbar" data-poll="60"><div class="mkt"' in sent[1][1] and "$98,000" in sent[1][1]
-    h.path = "/api/markets"
+    assert asked == [0, server.live_markets.WAIT, 0]
+    line = server.markets_line(wait=0)
+    assert "$98,000" in line and "data-live" in line and "3,400" not in line and "ETH" not in line
+    assert f'<div class="mktbar" id="mkts" data-poll="60">{line}</div>' in sent[0][1]
+    assert sent[1][0] == 200 and json.loads(sent[1][1]) == {"html": line, "refresh_s": 60}
+    assert f'<div class="mktbar" data-poll="60">{line}</div>' in sent[2][1]
+    monkeypatch.setattr(server.live_markets, "enabled", lambda: False)  # off: neither page re-reads the line
+    monkeypatch.setattr(server.live_markets, "quotes", lambda wait=5.0: {})
+    h._login_page()
     h.do_GET()
-    got = json.loads(sent[2][1])
-    assert asked == [0, server.live_markets.WAIT] and got["refresh_s"] == 60 and "$98,000" in got["html"]
-    monkeypatch.setattr(server.live_markets, "enabled", lambda: False)  # off: the page doesn't re-read the line
-    h.path = "/"
-    h.do_GET()
-    assert '<div class="mktbar" data-poll="">' in sent[3][1]
-    h._authed = lambda: False
-    h._deny = lambda p: sent.append((401, p))
-    h.path = "/api/markets"
-    h.do_GET()
-    assert sent[-1] == (401, "/api/markets")
+    assert '<div class="mktbar" id="mkts" data-poll="">' in sent[3][1] and '<div class="mktbar" data-poll="">' in sent[4][1]
+    assert "$97,000" in sent[3][1] and "<div data-live>" not in sent[3][1]
 
+
+def test_markets_line_is_built_once_per_set_of_quotes(dbfile, monkeypatch):
+    """Anonymous traffic costs one small query per new quote, not one per request."""
+    _prices(dbfile, [(_day(1), "BTC", 97000.0, "c")])
+    live = _live("BTC", 98000.0, _day(0))
+    monkeypatch.setattr(server.live_markets, "quotes", lambda wait=5.0: live)
+    built, build = [], server._market_closes_html
+    monkeypatch.setattr(server, "_market_closes_html", lambda *a: built.append(1) or build(*a))
+    first = server.markets_line()
+    assert [server.markets_line() for _ in range(5)] == [first] * 5 and len(built) == 1
+    live = _live("BTC", 98100.0, _day(0))  # the next fetch
+    assert "$98,100" in server.markets_line() and len(built) == 2
 
 def test_account_with_no_matching_label_is_filed_by_its_type():
     """A ledger without a spreadsheet has no row labels: networth.py passes each account's kind instead."""

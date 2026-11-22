@@ -1,5 +1,5 @@
-"""Live prices for the dashboard's markets strip: Bitcoin, gold and the S&P 500, fetched now (the strip's other items
-and the sign-in page keep the closes insights/prices.py stores). Nothing else is priced live: net worth, holdings and
+"""Live prices for the markets line on the sign-in page and the dashboard: Bitcoin, gold and the S&P 500, fetched now
+(the line's other items keep what insights/prices.py stores). Nothing else is priced live: net worth, holdings and
 the trend stay at the daily run's prices.
 
 Free, keyless sources:

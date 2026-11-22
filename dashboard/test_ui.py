@@ -1157,6 +1157,25 @@ def test_markets_line_is_live_and_rereads_quietly(full, open_page):
     all_loaded(page)
 
 
+def test_sign_in_page_shows_the_same_live_markets_line_and_rereads_it(full, open_page):
+    """Signed out, the line under the card has the dashboard's live prices and re-reads them every minute the same way
+    (no session needed for /api/markets, nothing else opened up)."""
+    full.set_live_markets({"BTC": 123_456.0, "XAU": 4321.0, "SPX": 6789.0})
+    dash = open_page(full)
+    out = open_page(full, signed_in=False, go=False, clock=True)
+    out.goto(full.url + "/login")
+    line = lambda page: page.locator(".mkt").inner_text()
+    expect(out.locator(".mkt [data-live]")).to_have_count(3)
+    expect(out.locator(".mktbar .upd")).to_have_text(re.compile(r"^Live \d+:\d\d [AP]M$"))
+    assert line(out) == line(dash) and "$123,456" in line(out)
+    full.set_live_markets({"BTC": 124_000.0, "XAU": 4321.0, "SPX": 6789.0})
+    out.clock.fast_forward(61_000)
+    expect(out.locator(".mkt")).to_contain_text("$124,000")
+    assert out.evaluate("() => [...document.querySelectorAll('.mktbar *')].every(e => getComputedStyle(e).opacity === '1')")
+    expect(out.locator("#u")).to_be_visible()
+    assert out.request.get(full.url + "/api/summary").status == 401  # only the line is public
+
+
 def test_markets_line_is_not_reread_with_live_prices_off(full, open_page):
     page = open_page(full, clock=True)  # no live prices: the stored closes, and nothing to re-read
     asked = []

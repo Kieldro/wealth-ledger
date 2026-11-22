@@ -11,7 +11,8 @@ background; GET /api/sync says how it is going), /api/trend, /api/accounts,
 /api/holdings, /api/crypto, /api/cards, /api/spending, /api/drafts (overdraft forecast), /api/budget (budget vs actual),
 /api/subscriptions (recurring charges + unusual charges), /api/rental (rental P&L),
 /api/inherited_ira (10-year rule tracker), /api/last (the last good answer to each of those, kept on disk), /api/markets
-(the markets strip with live Bitcoin, gold and S&P 500 prices, insights/live_markets.py), /healthz. Page: /
+(the markets strip with live Bitcoin, gold and S&P 500 prices, insights/live_markets.py; public, like the sign-in page
+that shows it), /healthz. Page: /
 """
 from __future__ import annotations
 
@@ -1602,7 +1603,9 @@ input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px 
   font-size: 14px; line-height: 1.4; }
 .err svg { flex: none; margin-top: 2px; }
 .foot { font-size: 12.5px; color: var(--muted); text-align: center; margin: 18px 0 0; }
-/* under the card: closes of a few broad benchmarks (a fixed list; nothing from the ledger), then the credit */
+/* under the card: prices of a few broad benchmarks (a fixed list; nothing from the ledger), then the credit; the
+   wrapper is only there for the page to re-read the line, it adds no box of its own */
+.mktbar { display: contents; }
 .mkt { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; width: 100%; max-width: 384px;
   margin: 22px 0 0; font-variant-numeric: tabular-nums; }
 .mkt > div { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; white-space: nowrap; }
@@ -1639,7 +1642,7 @@ document.querySelector('meta[name="theme-color"]').content = getComputedStyle(do
   </form>
   <p class="foot">You stay signed in on this device until you log out.</p>
 </main>
-{{markets}}
+<div class="mktbar" id="mkts" data-poll="{{markets_poll}}">{{markets}}</div>
 {{credit}}
 <script>
 "use strict";
@@ -1664,6 +1667,23 @@ document.querySelector('meta[name="theme-color"]').content = getComputedStyle(do
     go.disabled = true; go.textContent = "Signing in…";
   });
   addEventListener("pageshow", function (e) { if (e.persisted) { go.disabled = false; go.textContent = "Sign in"; } });
+})();
+(function () {  // the markets line, as on the dashboard: re-read every data-poll seconds while the page shows, quietly
+  var bar = document.getElementById("mkts"), every = +bar.getAttribute("data-poll") * 1000, at = Date.now(), busy = false;
+  if (!(every > 0) || !window.fetch) return;  // live prices off: the stored closes stand
+  function load() {
+    if (busy) return;
+    busy = true;
+    fetch("/api/markets", {cache: "no-store", credentials: "same-origin"})
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) { if (d && d.html && bar.innerHTML !== d.html) bar.innerHTML = d.html; })
+      .catch(function () { /* offline: keep the last numbers */ })
+      .then(function () { busy = false; at = Date.now(); });
+  }
+  function ifOld() { if (document.visibilityState === "visible" && Date.now() - at >= every - 1000) load(); }
+  document.addEventListener("visibilitychange", ifOld);
+  setInterval(ifOld, every);
+  if (!bar.querySelector("[data-live]")) load();  // the page came with stored closes: go live now
 })();
 </script>
 </body>
@@ -1697,9 +1717,10 @@ def credit_line() -> str:
     return f'<p class="by">{html_escape(c.strip())}</p>' if isinstance(c, str) and c.strip() else ""
 
 
-# One line of public market closes for the sign-in page (and the dashboard's top), read from the prices the daily sync already stores
-# (insights/prices.py): nothing is fetched at request time. The page is public, so the lookup is memoized. The signed-in
-# dashboard shows the same line with live Bitcoin, gold and S&P 500 prices (dashboard_markets, insights/live_markets.py).
+# One line of public market prices for the sign-in page and the dashboard's top: the closes the daily sync stores
+# (insights/prices.py), with Bitcoin, gold and the S&P 500 live (markets_line, insights/live_markets.py: each source asked
+# at most once a minute, in the background, however many requests come in). The page is public, so the lookups are
+# memoized.
 # The sign-in page is public, so its one line of market closes is limited to this fixed list of broad benchmarks
 # below. Nothing else in the prices table, and nothing from the ledger, can ever reach that page:
 # which other symbols are stored could hint at what is held.
@@ -1828,11 +1849,16 @@ def login_markets() -> str:
     return html
 
 
-def dashboard_markets(wait: float = live_markets.WAIT) -> str:
-    """The markets line for the signed-in dashboard: as login_markets(), with live Bitcoin, gold and S&P 500 prices
-    where there are any (insights/live_markets.py: each fetched at most once a minute, whoever asks; a caller waits at
-    most `wait` seconds, 0 = only what is already fetched). A source that is down or slow leaves its stored close.
-    Never raises."""
+_markets_line: tuple[tuple, str] | None = None  # (live quotes it was built from, html); replaced whole
+
+
+def markets_line(wait: float = live_markets.WAIT) -> str:
+    """The markets line for the sign-in page, the dashboard and /api/markets (all three show the same): as
+    login_markets(), with live Bitcoin, gold and S&P 500 prices where there are any (insights/live_markets.py: each
+    fetched at most once a minute, whoever asks; a caller waits at most `wait` seconds for a fetch under way, 0 = only
+    what is already fetched). A source that is down or slow leaves its stored close. Built once per set of quotes (and
+    day), so anonymous traffic costs no more queries than login_markets(). Never raises."""
+    global _markets_line
     try:
         live = live_markets.quotes(wait)
     except Exception as e:  # noqa: BLE001 - never fail a page over a price
@@ -1840,11 +1866,22 @@ def dashboard_markets(wait: float = live_markets.WAIT) -> str:
         live = {}
     if not live:
         return login_markets()
+    key = (date.today().isoformat(), *sorted((s, q["at"], q["usd"], q.get("vs")) for s, q in live.items()))
+    memo = _markets_line
+    if memo and memo[0] == key:
+        return memo[1]
     try:
-        return _market_closes_html(live)
+        html = _market_closes_html(live)
     except Exception as e:  # noqa: BLE001
         log(f"live markets: {e!r}")
         return login_markets()
+    _markets_line = (key, html)
+    return html
+
+
+def markets_poll() -> str:
+    """The pages' data-poll: seconds between re-reads of the markets line, or "" when live prices are off."""
+    return str(live_markets.TTL) if live_markets.enabled() else ""
 
 
 LOGIN_ERR_ICON = ('<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" '
@@ -1857,8 +1894,10 @@ def script_hashes(page: bytes) -> str:
                     for m in re.findall(rb"<script>(.*?)</script>", page, re.S))
 
 
-# the sign-in page's one inline script (show password, Caps Lock hint, busy button); the page works without it
-CSP_LOGIN = f"{CSP_BASE}; script-src {script_hashes(LOGIN_HTML.encode())}; style-src 'unsafe-inline'; img-src data:"
+# the sign-in page's one inline script (show password, Caps Lock hint, busy button, the markets line's re-reads); the
+# page works without it
+CSP_LOGIN = (f"{CSP_BASE}; script-src {script_hashes(LOGIN_HTML.encode())}; style-src 'unsafe-inline'; img-src data:; "
+             "connect-src 'self'")
 
 
 def index_csp(page: bytes) -> str:
@@ -1972,9 +2011,10 @@ class Handler(BaseHTTPRequestHandler):
     def _login_page(self, code: int = 200, error: str = "", headers=(), username: str = ""):
         # a failed attempt keeps the typed username (never the password), so only the password is retyped
         err = f'<p class="err" role="alert">{LOGIN_ERR_ICON}<span>{html_escape(error)}</span></p>' if error else ""
-        # the page is public: besides the theme it shows only the allowlisted market closes, the optional credit
+        # the page is public: besides the theme it shows only the allowlisted market prices, the optional credit
         # line, the error and the typed username (replaced last, so typed text can't smuggle in a placeholder)
-        page = (with_theme(LOGIN_HTML).replace("{{error}}", err).replace("{{markets}}", login_markets())
+        page = (with_theme(LOGIN_HTML).replace("{{error}}", err).replace("{{markets}}", markets_line(wait=0))
+                .replace("{{markets_poll}}", markets_poll())
                 .replace("{{credit}}", credit_line()).replace("{{username}}", html_escape(username)))
         return self._send(code, page.encode(), "text/html; charset=utf-8", headers, CSP_LOGIN)
 
@@ -1990,12 +2030,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._redirect("/") if self._authed() else self._login_page()
             if p == "/logout":
                 return self._send(405, b"use POST\n", "text/plain", [("Allow", "POST")])
+            if p == "/api/markets":  # both pages re-read the line every refresh_s; public, like the sign-in page
+                return self._json(200, {"html": markets_line(), "refresh_s": live_markets.TTL})
             if not self._authed():
                 return self._deny(p)
             if p in ("/", "/index.html"):
                 with open(os.path.join(HERE, "index.html"), encoding="utf-8") as f:
-                    page = (with_theme(f.read()).replace("{{markets}}", dashboard_markets(wait=0), 1)
-                            .replace("{{markets_poll}}", str(live_markets.TTL) if live_markets.enabled() else "", 1)
+                    page = (with_theme(f.read()).replace("{{markets}}", markets_line(wait=0), 1)
+                            .replace("{{markets_poll}}", markets_poll(), 1)
                             .replace("{{credit}}", credit_line(), 1).encode())
                 return self._send(200, page, "text/html; charset=utf-8", self._renewal(), index_csp(page))
             if p == "/healthz":
@@ -2011,8 +2053,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, last_good(), "application/json")
             if p == "/api/sync":
                 return self._json(200, sync_state())
-            if p == "/api/markets":  # the page re-reads the strip every refresh_s while it shows
-                return self._json(200, {"html": dashboard_markets(), "refresh_s": live_markets.TTL})
             fn = ROUTES.get(p)
             if not fn:
                 return self._json(404, {"error": "not found"})
