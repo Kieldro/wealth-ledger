@@ -277,7 +277,8 @@ def period_changes(series: list[dict]) -> dict:
 def side_changes(series: list[dict], days: int = 30) -> dict | None:
     """The `days`-day change split into assets and liabilities: {"assets": delta, "liabilities": delta owed (positive =
     more owed), "vs": date}, from the synced accounts' own values (credit and loan accounts are the liabilities), like
-    for like as period_changes; None when the history doesn't reach back that far."""
+    for like as period_changes, with its "excluded" / "excluded_total" when accounts were linked since then (the same
+    as the net worth change says); None when the history doesn't reach back that far."""
     if not series or series[-1].get("accounts") is None:
         return None
     target = (date.fromisoformat(series[-1]["date"]) - timedelta(days=days)).isoformat()
@@ -292,6 +293,9 @@ def side_changes(series: list[dict], days: int = 30) -> dict | None:
             out["liabilities"] -= d  # balances owed are negative: falling further is more owed
         else:
             out["assets"] += d
+    new = [a for a, bal in now.items() if a not in then and abs(bal) >= 0.005]
+    if new:
+        out.update(excluded=len(new), excluded_total=sum(now[a] for a in new))
     return {k: round(v, 2) if isinstance(v, float) else v for k, v in out.items()}
 
 

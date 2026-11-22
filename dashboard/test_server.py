@@ -107,7 +107,11 @@ def test_side_changes_split_the_30_day_change_into_assets_and_owed(dbfile):
     con.close()
     s = [{"date": "2026-02-01", "synced": 0.0, "accounts": {"c1": -300.0, "m": -100000.0, "chk": 5000.0}},
          {"date": "2026-03-03", "synced": 0.0, "accounts": {"c1": -250.0, "m": -99500.0, "chk": 4200.0, "new": 900.0}}]
-    assert server.side_changes(s) == {"assets": -800.0, "liabilities": -550.0, "vs": "2026-02-01"}
+    # "new" was linked since then: left out, and said, as the net worth change does
+    assert server.side_changes(s) == {"assets": -800.0, "liabilities": -550.0, "vs": "2026-02-01", "excluded": 1, "excluded_total": 900.0}
+    assert {k: v for k, v in server.period_changes(s)["30"].items() if k.startswith("excluded")} == {"excluded": 1, "excluded_total": 900.0}
+    del s[1]["accounts"]["new"]
+    assert "excluded" not in server.side_changes(s)
     assert server.side_changes(s[1:]) is None and server.side_changes([]) is None  # history too short
     assert server.side_changes([{"date": "2026-02-01", "synced": 1.0}, {"date": "2026-03-03", "synced": 2.0}]) is None
 

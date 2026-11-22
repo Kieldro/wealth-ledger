@@ -427,11 +427,16 @@ def test_assets_and_liabilities_tiles_say_whats_behind_the_number(desk):
     expect(desk.locator("#assetbar span")).to_have_count(cats)
     expect(desk.locator("#assetbar span").first).to_have_attribute("title", re.compile(r"^Cash & bank.*: \$[\d,]+ \(\d+\.\d%\)$"))
     expect(desk.locator("#assetsplit")).to_have_text(re.compile(r"^Liquid \$[\d.]+k · Retirement \$[\d.]+k · Illiquid \$[\d.]+k$"))
-    expect(desk.locator("#assetchg")).to_have_text(re.compile(r"^30d [+−]\$[\d,]+$"))
+    expect(desk.locator("#assetchg")).to_have_text(re.compile(r"^30d [+−]\$[\d,]+( partial)?$"))
+    nw30 = desk.locator("#chg .chip", has_text="30d")
+    for tile in ("#assetchg .chip", "#liabchg .chip >> nth=0"):  # partial, and why, exactly when the net worth's says so
+        chip = desk.locator(tile)
+        assert ("partial" in chip.inner_text()) == ("partial" in nw30.inner_text())
+        assert chip.get_attribute("title") == nw30.get_attribute("title")
     expect(desk.locator("#mortline")).to_have_text(re.compile(r"^Mortgage paid off [A-Z][a-z]{2} 20\d\d at \$1,480/mo · \d+(\.\d+)?%$"))
     expect(desk.locator("#cardline")).to_have_text(re.compile(r"^Cards \$[\d.,]+k? · \d+(\.\d)?% of limits$"))
     expect(desk.locator("#cardline .meter i")).to_have_count(1)
-    expect(desk.locator("#liabchg")).to_have_text(re.compile(r"^30d [+−]\$[\d,]+\d+\.\d% of assets$"))
+    expect(desk.locator("#liabchg")).to_have_text(re.compile(r"^30d [+−]\$[\d,]+( partial)?\d+\.\d% of assets$"))
     expect(desk.locator("#liabdonutc")).to_have_text(re.compile(r"^\$[\d.]+k$"))
     slices = desk.evaluate("""() => { const c = Chart.getChart('liabdonut'), d = c.data.datasets[0];
         return d.data.map((v, i) => [c.data.labels[i], v, d.backgroundColor[i]]); }""")

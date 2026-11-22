@@ -1330,10 +1330,7 @@ function renderSummary(s) {
   $("chg").innerHTML = ["1", "7", "30", "mtd", "ytd"].map(n => {
     const c = s.changes[n], lbl = CHG_LABEL[n] || n + "d";
     if (!c || c.delta == null) return CHG_LABEL[n] ? "" : `<span class="chip" title="${esc(c ? c.note : "")}">${lbl} <b>n/a</b></span>`;
-    const cls = c.delta > 0 ? "up" : c.delta < 0 ? "down" : "";
-    // like for like: accounts linked after the period began are left out (their opening balance isn't a gain)
-    const left = c.excluded ? ` · leaves out ${c.excluded} account${c.excluded > 1 ? "s" : ""} linked since then (${f0(c.excluded_total)} today); money moved into them from older accounts shows as a drop` : "";
-    return `<span class="chip" title="vs ${esc(c.vs)}${esc(left)}">${lbl} <b class="${cls}">${signed(c.delta)}</b>${c.excluded ? ' <span class="note">partial</span>' : ""}</span>`;
+    return chgChip(lbl, c.delta, c, true);
   }).join("");
   // how old the headline's inputs are, when not all from today (typed-in sheet values have no date)
   const ages = s.input_ages || {}, day = iso => new Date(iso + "T12:00").toLocaleDateString("en-US", {month: "short", day: "numeric"});
@@ -1362,6 +1359,13 @@ function renderSummary(s) {
 // donut's colours, liquid / retirement / illiquid, the 30-day change. Liabilities: when the mortgage is paid off at
 // the payments the ledger shows (server: insights/mortgage.py), the cards against their limits, debt as a share of
 // assets, the 30-day change. Every amount goes through the formatters, so privacy mode and the display unit apply.
+// one change chip: green when it went the good way (up for net worth and assets, down for what's owed); like for like,
+// so accounts linked after the period began are left out (their opening balance isn't a gain) and the chip says partial
+function chgChip(lbl, v, c, good) {
+  const cls = v == null || Math.abs(v) < 0.005 ? "" : (v > 0) === good ? "up" : "down";
+  const left = c.excluded ? ` · leaves out ${c.excluded} account${c.excluded > 1 ? "s" : ""} linked since then (${f0(c.excluded_total)} today); money moved into them from older accounts shows as a drop` : "";
+  return `<span class="chip" title="vs ${esc(c.vs)}${esc(left)}">${lbl} <b class="${cls}">${signed(v)}</b>${c.excluded ? ' <span class="note">partial</span>' : ""}</span>`;
+}
 const LIQUID = {cash: "liquid", taxable: "liquid", crypto: "liquid", retirement: "retirement"};
 function renderTiles(s, assetCats) {
   const pos = assetCats.filter(c => c.value > 0), tot = pos.reduce((a, c) => a + c.value, 0);
@@ -1370,16 +1374,15 @@ function renderTiles(s, assetCats) {
   for (const c of pos) parts[LIQUID[c.key] || "illiquid"] += c.value;
   $("assetsplit").innerHTML = tot > 0 ? Object.entries(parts).filter(([, v]) => v >= 0.5)
     .map(([k, v]) => `<span title="${{liquid: "Cash, brokerage and crypto", retirement: "Retirement accounts", illiquid: "Home, vehicles, metals and other"}[k]}">${k[0].toUpperCase() + k.slice(1)} <b>${esc(compact(v))}</b></span>`).join(" · ") : "";
-  const sc = s.side_changes, chip = (v, title, good) => `<span class="chip" title="${esc(title)}">30d <b class="${v == null || Math.abs(v) < 0.5 ? "" : (v > 0) === good ? "up" : "down"}">${signed(v)}</b></span>`;
-  const vs = sc ? `vs ${sc.vs}, synced accounts (sheet values held constant)` : "";
-  $("assetchg").innerHTML = sc ? chip(sc.assets, vs, true) : "";
+  const sc = s.side_changes;
+  $("assetchg").innerHTML = sc ? chgChip("30d", sc.assets, sc, true) : "";
   const d = s.debt || {}, m = d.mortgage, cd = d.cards, ym = x => new Date(x + "-15T12:00").toLocaleDateString("en-US", {month: "short", year: "numeric"});
   $("mortline").innerHTML = m && m.payoff ? `<span title="${esc(`From the ledger: about ${f0(m.payment)} a month paid into ${stripNum(m.account)} (the last payments, extra principal included); ${(100 * m.rate).toFixed(2)}% a year from ${m.rate_from === "name" ? "the account's name" : "how far the balance fell after each payment"}; ${m.months} more payments from the latest balance.`)}">Mortgage paid off <b>${esc(ym(m.payoff))}</b> at ${esc(f0(m.payment))}/mo · ${(100 * m.rate).toFixed(2).replace(/0$/, "")}%</span>`
     : m ? `Mortgage: the payments don't cover the interest` : "";
   $("cardline").innerHTML = cd && cd.owed > 0.5 ? `Cards <b>${esc(compact(cd.owed))}</b>${cd.util_pct != null ? ` · ${cd.util_pct.toFixed(cd.util_pct < 10 ? 1 : 0)}% of limits` : ""}` +
     (cd.util_pct != null ? `<div class="meter" title="${esc(`${f0(cd.owed)} owed of ${f0(cd.limit)} in limits`)}"><i style="width:${Math.min(100, cd.util_pct)}%"></i></div>` : "") : "";
   const ratio = s.assets > 0 && s.liabilities != null ? 100 * s.liabilities / s.assets : null;
-  $("liabchg").innerHTML = (sc ? chip(sc.liabilities, vs, false) : "") +
+  $("liabchg").innerHTML = (sc ? chgChip("30d", sc.liabilities, sc, false) : "") +
     (ratio != null ? `<span class="chip" title="Liabilities as a share of assets">${ratio.toFixed(1)}% of assets</span>` : "");
 }
 const LIAB_COLOR = ["--s8", "--s2", "--s4", "--s5", "--s7", "--s1", "--s3", "--s6"], MIN_SLICE = 0.025;
