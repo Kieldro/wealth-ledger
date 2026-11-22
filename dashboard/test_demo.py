@@ -150,7 +150,9 @@ def test_feedback_link_is_a_short_encoded_template_without_money(monkeypatch):
     assert "(demo)" in unquote(server.feedback_href("demo")) and "Mode: demo" in _body(server.feedback_href("demo"))
     assert "(demo)" not in unquote(server.feedback_href("dashboard")) and "Mode: signed in" in _body(server.feedback_href("dashboard"))
     assert "Section: -" not in _body(server.feedback_href("signin"))
-    assert 'href="mailto:' in server.feedback_link("dashboard") and "&amp;body=" in server.feedback_link("dashboard")
+    link = server.feedback_link("dashboard")
+    assert 'href="mailto:' in link and "&amp;body=" in link
+    assert link.startswith("<!--email_off-->") and link.endswith("<!--/email_off-->")  # Cloudflare leaves it alone
 
 
 def test_feedback_script_fills_in_the_browser_details(tmp_path):

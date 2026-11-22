@@ -1637,8 +1637,10 @@ def feedback_link(page: str) -> str:
     href = feedback_href(page)
     if not href:
         return ""
-    return (f'<a class="fbk" id="fbk" href="{html_escape(href)}" title="Report a bug by email (opens your mail app)">'
-            f'{_BUG_ICON}<span class="hide-sm">Report a bug</span></a>')
+    # email_off: Cloudflare's Email Obfuscation would otherwise rewrite the link to /cdn-cgi/l/email-protection#…,
+    # undone only by a script of Cloudflare's that the pages' CSP (rightly) refuses
+    return (f'<!--email_off--><a class="fbk" id="fbk" href="{html_escape(href)}" title="Report a bug by email (opens your '
+            f'mail app)">{_BUG_ICON}<span class="hide-sm">Report a bug</span></a><!--/email_off-->')
 
 
 # fills in the browser's details when the link is used (sign-in page, dashboard and demo); the browser's user agent is
