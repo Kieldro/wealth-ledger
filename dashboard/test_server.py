@@ -863,6 +863,33 @@ def test_spending_income_net_and_partial_months(dbfile, monkeypatch):
     assert by["2026-10"]["n_income"] == 1 and by["2026-10"]["n"] == 1
 
 
+def test_disputed_charges_count_nowhere(dbfile, monkeypatch):
+    """A charge reversed by a won dispute (txn_class_overrides class 'disputed', its credit never in the feed) is
+    not spending, not money out, and leaves the walked-back balance alone."""
+    class Today(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 11, 13)
+    monkeypatch.setattr(server, "date", Today)
+    monkeypatch.setattr(server, "LEDGER_START", "2026-09-01")
+    _txns(dbfile, [("2026-10-02", "-40.00", "GROCER", 0), ("2026-10-03", "-900.00", "ONLINE STORE", 0),
+                   ("2026-10-04", "-60.00", "GROCER", 0)])
+    con = ctdb.connect(dbfile)
+    con.execute(ctdb.UPSERT_BALANCE, (TODAY, "simplefin", "k1", "Test k1 (1234)", "Bank", "1000.00", None, "USD", None))
+    con.execute("INSERT INTO txn_class_overrides (txn_id, class) VALUES ('s1', 'disputed')")
+    con.commit()
+    con.close()
+    sp = server.api_spending({})
+    assert {m["month"]: m["spent"] for m in sp["monthly"]} == {"2026-10": 100}
+    assert [t["merchant"] for t in sp["top"]["2026-10"]] == ["Grocer"]
+    row = next(t for t in sp["recent"] if t["description"] == "ONLINE STORE")
+    assert row["class"] == "disputed" and row["category"] is None
+    r = server.api_account_txns({"id": ["k1"]})
+    assert r["money_out"] == -100
+    assert {t["description"] + t["date"][-2:]: t["balance_after"] for t in r["txns"]} == {
+        "GROCER04": 1000, "ONLINE STORE03": 1060, "GROCER02": 1060}
+
+
 def test_spending_daily_pace_this_month_and_last(dbfile, monkeypatch):
     class Today(date):
         @classmethod

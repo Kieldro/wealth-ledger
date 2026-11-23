@@ -778,7 +778,7 @@ UNCATEGORIZED = "Other"  # spending no budget rule matches
 
 def add_categories(rows: list[dict]) -> None:
     """Give each spend or refund row the budget line its merchant maps to (category = the line's item, group =
-    its sheet category). Other classes (income, transfers, card payments, investments) have no budget line.
+    its sheet category). Other classes (income, transfers, card payments, investments, disputed) have no budget line.
     Without a spreadsheet the category is the monthly email's generic one (insights/monthly_email.py)."""
     sh = budget_sheet()
     line_for = budget.categorizer(sh["data"]["lines"]) if sh["data"] else None
@@ -807,11 +807,12 @@ def running_balances(account_id: str | None = None) -> dict:
     """txn_id -> the account's balance right after that transaction, walked back from its latest synced balance.
 
     Posted rows of cash and card accounts only: a pending row is not in the balance yet, and an investment
-    balance moves with the market. Brokerage cash sweeps leave the balance where it was. A transaction dated
-    after the balance snapshot is not in that balance, so it gets none.
+    balance moves with the market. Brokerage cash sweeps leave the balance where it was, and so do disputed
+    charges (the feed often never carries their reversal). A transaction dated after the balance snapshot is not
+    in that balance, so it gets none.
     """
     sweep = " OR ".join("l.description LIKE ?" for _ in overdraft.SWEEPS)
-    rows = q(f"""SELECT l.txn_id, l.account_id, l.amt, ({sweep}) sweep, a.balance FROM v_ledger l
+    rows = q(f"""SELECT l.txn_id, l.account_id, l.amt, ({sweep}) OR l.class='disputed' sweep, a.balance FROM v_ledger l
                  JOIN v_accounts a USING (account_id)
                  WHERE l.pending=0 AND l.kind IN ({",".join("?" * len(RUNBAL_KINDS))}) AND l.date<=a.snapshot_date
                    AND (? IS NULL OR l.account_id=?)
@@ -841,7 +842,7 @@ def api_account_txns(params) -> dict:
         r["balance_after"] = bal.get(r.pop("txn_id"))
         r["merchant"] = merchant(r["description"], r["payee"])
         r["account_name"] = re.sub(r"\s*\([0-9a-f-]+\)$", "", acct[0]["account_name"] or "")
-    posted = [r for r in txns[:ACCOUNT_TXN_LIMIT] if not r["pending"]]
+    posted = [r for r in txns[:ACCOUNT_TXN_LIMIT] if not r["pending"] and r["class"] != "disputed"]
     return {"account": acct[0], "txns": txns[:ACCOUNT_TXN_LIMIT], "truncated": len(txns) > ACCOUNT_TXN_LIMIT,
             "money_in": round(sum(r["amt"] for r in posted if r["amt"] > 0), 2),
             "money_out": round(sum(r["amt"] for r in posted if r["amt"] < 0), 2),

@@ -415,7 +415,7 @@ def _charges(con, kinds=("items",)) -> list[dict]:
     con.row_factory = sqlite3.Row
     out = []
     for r in con.execute("SELECT txn_id, date, amt, description, payee, account_name FROM v_ledger "
-                         "WHERE pending=0 AND date IS NOT NULL"):
+                         "WHERE pending=0 AND date IS NOT NULL AND class<>'disputed'"):
         k = charge_kind(r["description"], r["payee"])
         if k in kinds:
             out.append(dict(r, kind=k, last4=_card_last4(r["account_name"])))

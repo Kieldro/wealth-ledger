@@ -27,7 +27,7 @@
   "_help": "Optional. Card credit limits for cards whose feed reports none (Plaid sends its own; SimpleFIN never does): account_name LIKE pattern (as shown in v_accounts) -> limit in dollars. Takes effect on the next sync.",
   "Example Rewards Card%": 5000
  },
- "_rules": "Optional. How a transaction is classed when the built-in rules (ctdb.py BASE_RULES) get it wrong: [priority (lowest wins), description LIKE pattern, account type or null, \"in\"/\"out\" or null, class, note]. Classes: spend, income, refund, transfer, card_payment, investment. Only spend counts as spending and only income as income. Takes effect on the next sync.",
+ "_rules": "Optional. How a transaction is classed when the built-in rules (ctdb.py BASE_RULES) get it wrong: [priority (lowest wins), description LIKE pattern, account type or null, \"in\"/\"out\" or null, class, note]. Classes: spend, income, refund, transfer, card_payment, investment, disputed (a charge reversed by a won dispute; counts nowhere). Only spend counts as spending and only income as income. To fix a single transaction, add a row to the database's txn_class_overrides table (txn_id, class, note) instead. Takes effect on the next sync.",
  "rules": [
   [10, "%EXAMPLE CARD PYMT%", "checking", "out", "card_payment", "checking-side payment to your card"],
   [20, "%EXAMPLE BANK XFER%", null, null, "transfer", "transfer between your own accounts"],

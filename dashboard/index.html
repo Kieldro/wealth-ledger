@@ -298,7 +298,7 @@ tr.cat[aria-expanded="true"] td:first-child::before { transform: rotate(45deg); 
 #drafts td.name { max-width: 420px; }
 @media (max-width: 640px) { .filters input, .filters select { font-size: 16px; } .filters input { max-width: none; } }
 .cls { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 5px; background: var(--surface-2); color: var(--text-2); white-space: nowrap; }
-.cls.spend { color: var(--neg); } .cls.income, .cls.refund { color: var(--pos); }
+.cls.spend { color: var(--neg); } .cls.income, .cls.refund { color: var(--pos); } .cls.disputed { text-decoration: line-through; }
 .amt-pos { color: var(--pos); }
 td.neg { color: var(--neg); font-weight: 600; }
 .bar { height: 6px; border-radius: 3px; background: var(--s1); min-width: 2px; }
@@ -767,7 +767,7 @@ if ("serviceWorker" in navigator) addEventListener("load", function () { navigat
       <div class="filters" role="search">
         <input type="search" id="txq" placeholder="Search description, note or account" aria-label="Search recent transactions by description or account" autocomplete="off">
         <select id="txcat" aria-label="Filter by category"><option value="">All categories</option></select>
-        <select id="txcls" aria-label="Filter by class"><option value="">All classes</option><option value="spend">Spend</option><option value="income">Income</option><option value="refund">Refund</option><option value="transfer">Transfer</option><option value="card_payment">Card payment</option><option value="investment">Investment</option></select>
+        <select id="txcls" aria-label="Filter by class"><option value="">All classes</option><option value="spend">Spend</option><option value="income">Income</option><option value="refund">Refund</option><option value="transfer">Transfer</option><option value="card_payment">Card payment</option><option value="investment">Investment</option><option value="disputed">Disputed</option></select>
       </div>
       <div class="tw"><table id="recent"></table></div>
     </section>

@@ -75,6 +75,7 @@ Each is off until you set it up, and none is needed by the others unless noted.
 | Inherited IRA | Required-distribution planning | `inherited_ira` in `personal.json` |
 | Card limits | Utilization for cards whose feed has no limit | `credit_limits` in `personal.json` |
 | Own rules | Fix how a transaction is classified | `rules` in `personal.json` |
+| One-off class | Fix one transaction's class, e.g. `disputed` for a fraud charge reversed after a dispute whose credit never reached the feed (counts as no spending, income or cash flow) | a row in the `txn_class_overrides` table (txn_id, class, note) |
 | Backups | Daily gzipped copy of the database to another disk | `backup.dir` in `personal.json` |
 | Institution watch | Tells you when a bank you are waiting for joins SimpleFIN | `simplefin_watch` in `personal.json` + a monthly cron line |
 | Amazon orders | Splits Amazon charges across the items bought | Google Sheet budget; `insights/amazon.py` import |

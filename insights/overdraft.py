@@ -181,9 +181,12 @@ def _rows(con, sql, args=()):
 
 def _posted(con, card: dict) -> list[tuple[str, float, str]]:
     """A card's posted ledger rows as (date, amount, class), read once. statement_lag() asks about a couple of
-    hundred dates per card; one query per date made the forecast take seconds."""
+    hundred dates per card; one query per date made the forecast take seconds. Disputed rows are left out here and
+    in _owed_at: the feed often never carries their reversal, so walking back through them would skew every
+    earlier balance."""
     return [(str(r[0]), float(r[1]), r[2]) for r in con.execute(
-        "SELECT date, amt, class FROM v_ledger WHERE account_id=? AND pending=0 AND date IS NOT NULL AND amt IS NOT NULL",
+        "SELECT date, amt, class FROM v_ledger WHERE account_id=? AND pending=0 AND date IS NOT NULL AND amt IS NOT NULL "
+        "AND class<>'disputed'",
         (card["account_id"],))]
 
 
@@ -193,7 +196,8 @@ def _owed_at(con, card: dict, d: date, rows: list | None = None) -> float:
     if rows is not None:
         after = math.fsum(a for dt, a, _ in rows if dt > d.isoformat())
     else:
-        after = con.execute("SELECT COALESCE(SUM(amt),0) FROM v_ledger WHERE account_id=? AND pending=0 AND date>?",
+        after = con.execute("SELECT COALESCE(SUM(amt),0) FROM v_ledger WHERE account_id=? AND pending=0 AND date>? "
+                            "AND class<>'disputed'",
                             (card["account_id"], d.isoformat())).fetchone()[0]
     return -(card["balance"] - after)
 
@@ -210,7 +214,8 @@ def _paid_between(con, card: dict, d: date, before: date | None = None, rows: li
 def _daily_charges(con, card: dict, today: date) -> float:
     """What the card has been charged per day lately (purchases net of refunds, no payments)."""
     since = today - timedelta(SPEND_DAYS)
-    net = con.execute("SELECT COALESCE(SUM(amt),0) FROM v_ledger WHERE account_id=? AND class<>'card_payment' "
+    net = con.execute("SELECT COALESCE(SUM(amt),0) FROM v_ledger WHERE account_id=? "
+                      "AND class NOT IN ('card_payment','disputed') "
                       "AND pending=0 AND date>? AND date<=?",
                       (card["account_id"], since.isoformat(), today.isoformat())).fetchone()[0]
     return max(0.0, -net / SPEND_DAYS)
@@ -269,7 +274,8 @@ def forecast(con: sqlite3.Connection, today: date | None = None, horizon: int = 
     groups: dict[tuple, list] = defaultdict(list)
     for r in _rows(con, f"""SELECT account_id, date, amt, description, class FROM v_ledger
                             WHERE kind='checking' AND date>=? AND ABS(amt)>=? AND {sweep}
-                              AND NOT (class='card_payment' AND amt<0)""", (since, MIN_AMT, *SWEEPS)):
+                              AND NOT (class='card_payment' AND amt<0) AND class<>'disputed'""",
+                            (since, MIN_AMT, *SWEEPS)):
         groups[(r["account_id"], series_key(r["description"]), r["amt"] > 0)].append(
             (date.fromisoformat(r["date"]), r["amt"], r["description"], r["class"]))
     window = today - timedelta(UNCOUNTED_DAYS)

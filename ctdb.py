@@ -14,6 +14,9 @@ account_kind  account type (credit/checking/savings/investment/retirement/hsa/lo
               put in by hand; an account with none has kind NULL in v_accounts and is left out of the totals.
 txn_rules     description LIKE-patterns -> class (first match by priority wins; add rows to teach it).
               Seeded from BASE_RULES below plus the owner's own "rules" in personal.json.
+txn_class_overrides  one transaction's class set by hand (txn_id -> class); beats txn_rules and the fallback.
+              E.g. a fraud charge the issuer reversed after a dispute whose credit never came through the feed:
+              class 'disputed'. Add rows by hand (sqlite3); nothing writes them.
 valuations    daily/monthly estimates for things no bank feed covers (metals, crypto wallets, home, cars),
               keyed by the balance-sheet row label they replace in networth.py (see valuations/).
 networth_history  past whole-net-worth points (Total Equity per dated balance-sheet column of the yearly
@@ -32,8 +35,10 @@ Views: v_ledger (txns + real date/amount + kind + class), v_balances_latest, v_h
 newest positions with their snapshot_date and lag_days behind the feed's newest snapshot),
 v_accounts (latest balance per account + credit_limit, from the feed or else personal.json, and credit_limit_source).
 
-class: spend | income | refund | transfer (between the owner's own accounts) | card_payment | investment.
-Spending = class 'spend'; card payments and transfers show up on both sides, so they're never spend.
+class: spend | income | refund | transfer (between the owner's own accounts) | card_payment | investment |
+disputed (a charge reversed by a won dispute, e.g. fraud; mark its reversal too if the feed has one).
+Spending = class 'spend'; card payments and transfers show up on both sides, so they're never spend; disputed rows
+count nowhere (not spending, not income, not cash flow).
 """
 from __future__ import annotations
 
@@ -77,6 +82,8 @@ CREATE TABLE IF NOT EXISTS txn_rules (
 );
 CREATE TABLE IF NOT EXISTS superseded (account_id TEXT PRIMARY KEY, source TEXT NOT NULL, note TEXT);
 CREATE TABLE IF NOT EXISTS late_duplicates (txn_id TEXT PRIMARY KEY, dup_of TEXT NOT NULL, reason TEXT, found_at TEXT);
+CREATE TABLE IF NOT EXISTS txn_class_overrides (txn_id TEXT PRIMARY KEY, class TEXT NOT NULL, note TEXT,
+  created TEXT DEFAULT (datetime('now')));
 CREATE TABLE IF NOT EXISTS valuations (
   snapshot_date TEXT NOT NULL, asset TEXT NOT NULL, value REAL NOT NULL, source TEXT NOT NULL,
   detail TEXT, fetched_at TEXT NOT NULL, PRIMARY KEY (snapshot_date, asset)
@@ -124,6 +131,7 @@ CREATE VIEW v_ledger AS
   SELECT t.*, COALESCE(t.posted, date(t.transacted_at), date(t.first_seen, 'localtime')) AS date,
     CAST(t.amount AS REAL) AS amt, k.kind,
     COALESCE(
+      (SELECT o.class FROM txn_class_overrides o WHERE o.txn_id = t.txn_id),
       (SELECT r.class FROM txn_rules r
        WHERE t.description LIKE r.pattern AND (r.kind IS NULL OR r.kind = k.kind)
          AND (r.direction IS NULL OR r.direction = CASE WHEN CAST(t.amount AS REAL) < 0 THEN 'out' ELSE 'in' END)
